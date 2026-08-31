@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AeroSim — Airline Manager MVP v9.2 Stable Controls</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <link rel="stylesheet" href="aerosim.css" />
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand"><span class="brand-badge">A</span> AeroSim</div>
+
+    <div class="header-core">
+      <div class="stat"><span class="label">Cash</span><span id="cash" class="value">—</span></div>
+      <div class="stat"><span class="label">Fleet</span><span id="fleetCount" class="value">—</span></div>
+      <div class="stat"><span class="label">Airborne</span><span id="airborneCount" class="value">—</span></div>
+    </div>
+
+    <div class="header-spacer"></div>
+
+    <div class="clock-controls">
+      <div class="clock-pill">
+        <div class="tiny muted">SIMULATION TIME</div>
+        <div id="simClock" class="value">—</div>
+      </div>
+      <div class="speed-control">
+        <span class="tiny muted">SPEED</span>
+        <select id="speed">
+          <option value="1" selected>1× realtime</option>
+          <option value="10">10×</option>
+          <option value="60">60× test</option>
+          <option value="300">300× test</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="header-kpis" aria-label="Airline overview">
+      <div class="top-kpi"><span>Revenue</span><b id="kpiRevenue">€0</b></div>
+      <div class="top-kpi"><span>Net P/L</span><b id="kpiProfit">€0</b></div>
+      <div class="top-kpi"><span>Passengers</span><b id="kpiPax">0</b></div>
+      <div class="top-kpi"><span>Completed</span><b id="kpiFlights">0</b></div>
+    </div>
+  </header>
+
+  <main>
+    <aside class="sidebar">
+      <section class="section">
+        <div class="section-title"><span>Flight planning</span><span class="tag"><span class="dot active"></span> local sim</span></div>
+        <div class="card">
+          <label for="scheduleType">Schedule type</label>
+          <select id="scheduleType">
+            <option value="recurring" selected>Recurring round trip</option>
+            <option value="once">One-time one-way flight</option>
+          </select>
+
+          <div class="grid2">
+            <div><label for="origin">Origin</label><select id="origin"></select></div>
+            <div><label for="destination">Destination</label><select id="destination"></select></div>
+          </div>
+          <label for="aircraft">Aircraft</label><select id="aircraft"></select>
+
+          <div class="grid2">
+            <div><label for="departureTime">First departure time</label>
+              <input id="departureTime" type="time" step="300" />
+              <div class="tiny muted" style="margin-top:4px">Simulation-local clock</div>
+            </div>
+            <div><label for="fare">Avg fare (€)</label><input id="fare" type="number" min="30" max="3000" step="10" value="210" /></div>
+          </div>
+
+          <div id="recurringOptions">
+            <div class="grid2">
+              <div><label for="repeatRule">Repeat</label>
+                <select id="repeatRule">
+                  <option value="daily">Daily</option>
+                  <option value="weekdays">Weekdays</option>
+                  <option value="every2">Every 2 days</option>
+                  <option value="weekly">Weekly</option>
+                </select>
+              </div>
+              <div><label for="turnaround">Return turnaround</label>
+                <select id="turnaround">
+                  <option value="60">60 min</option>
+                  <option value="90" selected>90 min</option>
+                  <option value="120">120 min</option>
+                  <option value="180">180 min</option>
+                </select>
+              </div>
+            </div>
+            <div class="schedule-mode-note tiny muted">
+              Recurring schedules are round trips: the assigned aircraft flies the outbound leg,
+              turns around, returns to its base, and repeats automatically.
+            </div>
+          </div>
+
+          <div id="schedulePreview" class="tiny muted" style="margin:9px 0 4px"></div>
+          <button id="acquireSlotsBtn" class="btn full" type="button" style="display:none">Acquire missing slot rights</button>
+          <button id="scheduleBtn" class="btn primary full" style="margin-top:7px">Create recurring schedule</button>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-title"><span>Active & upcoming</span><span id="flightCount" class="muted">0</span></div>
+        <div id="flightList"></div>
+      </section>
+
+      <section class="section">
+        <div class="section-title"><span>Recurring schedules</span><span id="serviceCount" class="muted">0</span></div>
+        <div id="serviceList"></div>
+      </section>
+
+      <section class="section">
+        <div class="section-title"><span>Airport slots</span><span id="slotCount" class="muted">0</span></div>
+        <div class="card">
+          <div class="row-between">
+            <div><b>Slot market</b><div class="tiny muted">Acquire a recurring departure-slot series.</div></div>
+            <span class="tag">seasonal right</span>
+          </div>
+          <div class="grid2" style="margin-top:8px">
+            <div><label for="slotAirport">Airport</label><select id="slotAirport"></select></div>
+            <div><label for="slotTime">Departure time</label><input id="slotTime" type="time" step="300" value="08:00" /></div>
+          </div>
+          <div id="slotBuyPreview" class="slot-buy-preview tiny muted"></div>
+          <button id="buySlotBtn" class="btn primary full" type="button" style="margin-top:7px">Acquire slot series</button>
+        </div>
+        <div id="slotPortfolio" class="slot-portfolio-list"></div>
+      </section>
+
+      <section class="section">
+        <div class="section-title"><span>Buy aircraft</span></div>
+        <div class="card">
+          <div class="row-between"><div><b>Airbus A320neo</b><div class="tiny muted">186 seats · short/medium haul</div></div><b>€48M</b></div>
+          <button class="btn full" data-buy="A320neo" style="margin-top:9px">Buy A320neo</button>
+        </div>
+        <div class="card">
+          <div class="row-between"><div><b>Airbus A330-900</b><div class="tiny muted">287 seats · long haul</div></div><b>€110M</b></div>
+          <button class="btn full" data-buy="A330-900" style="margin-top:9px">Buy A330-900</button>
+        </div>
+      </section>
+    </aside>
+
+    <section id="center-workspace">
+      <div id="map-pane">
+        <div id="map"></div>
+        <div class="map-hud">
+          <button id="fitBtn" class="btn" style="min-height:30px;padding:4px 8px">Fit network</button>
+        </div>
+        <div id="toast" class="toast"></div>
+      </div>
+
+      <div id="workspace-splitter" role="separator" aria-orientation="horizontal"
+           aria-label="Resize map and schedule panes" tabindex="0"></div>
+
+      <div id="schedule-pane">
+        <div class="schedule-toolbar">
+          <div>
+            <div class="schedule-toolbar-title">Operations schedule</div>
+            <div id="schedule-window-label"></div>
+          </div>
+          <div class="schedule-legend" aria-label="Schedule legend">
+            <span class="legend-item"><span class="legend-slot"></span>slot</span>
+            <span class="legend-item"><span class="legend-slot missed"></span>missed</span>
+            <span class="legend-item"><span class="legend-slot reassigned"></span>new slot</span>
+          </div>
+          <div class="spacer"></div>
+          <button id="schedulePrevBtn" class="btn" type="button">← 12h</button>
+          <button id="scheduleNowBtn" class="btn" type="button">Now</button>
+          <button id="scheduleNextBtn" class="btn" type="button">12h →</button>
+          <select id="scheduleRange" aria-label="Schedule time range">
+            <option value="24" selected>24 hours</option>
+            <option value="48">48 hours</option>
+          </select>
+        </div>
+        <div id="schedule-scroll">
+          <div id="schedule-board"></div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="sidebar right">
+      <section class="section">
+        <div class="section-title"><span>Details</span><span id="selectedBadge" class="muted">none</span></div>
+        <div id="selectedPanel" class="card"><div class="empty">Click an aircraft on the map or in the flight list.</div></div>
+      </section>
+
+      <section class="section">
+        <div class="section-title"><span>Operations simulation</span><span class="tag">slots active</span></div>
+        <div class="card ops-card">
+          <label class="ops-switch" style="margin:0">
+            <span><b>Automatic disruptions</b><div class="tiny muted">Ground handling, technical and en-route events</div></span>
+            <input id="opsToggle" type="checkbox" checked />
+          </label>
+          <div id="opsSelectedStatus" class="ops-status tiny muted">Select an aircraft to test disruptions.</div>
+          <div class="ops-buttons">
+            <button id="injectHandlingBtn" class="btn" type="button">+30m handling</button>
+            <button id="injectDefectBtn" class="btn bad" type="button">Technical defect</button>
+          </div>
+        </div>
+      </section>
+<section class="section">
+        <div class="card weather-note">
+          <b>Weather integration point</b>
+          <div class="tiny muted" style="margin-top:4px">
+            This MVP keeps weather deterministic/local. A later browser-only version can call a public weather API directly and feed wind, storms and delays into the same simulation engine.
+          </div>
+        </div>
+      </section>
+
+      <section class="section danger-zone">
+        <button id="resetBtn" class="btn bad full">Reset local save</button>
+      </section>
+    </aside>
+  </main>
+</div>
+
+<script src="aerosim.js"></script>
+</body>
+</html>
+
