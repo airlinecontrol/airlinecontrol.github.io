@@ -3,18 +3,25 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>AeroSim — Airline Manager MVP v9.2 Stable Controls</title>
+  <title>AeroSim — Airline Operations Manager</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-  <link rel="stylesheet" href="aerosim.css" />
+  <link rel="stylesheet" href="aerosim.css?v=10.1.0" />
 </head>
 <body>
 <div id="app">
   <header>
     <div class="brand"><span class="brand-badge">A</span> AeroSim</div>
 
+    <div id="workspaceModeSwitch" class="workspace-mode-switch" role="group" aria-label="Workspace view">
+      <button type="button" data-workspace-mode="planning" aria-pressed="true">Airline Planning</button>
+      <button type="button" data-workspace-mode="occ" aria-pressed="false">OCC Operations</button>
+      <button type="button" data-workspace-mode="all" aria-pressed="false">All Panels</button>
+    </div>
+
     <div class="header-core">
-      <div class="stat"><span class="label">Cash</span><span id="cash" class="value">—</span></div>
+      <div class="stat" data-workspace-views="planning,all"><span class="label">Cash</span><span id="cash" class="value">—</span></div>
+      <div class="stat"><span class="label">Jet fuel / US gal</span><span id="fuelPrice" class="value">—</span></div>
       <div class="stat"><span class="label">Fleet</span><span id="fleetCount" class="value">—</span></div>
       <div class="stat"><span class="label">Airborne</span><span id="airborneCount" class="value">—</span></div>
     </div>
@@ -38,18 +45,51 @@
     </div>
 
     <div class="header-kpis" aria-label="Airline overview">
-      <div class="top-kpi"><span>Revenue</span><b id="kpiRevenue">€0</b></div>
-      <div class="top-kpi"><span>Net P/L</span><b id="kpiProfit">€0</b></div>
-      <div class="top-kpi"><span>Passengers</span><b id="kpiPax">0</b></div>
-      <div class="top-kpi"><span>Completed</span><b id="kpiFlights">0</b></div>
+      <div class="top-kpi"><span id="kpiLabelRevenue">30d result</span><b id="kpiRevenue">€0</b></div>
+      <div class="top-kpi"><span id="kpiLabelProfit">Margin</span><b id="kpiProfit">0%</b></div>
+      <div class="top-kpi"><span id="kpiLabelPax">On-time</span><b id="kpiPax">100%</b></div>
+      <div class="top-kpi"><span id="kpiLabelFlights">Completion</span><b id="kpiFlights">100%</b></div>
     </div>
   </header>
 
-  <main>
+  <main id="main-layout">
     <aside class="sidebar">
-      <section class="section">
-        <div class="section-title"><span>Flight planning</span><span class="tag"><span class="dot active"></span> local sim</span></div>
-        <div class="card">
+      <div class="sidebar-search-wrap">
+        <label class="visually-hidden" for="leftSidebarSearch">Search sidebar items</label>
+        <input id="leftSidebarSearch" type="search" placeholder="Search aircraft and routes…"
+               autocomplete="off" spellcheck="false" />
+      </div>
+
+      <section class="sidebar-widget" data-widget="occ-flights" hidden>
+        <button class="widget-header" type="button" data-widget-toggle aria-expanded="true" aria-controls="occFlightsWidgetBody"><span><span class="planning-toggle-icon" aria-hidden="true">＋</span> Active &amp; upcoming</span><span id="occFlightCount" class="widget-meta">0</span></button>
+        <div id="occFlightsWidgetBody" class="widget-body"><div id="occFlightList" class="occ-list"></div></div>
+      </section>
+
+      <section class="sidebar-widget attention-widget" data-widget="occ-attention" hidden>
+        <button class="widget-header" type="button" data-widget-toggle aria-expanded="true" aria-controls="occAttentionWidgetBody"><span><span class="planning-toggle-icon" aria-hidden="true">＋</span> Attention required</span><span id="occAttentionCount" class="widget-meta">0</span></button>
+        <div id="occAttentionWidgetBody" class="widget-body"><div id="occAttentionList" class="occ-list"></div></div>
+      </section>
+
+      <section class="sidebar-widget" data-widget="occ-recovery" hidden>
+        <button class="widget-header" type="button" data-widget-toggle aria-expanded="false" aria-controls="occRecoveryWidgetBody"><span><span class="planning-toggle-icon" aria-hidden="true">＋</span> Recovery flight</span><span class="widget-meta">Ferry</span></button>
+        <div id="occRecoveryWidgetBody" class="widget-body">
+          <label for="recoveryAircraft">Aircraft</label><select id="recoveryAircraft"></select>
+          <div class="grid2">
+            <div><label for="recoveryDestination">Destination</label><select id="recoveryDestination"></select></div>
+            <div><label for="recoveryDepartureTime">Departure</label><input id="recoveryDepartureTime" type="time" step="300" /></div>
+          </div>
+          <div id="recoveryPreview" class="tiny muted" style="margin-top:7px"></div>
+          <button id="createRecoveryFlightBtn" class="btn primary full" type="button" style="margin-top:7px">Create ferry flight</button>
+        </div>
+      </section>
+
+      <section class="sidebar-widget flight-planning-section" data-widget="flight-planner">
+        <button id="flightPlanningToggle" class="widget-header planning-toggle" type="button"
+                aria-expanded="false" aria-controls="flightPlanningPanel">
+          <span><span class="planning-toggle-icon" aria-hidden="true">＋</span> Plan a flight</span>
+          <span class="widget-meta tiny muted">Open scheduler</span>
+        </button>
+        <div id="flightPlanningPanel" class="widget-body planning-panel" hidden>
           <label for="scheduleType">Schedule type</label>
           <select id="scheduleType">
             <option value="recurring" selected>Recurring round trip</option>
@@ -67,8 +107,13 @@
               <input id="departureTime" type="time" step="300" />
               <div class="tiny muted" style="margin-top:4px">Simulation-local clock</div>
             </div>
-            <div><label for="fare">Avg fare (€)</label><input id="fare" type="number" min="30" max="3000" step="10" value="210" /></div>
           </div>
+          <div class="grid3 fare-grid">
+            <div><label for="fareEconomy">Economy fare (€)</label><input id="fareEconomy" type="number" min="20" max="3000" step="10" value="140" /></div>
+            <div><label for="fareBusiness">Business fare (€)</label><input id="fareBusiness" type="number" min="50" max="6000" step="25" value="350" /></div>
+            <div><label for="fareFirst">First fare (€)</label><input id="fareFirst" type="number" min="100" max="12000" step="50" value="700" /></div>
+          </div>
+          <div id="routeDemandPanel" class="demand-intelligence"></div>
 
           <div id="recurringOptions">
             <div class="grid2">
@@ -78,6 +123,7 @@
                   <option value="weekdays">Weekdays</option>
                   <option value="every2">Every 2 days</option>
                   <option value="weekly">Weekly</option>
+                  <option value="custom">Custom weekdays &amp; months</option>
                 </select>
               </div>
               <div><label for="turnaround">Return turnaround</label>
@@ -88,6 +134,17 @@
                   <option value="180">180 min</option>
                 </select>
               </div>
+            </div>
+            <div id="operatingCalendar" class="operating-calendar" hidden>
+              <label>Operating weekdays</label>
+              <div class="calendar-check-grid weekday-grid">
+                <label><input type="checkbox" name="operatingDay" value="1" checked /> Mon</label><label><input type="checkbox" name="operatingDay" value="2" checked /> Tue</label><label><input type="checkbox" name="operatingDay" value="3" checked /> Wed</label><label><input type="checkbox" name="operatingDay" value="4" checked /> Thu</label><label><input type="checkbox" name="operatingDay" value="5" checked /> Fri</label><label><input type="checkbox" name="operatingDay" value="6" checked /> Sat</label><label><input type="checkbox" name="operatingDay" value="0" checked /> Sun</label>
+              </div>
+              <label>Operating months</label>
+              <div class="calendar-check-grid month-grid">
+                <label><input type="checkbox" name="operatingMonth" value="0" checked /> Jan</label><label><input type="checkbox" name="operatingMonth" value="1" checked /> Feb</label><label><input type="checkbox" name="operatingMonth" value="2" checked /> Mar</label><label><input type="checkbox" name="operatingMonth" value="3" checked /> Apr</label><label><input type="checkbox" name="operatingMonth" value="4" checked /> May</label><label><input type="checkbox" name="operatingMonth" value="5" checked /> Jun</label><label><input type="checkbox" name="operatingMonth" value="6" checked /> Jul</label><label><input type="checkbox" name="operatingMonth" value="7" checked /> Aug</label><label><input type="checkbox" name="operatingMonth" value="8" checked /> Sep</label><label><input type="checkbox" name="operatingMonth" value="9" checked /> Oct</label><label><input type="checkbox" name="operatingMonth" value="10" checked /> Nov</label><label><input type="checkbox" name="operatingMonth" value="11" checked /> Dec</label>
+              </div>
+              <div id="operatingCalendarSummary" class="tiny muted"></div>
             </div>
             <div class="schedule-mode-note tiny muted">
               Recurring schedules are round trips: the assigned aircraft flies the outbound leg,
@@ -101,45 +158,25 @@
         </div>
       </section>
 
-      <section class="section">
-        <div class="section-title"><span>Active & upcoming</span><span id="flightCount" class="muted">0</span></div>
-        <div id="flightList"></div>
+      <section class="sidebar-widget" data-widget="my-aircraft">
+        <button class="widget-header" type="button" data-widget-toggle aria-expanded="true" aria-controls="myAircraftWidgetBody"><span><span class="planning-toggle-icon" aria-hidden="true">＋</span> My aircraft</span><span id="aircraftListCount" class="widget-meta">0</span></button>
+        <div id="myAircraftWidgetBody" class="widget-body"><div id="aircraftList"></div></div>
       </section>
 
-      <section class="section">
-        <div class="section-title"><span>Recurring schedules</span><span id="serviceCount" class="muted">0</span></div>
-        <div id="serviceList"></div>
-      </section>
-
-      <section class="section">
-        <div class="section-title"><span>Airport slots</span><span id="slotCount" class="muted">0</span></div>
-        <div class="card">
-          <div class="row-between">
-            <div><b>Slot market</b><div class="tiny muted">Acquire a recurring departure-slot series.</div></div>
-            <span class="tag">seasonal right</span>
-          </div>
-          <div class="grid2" style="margin-top:8px">
-            <div><label for="slotAirport">Airport</label><select id="slotAirport"></select></div>
-            <div><label for="slotTime">Departure time</label><input id="slotTime" type="time" step="300" value="08:00" /></div>
-          </div>
-          <div id="slotBuyPreview" class="slot-buy-preview tiny muted"></div>
-          <button id="buySlotBtn" class="btn primary full" type="button" style="margin-top:7px">Acquire slot series</button>
-        </div>
-        <div id="slotPortfolio" class="slot-portfolio-list"></div>
-      </section>
-
-      <section class="section">
-        <div class="section-title"><span>Buy aircraft</span></div>
-        <div class="card">
-          <div class="row-between"><div><b>Airbus A320neo</b><div class="tiny muted">186 seats · short/medium haul</div></div><b>€48M</b></div>
-          <button class="btn full" data-buy="A320neo" style="margin-top:9px">Buy A320neo</button>
-        </div>
-        <div class="card">
-          <div class="row-between"><div><b>Airbus A330-900</b><div class="tiny muted">287 seats · long haul</div></div><b>€110M</b></div>
-          <button class="btn full" data-buy="A330-900" style="margin-top:9px">Buy A330-900</button>
+      <section class="sidebar-widget" data-widget="aircraft-market">
+        <button id="aircraftMarketToggle" class="widget-header planning-toggle" type="button"
+                aria-expanded="false" aria-controls="aircraftMarketPanel">
+          <span><span class="planning-toggle-icon" aria-hidden="true">＋</span> Aircraft market</span>
+          <span class="widget-meta tiny muted">Game prices</span>
+        </button>
+        <div id="aircraftMarketPanel" class="widget-body planning-panel" hidden>
+          <div id="aircraftMarketList"></div>
         </div>
       </section>
     </aside>
+
+    <div id="left-sidebar-splitter" class="sidebar-splitter" role="separator"
+         aria-orientation="vertical" aria-label="Resize left sidebar" tabindex="0"></div>
 
     <section id="center-workspace">
       <div id="map-pane">
@@ -156,7 +193,7 @@
       <div id="schedule-pane">
         <div class="schedule-toolbar">
           <div>
-            <div class="schedule-toolbar-title">Operations schedule</div>
+            <div class="schedule-toolbar-title">Operations schedule <span id="workspaceContextLabel" class="workspace-context-label">Planning</span></div>
             <div id="schedule-window-label"></div>
           </div>
           <div class="schedule-legend" aria-label="Schedule legend">
@@ -179,43 +216,156 @@
       </div>
     </section>
 
+    <div id="right-sidebar-splitter" class="sidebar-splitter" role="separator"
+         aria-orientation="vertical" aria-label="Resize right sidebar" tabindex="0"></div>
+
     <aside class="sidebar right">
-      <section class="section">
-        <div class="section-title"><span>Details</span><span id="selectedBadge" class="muted">none</span></div>
-        <div id="selectedPanel" class="card"><div class="empty">Click an aircraft on the map or in the flight list.</div></div>
-      </section>
-
-      <section class="section">
-        <div class="section-title"><span>Operations simulation</span><span class="tag">slots active</span></div>
-        <div class="card ops-card">
-          <label class="ops-switch" style="margin:0">
-            <span><b>Automatic disruptions</b><div class="tiny muted">Ground handling, technical and en-route events</div></span>
-            <input id="opsToggle" type="checkbox" checked />
-          </label>
-          <div id="opsSelectedStatus" class="ops-status tiny muted">Select an aircraft to test disruptions.</div>
-          <div class="ops-buttons">
-            <button id="injectHandlingBtn" class="btn" type="button">+30m handling</button>
-            <button id="injectDefectBtn" class="btn bad" type="button">Technical defect</button>
-          </div>
-        </div>
-      </section>
-<section class="section">
-        <div class="card weather-note">
-          <b>Weather integration point</b>
-          <div class="tiny muted" style="margin-top:4px">
-            This MVP keeps weather deterministic/local. A later browser-only version can call a public weather API directly and feed wind, storms and delays into the same simulation engine.
-          </div>
+      <section class="sidebar-widget management-cycle-widget" data-widget="management-cycle">
+        <button class="widget-header" type="button" data-widget-toggle aria-expanded="true" aria-controls="managementCycleWidgetBody"><span><span class="planning-toggle-icon" aria-hidden="true">＋</span> Operating week</span><span id="managementCyclePhase" class="widget-meta">Plan</span></button>
+        <div id="managementCycleWidgetBody" class="widget-body">
+          <div id="managementCycleContent"></div>
         </div>
       </section>
 
-      <section class="section danger-zone">
-        <button id="resetBtn" class="btn bad full">Reset local save</button>
+      <section class="sidebar-widget" data-widget="performance">
+        <button class="widget-header" type="button" data-widget-toggle aria-expanded="true" aria-controls="performanceWidgetBody"><span><span class="planning-toggle-icon" aria-hidden="true">＋</span> Performance</span><span id="performancePeriod" class="widget-meta">30 days</span></button>
+        <div id="performanceWidgetBody" class="widget-body">
+          <div id="performanceKpis" class="performance-kpis"></div>
+          <div id="performanceReview" class="performance-review"></div>
+        </div>
+      </section>
+
+      <section class="sidebar-widget" data-widget="slot-market">
+        <button id="slotMarketToggle" class="widget-header planning-toggle" type="button"
+                aria-expanded="false" aria-controls="slotMarketPanel">
+          <span><span class="planning-toggle-icon" aria-hidden="true">＋</span> Slot market</span>
+          <span class="widget-meta tiny muted">Open market</span>
+        </button>
+        <div id="slotMarketPanel" class="widget-body planning-panel" hidden>
+          <div class="row-between">
+            <div><b>Acquire slot series</b><div class="tiny muted">A recurring departure-slot right.</div></div>
+            <span class="tag">seasonal right</span>
+          </div>
+          <div class="grid2" style="margin-top:8px">
+            <div><label for="slotAirport">Airport</label><select id="slotAirport"></select></div>
+            <div><label for="slotTime">Departure time</label><input id="slotTime" type="time" step="300" value="08:00" /></div>
+          </div>
+          <div id="slotBuyPreview" class="slot-buy-preview tiny muted"></div>
+          <button id="buySlotBtn" class="btn primary full" type="button" style="margin-top:7px">Acquire slot series</button>
+        </div>
+      </section>
+
+      <section class="sidebar-widget" data-widget="slot-portfolio">
+        <button class="widget-header" type="button" data-widget-toggle aria-expanded="true" aria-controls="slotPortfolioWidgetBody"><span><span class="planning-toggle-icon" aria-hidden="true">＋</span> Slot portfolio</span><span id="slotCount" class="widget-meta">0</span></button>
+        <div id="slotPortfolioWidgetBody" class="widget-body"><div id="slotPortfolio" class="slot-portfolio-list"></div></div>
+      </section>
+
+      <section class="sidebar-widget" data-widget="finance">
+        <button class="widget-header" type="button" data-widget-toggle aria-expanded="true" aria-controls="financeWidgetBody"><span><span class="planning-toggle-icon" aria-hidden="true">＋</span> Commercial performance</span><span id="financeTransactionCount" class="widget-meta">30d plan</span></button>
+        <div id="financeWidgetBody" class="widget-body">
+          <div id="financeManagementSummary" class="management-finance-summary"></div>
+          <div class="finance-forecast">
+            <div class="row-between"><div id="financeForecastTitle" class="estimate-title">30-day forecast</div><select id="financeForecastDays" class="compact-select" aria-label="Forecast horizon"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></div>
+            <div class="finance-forecast-kpis">
+              <div><span>Closing cash</span><b id="forecastClosingCash">€0</b></div>
+              <div><span>Projected net</span><b id="forecastNet">€0</b></div>
+              <div><span>Lowest cash</span><b id="forecastLowestCash">€0</b></div>
+            </div>
+            <div id="financeForecastChart" class="finance-forecast-chart" role="img" aria-label="Projected daily cash movement and cash balance over 30 days"></div>
+            <div id="financeForecastBreakdown" class="finance-forecast-breakdown"></div>
+            <div class="tiny muted finance-forecast-note">Forecast uses current schedules, demand estimates, fuel price, payroll and lease commitments. It excludes unplanned disruption costs and future management decisions.</div>
+          </div>
+          <div class="route-portfolio-section">
+            <div class="row-between"><div class="estimate-title">Schedule contribution</div><span id="routePortfolioPeriod" class="tag">30-day plan</span></div>
+            <div id="routePortfolio" class="route-portfolio"></div>
+          </div>
+          <details class="accounting-details">
+            <summary><span>Accounting details</span><span id="accountingEntryCount" class="tiny muted">0 entries</span></summary>
+            <div class="finance-summary">
+              <div><span>30-day cash in</span><b id="financeIncome" class="money good">€0</b></div>
+              <div><span>30-day cash out</span><b id="financeExpenses" class="money bad">€0</b></div>
+            </div>
+            <div id="financeTransactions" class="finance-transactions"></div>
+          </details>
+        </div>
+      </section>
+
+      <section class="sidebar-widget" data-widget="personnel">
+        <button class="widget-header" type="button" data-widget-toggle aria-expanded="true" aria-controls="personnelWidgetBody"><span><span class="planning-toggle-icon" aria-hidden="true">＋</span> Personnel</span><span id="personnelPayroll" class="widget-meta">€0/mo</span></button>
+        <div id="personnelWidgetBody" class="widget-body">
+          <div id="personnelList" class="personnel-list"></div>
+          <div class="personnel-transfer-panel">
+            <div class="estimate-title">Relocate personnel</div>
+            <div class="grid2">
+              <div><label for="transferPersonnelRole">Personnel type</label><select id="transferPersonnelRole"></select></div>
+              <div><label for="transferPersonnelAmount">Employees</label><input id="transferPersonnelAmount" type="number" min="1" max="50" value="1" /></div>
+            </div>
+            <div class="grid2">
+              <div><label for="transferPersonnelFrom">From</label><select id="transferPersonnelFrom"></select></div>
+              <div><label for="transferPersonnelTo">To</label><select id="transferPersonnelTo"></select></div>
+            </div>
+            <label for="transferPersonnelMethod">Travel method</label>
+            <select id="transferPersonnelMethod">
+              <option value="own">Own scheduled flight · no ticket fee</option>
+              <option value="external">Other airline · ticket fee</option>
+            </select>
+            <div id="transferOwnFlightWrap">
+              <label for="transferPersonnelFlight">Own flight</label><select id="transferPersonnelFlight"></select>
+            </div>
+            <div id="personnelTransferPreview" class="tiny muted" style="margin-top:7px"></div>
+            <button id="transferPersonnelBtn" class="btn primary full" type="button" style="margin-top:7px">Move personnel</button>
+            <div id="personnelTransferList" class="personnel-transfer-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="sidebar-widget" data-widget="hire-personnel">
+        <button class="widget-header" type="button" data-widget-toggle aria-expanded="true" aria-controls="hirePersonnelWidgetBody"><span><span class="planning-toggle-icon" aria-hidden="true">＋</span> Hire personnel</span><span class="widget-meta">Staffing</span></button>
+        <div id="hirePersonnelWidgetBody" class="widget-body personnel-hire-panel">
+          <label for="personnelRole">Personnel type</label>
+          <select id="personnelRole"></select>
+          <label for="personnelAirport">Based at airport</label>
+          <select id="personnelAirport"></select>
+          <div id="personnelQualificationWrap">
+            <label for="personnelQualification">Aircraft qualification</label>
+            <select id="personnelQualification"></select>
+          </div>
+          <div class="grid2" style="margin-top:7px">
+            <button id="hirePersonnelBtn" class="btn good" type="button">Hire 1</button>
+            <button id="hirePersonnelFiveBtn" class="btn good" type="button">Hire 5</button>
+          </div>
+          <div id="personnelHirePreview" class="tiny muted" style="margin-top:6px"></div>
+          <div class="tiny muted widget-footnote">Maintenance is outsourced. Scheduled checks and defect repairs are charged separately.</div>
+        </div>
+      </section>
+
+      <section class="sidebar-widget maintenance-widget" data-widget="maintenance">
+        <button class="widget-header" type="button" data-widget-toggle aria-expanded="true" aria-controls="maintenanceWidgetBody"><span><span class="planning-toggle-icon" aria-hidden="true">＋</span> Maintenance control</span><span id="maintenanceCount" class="widget-meta">0 due</span></button>
+        <div id="maintenanceWidgetBody" class="widget-body">
+          <div id="maintenanceList" class="maintenance-list"></div>
+        </div>
+      </section>
+
+      <section class="sidebar-widget weather-widget" data-widget="weather">
+        <button class="widget-header" type="button" data-widget-toggle aria-expanded="true" aria-controls="weatherWidgetBody"><span><span class="planning-toggle-icon" aria-hidden="true">＋</span> Airport weather</span><span id="weatherAlertCount" class="widget-meta">Normal</span></button>
+        <div id="weatherWidgetBody" class="widget-body weather-note">
+          <div id="weatherList" class="weather-list"></div>
+          <div class="tiny muted widget-footnote">Local deterministic six-hour outlook. Weather changes airport capacity and can delay departures.</div>
+        </div>
+      </section>
+
+      <section class="section danger-zone sidebar-utility">
+        <button id="resetBtn" class="btn bad full" type="button">Reset local save</button>
+        <div id="resetStatus" class="tiny muted" role="status" aria-live="polite" style="margin-top:6px"></div>
       </section>
     </aside>
   </main>
 </div>
 
-<script src="aerosim.js"></script>
+<script src="js/management.js?v=10.1.0"></script>
+<script src="js/core.js?v=10.1.0"></script>
+<script src="js/simulation.js?v=10.1.0"></script>
+<script src="js/ui.js?v=10.1.0"></script>
+<script src="js/map.js?v=10.1.0"></script>
 </body>
 </html>
-
