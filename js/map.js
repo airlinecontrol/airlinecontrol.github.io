@@ -57,7 +57,7 @@ function rebuildRoutesIfNeeded() {
     .filter(f => !f.cancelled && flightActualDeparture(f) <= t + 2*HOUR && flightActualArrival(f) > t - 15*MIN)
     .sort((a,b) => a.id.localeCompare(b.id));
   const signature = visible.map(f =>
-    `${f.id}:${statusOfFlight(f,t)}:${f.id===selectedFlightId?1:0}`
+    `${f.id}:${statusOfFlight(f,t)}:${flightOperationalDestination(f)}:${f.id===selectedFlightId?1:0}`
   ).join('|');
 
   if (signature === routeSignature) return;
@@ -67,7 +67,8 @@ function rebuildRoutesIfNeeded() {
   for (const f of visible) {
     const selected = f.id === selectedFlightId;
     const st = statusOfFlight(f,t);
-    const coords = routeCoords(AIRPORTS[f.from], AIRPORTS[f.to], 80).map(([lon,lat]) => [lat,lon]);
+    const destination=flightOperationalDestination(f);
+    const coords = routeCoords(AIRPORTS[f.from], AIRPORTS[destination], 80).map(([lon,lat]) => [lat,lon]);
     const line = L.polyline(coords, {
       color: selected ? '#58d2ff' : (st === 'airborne' ? '#74a9c1' : '#607887'),
       weight: selected ? 3 : 2,
@@ -75,7 +76,7 @@ function rebuildRoutesIfNeeded() {
       dashArray: '7 7',
       interactive: true
     }).addTo(routeLayer);
-    line.bindTooltip(`${f.id} · ${f.from} → ${f.to}`);
+    line.bindTooltip(`${f.id} · ${f.from} → ${destination}${destination!==f.to?` (planned ${f.to})`:''}`);
     line.on('click', () => settleSelectedFlight(f.id));
   }
 }
@@ -133,7 +134,8 @@ function fitNetwork() {
     pts.push([p.lat,p.lon]);
   }
   for(const f of state.flights){
-    pts.push([AIRPORTS[f.from].lat,AIRPORTS[f.from].lon],[AIRPORTS[f.to].lat,AIRPORTS[f.to].lon]);
+    const destination=flightOperationalDestination(f);
+    pts.push([AIRPORTS[f.from].lat,AIRPORTS[f.from].lon],[AIRPORTS[destination].lat,AIRPORTS[destination].lon]);
   }
   if(!pts.length) return;
   map.fitBounds(L.latLngBounds(pts), {padding:[60,60], maxZoom:5});
@@ -157,6 +159,9 @@ function loop(now){
     // High-frequency refreshes must never rebuild form controls. Native combo boxes
     // can otherwise be destroyed/recreated while the user is choosing a value.
     refreshFleetList();
+    refreshFlightDetails(false);
+    refreshAircraftDetails(false);
+    refreshGroundTaskProgress();
     refreshKPIs();
     refreshScheduleTimeline(false);
 
@@ -166,13 +171,12 @@ function loop(now){
     refreshAircraftSelect(false);
     refreshSlotPortfolio(false);
     refreshPersonnel(false);
-    refreshFinance(false);
     refreshOccWidgets(false);
+    refreshDepartmentWidgets(false);
     refreshManagementCycle(false);
-    refreshPerformance(false);
     refreshMaintenance(false);
     refreshWeather(false);
-    refreshRecoveryOptions(false);
+    refreshResourceRequestSummary(false);
 
     lastUi=now;
   }

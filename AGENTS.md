@@ -12,6 +12,9 @@ The current prototype source is split into:
 - `aerosim.css`
 - `js/management.js`
 - `js/core.js`
+- `js/ground-operations.js`
+- `js/operational-intelligence.js`
+- `js/operational-workflows.js`
 - `js/simulation.js`
 - `js/ui.js`
 - `js/map.js`
@@ -22,16 +25,18 @@ It intentionally remains a plain HTML/CSS/JavaScript prototype without a framewo
 
 # 1. Product vision
 
-AeroSim is a browser-based airline management / operations simulation.
+AeroSim is a browser-based airline operations-control simulation.
 
 The desired feeling is a combination of:
 
 - FlightRadar24-style live map
-- airline tycoon / management game
 - operations control center
 - aircraft rotation planning
 - airport slot management
 - real-time disruption management
+
+The current game direction is operational, not financial. The player wins through readiness,
+punctuality, completion, recovery decisions, and resilient rotations rather than money.
 
 The core map should feel alive: aircraft move in real time, schedules exist independently of UI rendering, delays propagate through operations, and the player makes operational decisions such as swapping aircraft when one becomes unavailable.
 
@@ -88,6 +93,7 @@ The current prototype uses browser-native HTML, CSS, and classic JavaScript file
 - `aerosim.css` for styling
 - `js/management.js` for pure management-domain calculations
 - `js/core.js` for catalog data, utilities, state, migration, and persistence
+- `js/ground-operations.js` for pure timestamp-derived pre-flight, turnaround, and post-flight task models
 - `js/simulation.js` for schedules, flights, demand, costs, staffing, and operations
 - `js/ui.js` for DOM references, rendering, controls, and layout behavior
 - `js/map.js` for Leaflet, aircraft markers, map overlays, and application bootstrap
@@ -178,110 +184,29 @@ Do not replace it with a frame-counting simulation timer.
 
 # 5. Current game state model
 
-Approximate root state:
+The active OCC state keeps the timestamp-derived clock, aircraft, flights, recurring services,
+slot coordination, personnel, maintenance, operational statistics, and incident records.
 
-```js
-{
-  version,
-  clock,
+Incident state is first-class and persistent. Each record stores its type, flight and aircraft,
+airport, detection time, coordination deadline, blocking/severity state, training flag, workflow
+classification, resolution time, and outcome. Supported types are crew_sick, mel_defect,
+atc_restriction, gate_conflict, and destination_closure. Incident execution is persisted separately
+in `coordinationTasks`, `externalRequests`, and `resourceAssignments`. Those records are additive
+save migrations and use simulation timestamps, so a report, inspection, or external reply continues
+while the browser is closed.
 
-  cash,
-  home,
+Older saves can still contain cash, transactions, prices, fares, revenue, costs, leases, and salary
+configuration. Those fields are retained only for additive migration and compatibility with the
+existing demand/economics calculations. They are not an active game objective: the current UI has
+no cash, finance, price, payroll, aircraft purchase/lease, or sales surface, and postTransaction()
+intentionally does not mutate state.
 
-  nextAircraft,
-  nextFlight,
-  nextService,
-  nextSlotRight,
-  nextTransaction,
-  nextPersonnelTransfer,
-
-  aircraft: [],
-  flights: [],
-  services: [],
-  slotRights: [],
-  transactions: [],
-  personnelTransfers: [],
-
-  personnel: {
-    assignments: {
-      FRA: { captains, firstOfficers, cabinCrew, groundHandling, operations, customerService }
-    },
-    lastPayrollAt
-  },
-
-  ops: {
-    automaticDisruptions: true
-  },
-
-  stats: {
-    revenue,
-    costs,
-    staffCosts,
-    leaseCosts,
-    transferCosts,
-    cancellationCosts,
-    scheduledMaintenanceCosts,
-    cancelled,
-    pax,
-    completed
-  }
-}
-```
-
-## Important finance caveat
-
-The game intentionally uses management accounting rather than a full balance sheet.
-
-At present:
-
-- `cash` changes from aircraft/slot purchases, aircraft sales, lease payments,
-  pre-departure fuel purchases, and
-  completed-flight revenue minus non-fuel operating costs
-- `stats.revenue` is completed passenger-flight revenue
-- `stats.costs` is completed base operating cost plus the actual fuel bill
-- cancellations, scheduled checks, technical repairs, and weather handling post explicit cash
-  transactions when they occur
-
-Buying/selling aircraft or slot rights affects cash but is not treated as a route operating cost.
-
-All cash mutations must go through `postTransaction(amount, category, description, reference)`.
-Each transaction persists its simulation timestamp, signed amount, category, description,
-optional reference, and resulting cash balance. The ledger retains the latest 500 entries.
-Existing saves receive one non-mutating `Balance brought forward` opening entry. The Finance
-widget shows the newest 100 transactions and recent cash movement under Accounting Details.
-
-Commercial Performance contains selectable 7/30/90-day forward scenarios. `buildFinanceForecast()` uses
-stored bookings for already-created flights, extrapolates active recurring services beyond the
-14-day generation horizon with the deterministic demand estimator, and includes projected fuel,
-remaining flight operating costs, daily payroll accrual, lease due dates, and already-booked
-scheduled maintenance. Fuel and repairs
-already paid are not charged twice. The chart shows a cash-balance line and daily-net bars.
-This is a current-plan scenario, not a guarantee: it excludes unplanned disruption costs and
-future purchases, sales, hiring, schedule edits, and other management decisions.
-
-The schedule-contribution table allocates payroll and aircraft lease cost over planned block hours.
-Aircraft acquisition and slot assets remain outside route contribution. A future full statement could be:
-
-```text
-Revenue
-- flight operating costs
-- maintenance
-- staff
-- airport/handling fees
-= operating profit
-
-- depreciation
-- financing
-= net profit
-```
-
-Do not treat an aircraft purchase price as an immediate operating expense.
-
----
+New and reset saves start with no aircraft, flights, schedules, slots, or personnel. Operators
+request the resources they need from the top-bar Request resources menu.
 
 # 6. Airports
 
-Current airports:
+The airport catalog now contains 38 airports. The original network is:
 
 - FRA — Frankfurt
 - LHR — London Heathrow
@@ -294,7 +219,45 @@ Current airports:
 - SIN — Singapore
 - HND — Tokyo Haneda
 
-Each airport has latitude/longitude.
+The 20-airport global expansion is:
+
+- IST — Istanbul
+- MUC — Munich
+- ZRH — Zurich
+- BCN — Barcelona
+- DUB — Dublin
+- ATL — Atlanta
+- ORD — Chicago O'Hare
+- DFW — Dallas/Fort Worth
+- LAX — Los Angeles
+- MIA — Miami
+- YYZ — Toronto Pearson
+- ICN — Seoul Incheon
+- HKG — Hong Kong
+- PVG — Shanghai Pudong
+- DEL — Delhi
+- BKK — Bangkok Suvarnabhumi
+- DOH — Doha Hamad
+- JNB — Johannesburg O.R. Tambo
+- GRU — São Paulo Guarulhos
+- SYD — Sydney
+
+Eight additional airports provide useful alternates and secondary gateways:
+
+- EWR — Newark Liberty
+- LGW — London Gatwick
+- ORY — Paris Orly
+- NRT — Tokyo Narita
+- AUH — Abu Dhabi
+- MXP — Milan Malpensa
+- DUS — Düsseldorf
+- KUL — Kuala Lumpur
+
+Every airport has the same complete data surface: IATA/name and latitude/longitude in `AIRPORTS`,
+a deterministic demand profile in `AIRPORT_MARKETS`, slot cadence/grace in `AIRPORT_OPS`, and
+landing/passenger/security/handling/parking values in `AIRPORT_COSTS`. A startup invariant checks
+that these catalogs remain synchronized. Coordinates are based on the public OurAirports dataset;
+market profiles and operational/cost values are deliberately synthetic game abstractions.
 
 There is also a simplified operations configuration:
 
@@ -315,52 +278,25 @@ This is a game abstraction, not a literal representation of real airport coordin
 
 # 7. Aircraft types
 
-The local catalogue currently contains 33 variants:
+The local catalogue contains 33 variants across ATR, Embraer, CRJ/MHI, Airbus, and Boeing families.
+Catalogue performance fields consumed by the simulation include seats, speed, range, and legacy
+cost estimates. The cost fields remain internal compatibility inputs and are not shown to players.
 
-- ATR: 42-600, 72-600
-- Embraer: E170, E175, E190, E195, E190-E2, E195-E2
-- Canadair / MHI RJ: CRJ200, CRJ700, CRJ900, CRJ1000
-- Airbus: A220-100/-300, A319neo, A320neo, A321neo, A321XLR, A330-800/-900,
-  A350-900/-1000, A380-800
-- Boeing: 737-7/-8/-9/-10, 787-8/-9/-10, 777-200ER/-200LR/-300ER
+Aircraft are operational resources, not financial assets. The Request resources menu's Airplane page lets the
+operator configure the three-class cabin and immediately assigns the requested aircraft to the
+operations pool at the home airport. Requested aircraft persist with acquisitionType "requested"
+and resourceSource "operations pool".
 
-Aircraft purchases include a three-class cabin configurator. Model `seats` represents
-economy-seat-equivalent cabin space: economy uses one unit, business two, and first three.
-First and business use sliders; economy is the remaining derived capacity. Purchased and leased
-aircraft persist `{economy, business, first}` in `aircraft.cabin`. Old saves migrate to all-economy.
+Existing owned/leased save records migrate to the same operational behavior without charging,
+paying, selling, or returning contracts. An unassigned aircraft can be released from the pool;
+release is blocked while an active service or unfinished flight uses it.
 
-Aircraft can be bought or taken on an operating lease. Lease terms range from 12 to 120 months.
-The monthly rate declines linearly from about 1.05% to 0.75% of game-market value as the term
-lengthens. The first payment is charged on delivery and subsequent payments every 30 simulation
-days. Returning before the minimum term costs the lesser of six monthly payments or all unpaid
-remaining contract payments; after the term, the lease continues month-to-month until returned.
+Model seats represent economy-seat-equivalent cabin space: economy uses one unit, business two,
+and first three. First and business use sliders; economy is derived from the remaining capacity.
+Old saves migrate to an all-economy cabin.
 
-Owned aircraft can be sold at a condition- and utilization-adjusted used value, starting around
-78% of catalogue price for a new aircraft. Disposal is blocked while any active recurring service
-or unfinished flight still uses the aircraft. Existing saves migrate aircraft to `acquisitionType:
-'owned'`.
-
-Each entry contains the fields currently consumed by the simulation: manufacturer, segment,
-seats, cruise speed, maximum range, purchase price, and operating cost per kilometre.
-
-Technical characteristics are curated from manufacturer material where practical. Purchase
-prices and `costPerKm` are game-balance estimates, not claimed transaction prices. Actual
-commercial-aircraft transaction prices are generally confidential and professional current-
-value feeds are normally licensed.
-
-New and reset saves begin with no aircraft, no flights, no recurring services, and no slot
-rights. Starting cash remains available so the player can build the airline from scratch.
-
-Aircraft currently store a physical airport location while on the ground.
-
-Technical defects add:
-
-```js
-defectUntil
-defectReason
-```
-
----
+Aircraft store their physical airport while on the ground plus persistent condition, hours,
+cycles, fuel inventory, defects, and maintenance state.
 
 # 8. Flight model
 
@@ -438,95 +374,23 @@ The timeline intentionally displays both.
 
 ---
 
-# 9. Flight economics
+# 9. Passenger demand and capacity
 
-The demand model is a synthetic offline market simulation rather than live booking data.
+The demand model is a synthetic offline market simulation rather than live booking data. It uses
+great-circle distance, cabin capacity, route characteristics, airport market profiles, weekday,
+departure time, season, and same-day directional capacity. Existing bookings consume the daily
+class pools, so extra frequency dilutes demand.
 
-Approximate logic:
+The scheduler derives internal class values from the route instead of exposing player-controlled
+fares. One controlled random demand roll per created flight (approximately plus or minus 8%) is
+persisted; refreshing or reopening must never reroll passengers. Each flight retains class seats,
+passengers, loads, and demand factors so the planner and flight details can show operational load
+information.
 
-- great-circle distance
-- aircraft seat count
-- fare relative to route-derived base fare
-- airport market profiles for size, business traffic, tourism, wealth, hub strength, region,
-  and destination seasonality
-- distance and same-region transport suitability plus a modest deterministic city-pair affinity
-- an addressable daily passenger pool split into economy, business, and first class
-- home/hub market access representing the share available after abstract competition
-- class-specific weekday, departure-time, season, and fare responses
-- existing same-day directional bookings consume the pool, so added frequency dilutes demand
-- one controlled random demand roll per created flight (`±8%`)
-- separate economy, business, and first-class fare elasticity and demand scales
-- an in-planner route demand panel exposing route strength, selected day/time/season effects,
-  and projected class loads using the same model that creates the flight
-- custom recurring operating calendars with selected weekdays and months; generation advances
-  each rotation to the next matching local calendar day
-- aircraft may operate multiple schedules when the combined itinerary has no time overlap and
-  every leg departs from the airport where the prior leg leaves the aircraft
-- resulting load factor
-- passenger count
-- ticket revenue
-- itemized operating ledger
-
-Fare attractiveness uses an exponential elasticity curve relative to the route base fare. Passenger
-counts are limited by both installed seats and remaining class demand, so extremely high fares or
-excessive frequency can produce empty flights. Random demand is persisted on the flight record;
-refreshing or reopening the game must never reroll an existing flight's passengers.
-
-Each schedule stores three fares. Each created flight persists `fares`, `classPax`,
-`classLoads`, and class-specific demand rolls. Economy uses the route base fare; business and
-first use higher base-fare multipliers and gentler price elasticity, but have smaller underlying
-demand pools. Ticket revenue is the sum of passengers times fare for each installed class.
-
-Important function:
-
-```js
-estimateFlight(from, to, aircraft, fare)
-```
-
-It returns approximately:
-
-```js
-{
-  km,
-  duration,
-  rangeOk,
-  load,
-  pax,
-  revenue,
-  costs,
-  profit,
-  demand
-  economics
-}
-```
-
-For newly created flights, `economics` contains ticket revenue, fuel, landing charges,
-passenger/security fees, ground handling, navigation, emissions, insurance, parking,
-unscheduled repairs, total cost, and operating result. Personnel payroll and slot-right
-purchases remain company-level rather than being allocated to individual flights.
-
-Airport charges come from the local `AIRPORT_COSTS` table. Aircraft weight, insurance, and
-fuel performance currently come from consistent category/size-derived operating profiles;
-these can later be replaced model by model without changing the ledger API. Old saves migrate
-their opaque historical cost into `legacyOperating` so existing economics remain stable.
-
-Future versions can add airline reputation, explicit competitors, connecting itineraries, events,
-and route histories without replacing the daily-market API.
-
-Potential future factors:
-
-- airport/city population and economic data
-- route purpose (business versus leisure)
-- weekday/weekend
-- competition
-- frequency
-- fare
-- connections
-- airport attractiveness
-- airline reputation
-- seasonality
-
----
+Legacy fare, revenue, cost, and economics fields remain in flight records because the established
+demand estimator and old saves depend on them. They must not be surfaced as money, profit, or a
+financial win condition. Current top-level performance is operational: on-time performance,
+average delay, completion, passenger load, and open incidents.
 
 # 10. Recurring schedules
 
@@ -655,95 +519,69 @@ If no spare is available, explain why instead of silently hiding the feature.
 
 ---
 
-# 12. Disruption model
+# 12. Disruption and incident model
 
-Automatic disruptions run in the background.
+Automatic operations continue in the background. Routine handling, weather, staffing,
+maintenance, positioning, fuel, and en-route effects still feed the delay-propagation engine.
+Technical pre-departure findings enter the MEL incident lifecycle instead of immediately applying
+an opaque repair result.
 
-Current random disruption categories:
+## Decision incidents
 
-## Ground handling
+The five supported lifecycle incidents are:
 
-A pre-departure ground-handling delay may be generated.
+- crew sick call
+- MEL technical defect
+- ATC flow restriction
+- gate conflict
+- destination closure
 
-Examples conceptually include:
+An incident is detected against an eligible future flight, persisted, shown as a dedicated labeled
+incident tile under Attention required (for example, `Crew sick call`), and treated as a blocking
+departure-readiness gate until resolved. Selecting the affected
+flight opens Flight details; selecting its aircraft opens Aircraft details. Both detail panes show
+the open case and its departmental task chain. Attention itself remains a compact selection and
+acknowledgment queue and never embeds incident decisions. Passing a simulation-time deadline marks
+the case overdue and continues holding the affected flight; it never chooses an automatic fallback.
 
-- baggage
-- catering
-- boarding
-- cleaning
-- fueling
-- pushback
+The player acts as the integrated OCC duty manager. Work is executed through four separate
+department widgets while Context workbench remains the case/flight overview:
 
-These are currently abstracted into:
+- Dispatch & Flight Watch — flight release, ATC flow coordination, alternate selection, flight-deck
+  recommendations, and diversion clearance monitoring
+- Crew Control — qualified personnel-pool allocation followed by timestamp-derived reporting and briefing
+- Maintenance Control — engineering inspection followed by repair or MEL disposition
+- Station Operations — stand requests, towing/bussing coordination, and alternate handling acceptance
 
-```js
-handlingDelayMin
-```
+Case steps start blocked or available, then move through in-progress, waiting-external, and complete
+states. Active work always exposes a timestamp-derived progress bar. ATC, the captain/flight deck,
+airport stand control, and alternate handlers are modeled as external counterparties with persisted
+request and reply times. The case closes only after every required task is complete; there is no
+one-click generic incident resolution API or UI.
 
-## Jet fuel
+The supported chains are deliberately different: sick calls require real qualified pool allocation,
+reporting, then an amended release; MEL findings require inspection, disposition, then technical
+release review; ATC restrictions require flow coordination and release update; gate conflicts require
+airport stand response and ground coordination; destination closures require alternate evaluation,
+captain acceptance, ATC clearance, alternate handling, and an amended operational plan. Diversions
+change only the operational destination/duration; the planned destination and timetable remain intact.
+Map routes, aircraft position, timeline details, and later positioning checks use the operational destination.
 
-The top bar shows a locally simulated Jet A market price in EUR per US gallon. It begins at
-`€2.45/US gal`, changes every six simulation hours, mean-reverts toward that baseline, and is
-bounded between `€1.55` and `€4.25`. It does not use a live web API.
+Only open incidents are rendered. Resolved incident history remains persisted for simulation
+accounting but is not shown in Attention or either detail pane. Attention includes a training button
+that cycles through all five scenario types using the next eligible future flight. Do not add a
+separate incident overview; operational issues and incidents intentionally share one queue.
 
-Aircraft fuel burn and tank capacity are derived consistently from aircraft category, seats,
-speed, and range. Fuel is persistent aircraft inventory. Each flight requires taxi/trip burn
-plus a 45-minute reserve and, one hour before departure, buys only the top-up missing from its
-current tanks. At arrival, trip burn is consumed and unused reserve remains onboard for the
-next leg. At arrival, only non-fuel flight costs are deducted so fuel is not charged twice.
-Fueling must occur strictly in chronological flight order per aircraft; a later generated
-rotation must never preload the aircraft before its earliest unsettled flight.
+## Personnel resources
 
-## Technical defect
-
-An aircraft can become unavailable until:
-
-```js
-defectUntil
-```
-
-Technical delay affects upcoming operations and makes aircraft substitution useful.
-
-Maintenance personnel are outsourced. A generated technical defect is categorized as minor,
-major, or severe from its repair duration. The game immediately charges an outsourced repair
-invoice based on repair minutes and aircraft seating capacity. Aircraft also have persistent
-condition, flight-hours, and cycle counters. Every completed flight reduces condition slightly,
-defect probability rises as condition falls, and an outsourced repair restores some condition.
-The Maintenance Control widget schedules outsourced checks into the next feasible programme gap.
-Checks are due after 600 hours or 450 cycles, become grounding at 115% of the interval, create
-aircraft downtime, restore condition, and post their invoice on completion.
-
-## En-route disruption
-
-Airborne flights can gain additional arrival delay:
-
-```js
-enrouteDelayMin
-```
-
-## Personnel management
-
-The right sidebar shows a compact table of hired personnel grouped by role and airport base,
-plus a hire form with role and airport selectors. Staff roles are captains, first officers,
-cabin crew, ground handling, operations/dispatch, and customer service.
-
-Every departure draws personnel from its departure airport. Cockpit staffing uses one captain
-and one first officer per concurrent flight; cabin crew uses one employee per 50 seats; ground
-staffing uses four people around departure; operations and customer service each use one person
-per overlapping departure. New schedules validate both outbound and return airports. During
-live operations, an understaffed flight remains on the ground and its personnel delay advances
-in 15-minute increments until enough staff are available. Salaries accrue once per simulation
-day at one-thirtieth of monthly payroll, are deducted from cash, and are included in Net P/L.
-
-Recurring round trips with total scheduled duty of at most 12 hours reuse the outbound captain,
-first officer, and cabin crew on the return leg. The destination still needs its own ground
-handling, operations, and customer-service staff. Longer rotations require locally based flight
-crew at the return airport. Outbound crew remain unavailable at their base until the paired
-short return leg arrives back, followed by ten hours of pooled crew rest. Captains and first
-officers are hired with an aircraft-family type rating. Existing saves migrate cockpit employees
-to a compatible `Multi-fleet` rating, and personnel relocation preserves the rating mix.
-
----
+Personnel are requested, not hired. Requests immediately add the selected role and cockpit family
+qualification to the chosen airport pool. A captain, first officer, and cabin crew may continue
+onto consecutive returned-to-base rotations when the preceding crew has returned to that airport
+and the combined duty remains at most 12 hours. Overlapping flights, an away-from-base crew, or a
+longer combined duty need another team; after a duty, the pooled crew needs ten hours of rest.
+Ground handling, operations, and customer service remain departure-window resources rather than
+full-duty resources. No salary or payroll is shown or charged. Own-flight relocations reserve
+non-revenue seats; external positioning uses only travel time and no financial transaction.
 
 # 13. Delay propagation
 
@@ -762,7 +600,7 @@ The system calculates:
 1. planned departure
 2. direct handling/technical delay
 3. previous flight actual arrival
-4. minimum turnaround
+4. dependency-aware ground-operation readiness and minimum turnaround
 5. propagated inbound delay
 6. slot grace-window check
 7. reassigned slot if original slot is missed
@@ -779,6 +617,27 @@ MIN_TURN_MIN = 35
 This is intentionally a simplified global minimum, even though each recurring schedule also has its own planned turnaround.
 
 A desirable future improvement is aircraft/airport-specific minimum turn time.
+
+## Ground-operation task model
+
+Every flight derives two task phases from authoritative timestamps:
+
+- departure preparation, classified as first-flight preparation or a connected turnaround
+- post-arrival servicing, including the final flight of a rotation when no next leg exists
+
+Passenger departure phases model dispatch release, walkaround, cabin preparation or cleaning,
+catering where applicable, fueling, baggage work, boarding, load closeout, and pushback clearance.
+Post-arrival phases model deboarding, baggage unloading, cabin reset, inspection, and technical
+handover. Ferry flights use a smaller task set. Dependencies prevent downstream tasks such as
+boarding, closeout, and pushback from starting before their prerequisites.
+
+Task progress is calculated from simulation time and task start/end timestamps. It is not persisted
+per animation frame. Handling exceptions deterministically identify an affected task and feed the
+phase ready time into `recalculateOperations()`, preserving the planned timetable while allowing
+late task completion to propagate into missed slots and later rotations. Flight details always show
+both departure and arrival phases with per-task progress bars. Aircraft details show the current or
+next relevant phase. The high-frequency UI loop updates progress-bar values directly rather than
+rebuilding the details DOM.
 
 ---
 
@@ -816,73 +675,15 @@ A temporary recovery slot does NOT become a permanent asset in the airline slot 
 
 ---
 
-# 15. Slot-right portfolio
+# 15. Slot coordination portfolio
 
-A recurring round trip requires two rights:
+A recurring round trip still needs two strategic slot series: one at the origin and one for the
+return departure. The persistent record shape and existing-save grandfathering remain compatible.
 
-```text
-origin departure right
-destination return-departure right
-```
-
-Service fields:
-
-```js
-originSlotRightId
-destinationSlotRightId
-```
-
-Slot right shape:
-
-```js
-{
-  id,
-  airport,
-  minuteOfDay,
-  price,
-  source,
-  acquiredAt
-}
-```
-
-Sources currently include:
-
-```text
-market
-grandfathered
-```
-
-## Slot market pricing
-
-Current market is an intentionally game-like abstraction.
-
-Pricing varies by:
-
-- airport base value
-- airport scarcity multiplier
-- peak/off-peak time
-
-Do not present these values as real-world market prices.
-
-## Existing-save migration
-
-When old saves are loaded, existing recurring schedules are granted zero-cost historic/grandfathered rights matching their already-existing timetable.
-
-This prevents upgrades from breaking an airline.
-
-Preserve this migration philosophy.
-
-## Sale
-
-Unused market-acquired rights may currently be sold for:
-
-```text
-70% of acquisition price
-```
-
-Grandfathered rights are not sold through this simple mechanism.
-
----
+Slot series are now requested from airport coordination and assigned immediately. There is no
+market price, purchase, sale value, or cash gate. Unused non-grandfathered series may be released.
+Temporary recovery slots created after a missed departure opportunity remain operational events
+and never become portfolio resources.
 
 # 16. Slot-aware scheduling
 
@@ -904,13 +705,13 @@ requiredSlotPlan(...)
 The scheduler preview shows rights as:
 
 ```text
-OWNED
+ASSIGNED
 NEEDED
 ```
 
-and can buy missing rights directly.
+and can request missing series directly.
 
-One-time flights currently remain ad-hoc and do not require buying a recurring slot series.
+One-time flights remain ad-hoc and do not require a recurring slot series.
 
 ---
 
@@ -985,97 +786,70 @@ Long term, MapLibre/custom GPU layers are likely better for hundreds/thousands o
 
 ---
 
-# 19. Main layout
+# 19. Unified OCC layout
 
-Current desktop layout:
+The application now has one operations-control workspace over the live simulation and save. The
+Airline Planning / OCC / All Panels switch was removed. There is no finance workspace.
 
-```text
+~~~text
+TOP BAR            REQUEST RESOURCES MENU
+operations KPIs    airplane / slots / personnel
+
 LEFT SIDEBAR       CENTER WORKSPACE        RIGHT SIDEBAR
-flight planner     map                     slot market
-my aircraft        ----------------        slot portfolio
-aircraft market    draggable splitter      finance
-                   ----------------        personnel
-                   schedule timeline       hire personnel
-                                           weather placeholder
-```
+flight operations  live map                context workbench
+  attention        ----------------        operating week
+  active           draggable splitter      network support
+  upcoming         ----------------          one row per airport
+plan/position      operations timeline     weather
+fleet                                       personnel relocation
+                                            dispatch & flight watch
+                                            crew control
+                                            maintenance control
+                                            station operations
+~~~
 
-The top bar switches between three UI workspaces over the same live simulation and save:
+Requests for airplanes, slot series, and personnel live in the top-bar `Request resources` menu.
+It behaves like a compact operating-system context menu: the first-level category list drops down
+below the button, and hovering or clicking a category opens the complete request form in an adjacent
+submenu to its right. It has no backdrop or full dialog surface.
 
-- `planning`: flight/demand planning, fleet acquisition, slots, finance, and staffing
-- `occ`: active/upcoming flights, attention-required issues, fleet handling, operational staffing
-  rosters, and weather. It never exposes hiring, salary/payroll, aircraft acquisition/disposal,
-  slots trading, route planning, or company finance controls.
-- `all`: every Planning and OCC widget together for users who prefer one comprehensive workspace
+Flight planning is a collapsed dashboard widget. One shared planner creates recurring passenger
+round trips, one-time passenger flights, and non-revenue ferry/positioning flights. Ferry mode locks
+the origin to the selected aircraft's physical location and uses the normal range, itinerary, and
+staffing validation. Successful scheduling closes the planner widget.
 
-The view switch never duplicates or pauses simulation data. Finance and commercial acquisition
-widgets are hidden in OCC, while flight-level economics remain in the shared aircraft/flight
-details. The OCC active/upcoming queue covers the next 24 hours; its attention queue includes
-staffing blocks, delay causes, missed slots, and defective aircraft. Clicking an OCC item selects
-the existing shared detail card.
+Attention, Active flights, and Upcoming flights are shaded sections inside one expanded Flight
+operations widget. The selection-driven Context workbench is expanded on first use and switches
+between flight, aircraft, and unselected network overview content. The four department widgets are
+collapsed by default. Opening a case task focuses its owning widget while preserving the Context
+workbench as the source overview; department widgets own execution and progress, not duplicate case
+summaries. Network support is grouped by
+airport: every airport occupies one row containing its personnel roster, slot-series rights,
+grounded aircraft and maintenance state, pending resource requests, and personnel transfers.
+Context and problem airports sort first. Weather is a separate dashboard widget, and Personnel
+relocation is a separate widget containing the relocation form and active transfers. Maintenance
+attention opens Network support; weather attention opens Weather.
+Individual collapse preferences persist under the dedicated aerosim_occ_ui_v1 local-storage key.
+Sidebar widths and the center split remain UI-only local preferences and never enter the airline save.
 
-`WORKSPACE_WIDGETS` is the single registry for widget visibility and default collapsed state.
-Do not scatter mode checks throughout individual renderers. Workspace preferences use the
-separate `aerosim_workspace_ui_v1` local-storage key and persist active view, per-view collapse
-state, and schedule ranges. Sidebar widths and the center split use view-suffixed storage keys,
-so Planning, OCC, and All Panels can maintain different layouts without entering airline save state.
+WORKSPACE_WIDGETS remains the single registry for dashboard widgets; the top resource menu is
+intentionally outside it. Do not add scattered view checks or
+reintroduce parallel planning/finance modes. Active contains only airborne movements and shows live
+progress. Upcoming contains the remaining 24-hour queue. Both flight queues and the fleet show
+compact reason badges whenever a problem exists. Rows remain visually neutral rather than receiving
+red backgrounds, side rails, or red problem dots; cyan is reserved for selection and semantic color
+is concentrated in the compact badges. Attention includes staffing, delay, slot, defect,
+maintenance, positioning, weather, and unresolved incidents. Every attention item owns its
+acknowledgment button. Selecting an affected flight or aircraft opens its detail pane; incident task
+links live at the top of the detail pane, their actual controls live in the owning department widget,
+and neither decisions nor generic flight controls ever expand inside Attention.
+The three-pane resizable layout, compact fleet list, unified context workbench, and Leaflet
+invalidation rules remain in force.
 
-Personnel relocation is stored in `personnelTransfers`. Booking removes staff from the origin
-roster immediately; arrival adds them to the destination roster. Own-flight transfers require a
-future matching flight with enough unused cabin seats, use a non-revenue seat, and charge no fare.
-External-airline transfers depart after a two-hour booking allowance, use a distance-derived ticket
-price, post a Finance transaction, and accrue `stats.transferCosts`. If an own flight disappears
-before travel, the transfer is cancelled and the employees return to the origin roster.
-
-The center workspace starts approximately:
-
-```text
-50% map
-50% schedule
-```
-
-A horizontal draggable splitter lets the user resize it.
-
-Vertical draggable splitters between each sidebar and the center workspace let the user
-resize the left and right sidebars independently. Their widths are stored locally using:
-
-```js
-aerosim_left_sidebar_width
-aerosim_right_sidebar_width
-```
-
-The former recurring-schedules section is not shown in the left sidebar. Recurring flights
-remain visible and selectable in the central operations schedule.
-
-The left sidebar has a debounced, tokenized search over owned aircraft, current/next routes,
-and the data-driven aircraft market. Search updates those lists directly rather than
-triggering a full simulation refresh. The aircraft market is collapsed by default.
-
-The right sidebar contains the slot market, collapsed by default, and the always-visible
-slot portfolio/overview. Flight and aircraft details no longer have a separate right pane.
-
-Each sidebar feature is wrapped in an independent `.sidebar-widget` with a shared
-`.widget-header` and `.widget-body`. Stable `data-widget` identifiers are present for a future
-drag-and-drop/persisted layout system. Personnel and hiring are intentionally separate widgets.
-Do not fold widget styling into the center map or schedule panes.
-Every widget header is clickable and collapses its body. The planner and both markets keep their
-specialized toggle bindings; the other widgets use the shared `[data-widget-toggle]` binding.
-Layout splitters remain draggable but are visually borderless, revealing their grip only on hover.
-
-The split percentage is stored locally using:
-
-```js
-aerosim_center_split_pct
-```
-
-Leaflet must receive:
-
-```js
-map.invalidateSize(...)
-```
-
-after meaningful resizing.
-
----
+Outer sidebar widgets are the primary visual containers. Do not create repeated rounded, outlined
+cards inside them. Internal groups, queue entries, metrics, readiness gates, incident context, and
+detail sections use flat shaded bands, one-pixel separators, or a narrow semantic accent rail.
+Borders and rounded shapes are reserved mainly for parent widgets and interactive controls.
 
 # 20. Schedule timeline
 
@@ -1121,7 +895,10 @@ MISSED  original slot was missed
 NEW     reassigned operational departure slot
 ```
 
-Slot markers are clickable and open Flight Details.
+Slot markers are clickable and open Flight Details. A selected flight block receives a strong
+highlight and its complete aircraft timeline row receives a coordinated background highlight.
+Selections originating outside the timeline align the schedule window when necessary and scroll
+the selected block/row into view.
 
 ## Turnaround/connection lines
 
@@ -1148,7 +925,9 @@ selectedFlightId
 
 ## Aircraft selection
 
-Clicking an aircraft marker clears flight selection and opens general aircraft details.
+Clicking an aircraft marker or fleet row clears flight selection and opens aircraft context inside
+the Context workbench at the top of the right sidebar. The matching fleet row
+stays highlighted but never expands inline.
 
 ## Flight selection
 
@@ -1166,40 +945,52 @@ selectedFlightId
 selectedAircraftId
 ```
 
-and opens the matching owned-aircraft card in the left sidebar.
+and opens flight context inside the Context workbench at the top of the right sidebar. The matching fleet
+row remains highlighted but does not expand or disrupt the fleet scroll position.
 
-The expanded aircraft card is the primary home for flight details and aircraft substitution.
-For recurring flights it also contains a confirmed schedule-removal action. Removing a
-schedule deactivates its service and removes flights that have not actually departed; an
-airborne flight is allowed to finish.
+The flight pane is the primary home for readiness, OCC actions, delay/fuel/cabin detail, aircraft
+substitution, and schedule management. Removing a schedule deactivates its service and removes
+flights that have not actually departed; an airborne flight is allowed to finish.
 
 ---
 
-# 22. Inline flight and aircraft details
+# 22. Flight and aircraft details
 
-Clicking an owned-aircraft card's summary toggles its inline details. Clicking within the
-expanded details must not close the card. Clicking anywhere else in the outer card toggles it.
-Selecting a flight from the map or schedule expands
-the matching aircraft card and shows approximately:
+Flight and aircraft context share one selection-driven right-side Context workbench. The fleet
+remains a compact selection list; it never embeds either detail view. Aircraft context shows location, cabin, range,
+fuel, condition, utilization, maintenance, current/next flight links, and resource-pool release
+controls. Selecting a current/next flight link switches to Flight details.
+
+Selecting a flight from the map, Attention required, or schedule opens flight context in that
+workbench. Its top level stays concise and ordered for action: identity/route, problem anchors,
+open operational cases with their task chains, pre-departure controls, then one non-duplicated
+overview containing scheduled/expected times, primary delay cause, and readiness. When a flight has
+operational problems, a compact
+`Problems` navigation strip appears below the heading. Its anchor links scroll directly to each
+owning detail section. Open incidents affecting either a flight or aircraft are shown with their
+description, deadline, operational context, workflow progress, and departmental task links in the
+relevant details pane. Actual task controls appear only in the matching department widget. Resolved
+incidents are not rendered anywhere.
+There is no standalone Operational response or Recovery decision section. A resolution appears
+directly beside the problem it owns: crew decisions under Dispatch, expediting under Ground
+operations, connection protection under Passenger connections, aircraft recovery under Aircraft or
+Recurring schedule, and incident execution in its department widget. Unaffected flights do not show
+generic hold or continue-plan choices. Fueling and cancellation remain separate flight controls.
+Readiness states and list badges use explicit outcomes or causes (for example,
+`Aircraft at LHR`, `Fuel top-up pending`, or `Potential delay`) rather than internal category names.
+The former separate readiness-exception panel and delay-breakdown section were removed: they repeated
+the same facts already shown by the overview, problem anchors, and owning domain section. Information
+sections remain visible rather than individually collapsible:
 
 - flight ID
 - route
-- scheduled times
-- actual/expected times
-- aircraft
-- recurring schedule ID
-- passengers
-- load factor
-- departure delay
-- arrival delay
-- slot state
-- airport slot cadence
-- owned slot right
-- delay breakdown
-- aircraft substitution controls
+- passengers and cabin
+- fuel
+- operational/slot detail
+- aircraft substitution and recurring-schedule controls
 
-When an aircraft without a current/upcoming flight is selected it shows general
-aircraft/operational information.
+Closing either pane clears selection. Selecting the highlighted fleet row switches from flight
+context to the dedicated aircraft pane.
 
 ---
 
@@ -1232,46 +1023,32 @@ A better future alternative could be contextual notifications/events rather than
 
 # 25. Top KPI bar
 
-Current top area contains:
-
-- Cash
-- Fleet
-- Airborne
-- Simulation time
-- Simulation speed
-
-Top-right KPIs are workspace-aware. Planning/All shows the selected forecast result and margin
-plus recent on-time and completion performance. OCC shows on-time performance, average delay,
-completion, and open operational issues.
-
----
+The header is OCC-only. It shows fleet count, airborne count, open incidents, simulation time,
+and speed. The former Performance widget was removed; its six 30-day operational KPIs now live in
+the top bar: on-time performance, completion, load factor, average delay, utilization, and completed
+flights/cancellations. Do not reintroduce cash, fuel price, forecast, margin, or profit KPIs.
 
 # 26. Scheduler UI
 
-Current scheduler includes:
+The scheduler is the collapsed Plan / position flight dashboard widget. It includes:
 
 - Schedule type
   - recurring round trip
   - one-time one-way
+  - ferry / positioning flight
 - departure airport
 - destination airport
 - aircraft
 - actual HH:MM first-departure time input
-- fare
 - repeat rule
 - return turnaround
 
-The live preview shows estimated possible ticket income, base operating costs, fuel quantity
-and cost at the current market price, total operating costs, and possible operating result.
-These are estimates: actual passenger income uses the demand roll stored when a flight is
-created, while the final fuel bill uses the market price at fueling time. Slot-right purchases
-are shown separately and are not included in per-flight operating profit.
+The live preview shows distance, block/cycle time, range, aircraft-itinerary fit, slot-series
+status, demand factors, and projected class loads. It contains no fare or financial controls.
 
-The flight-planning form is collapsed by default behind a `Plan a flight` button. Below it,
-the left sidebar shows the owned-aircraft list with current/next route, operational status,
-and airborne progress. Clicking a card expands its inline operational details. The aircraft
-market below it is collapsed by default. The former `Active & upcoming` flight list was
-removed because the central schedule timeline is the primary flight-level operations view.
+The planner is closed by default. The left sidebar keeps both flight queues, Attention required,
+and the fleet list open. Clicking a fleet card opens its aircraft-level operational details. After
+a one-time, recurring, or ferry flight is successfully scheduled, the planner closes automatically.
 
 The old "depart in X minutes" dropdown was intentionally replaced by a real time picker.
 
@@ -1443,9 +1220,10 @@ A seeded PRNG/event generator would be preferable.
 
 Real slot coordination is more nuanced than the current market/cadence abstraction.
 
-## Simplified finance
+## Legacy accounting fields
 
-No balance sheet, depreciation, financing, maintenance reserves, leasing or company valuation.
+Old financial fields remain for save and demand-model compatibility, but current gameplay has no
+financial objective or UI. Remove them only through a deliberate state migration.
 
 ---
 
@@ -1573,7 +1351,7 @@ For a much longer offline duration, a future event queue/aggregation path should
 
 Weather is currently a deterministic local six-hour airport outlook. It supplies wind,
 visibility/storm conditions, an expected delay, and an airport-capacity factor. Pre-departure
-weather checks can delay flights, create handling/de-icing-style costs, and lengthen recovery-slot
+weather checks can delay flights, require handling/de-icing responses, and lengthen recovery-slot
 cadence. The OCC weather widget prioritizes airports used in the next 24 hours.
 
 A future version can replace the local generator with cached public weather data and add route
@@ -1640,14 +1418,17 @@ Verify at minimum:
 6. timeline flight click opens flight details
 7. scheduler select values remain stable and do not flicker
 8. departure and destination do not rewrite each other
-9. recurring schedule can be created when slot rights exist
-10. missing slot rights can be acquired
+9. recurring schedule can be created when slot series are assigned
+10. missing slot series can be requested
 11. slot portfolio updates
 12. delay can shift actual flight time without modifying planned time
 13. missed slot creates NEW operational slot marker
 14. substitute-aircraft flow works when a suitable spare exists
 15. split-pane resize keeps map valid
 16. reload preserves state
+17. all five incident types expose valid decisions and persist their outcomes
+18. aircraft and personnel requests are assigned immediately
+19. all unified OCC panels are visible and initially expanded on a fresh UI preference key
 
 ## Important regression test
 
@@ -1692,17 +1473,15 @@ Likely high-value next work:
 5. richer airport slot rules
 6. historic slot utilization / use-it-or-lose-it
 7. seasonal slot portfolios
-8. slot leasing/trading
-9. maintenance scheduling
-10. crew scheduling
-11. airport/handling contracts
-12. weather integration
-13. demand/competition model
-14. route profitability dashboard
-15. better financial statements
-16. IndexedDB persistence
-17. TypeScript/Vite refactor
-18. MapLibre GPU map layer for large fleet sizes
+8. maintenance scheduling
+9. crew scheduling
+10. airport/handling coordination
+11. weather integration
+12. demand/competition model
+13. richer incident chains and recovery consequences
+14. IndexedDB persistence
+15. TypeScript/Vite refactor
+16. MapLibre GPU map layer for large fleet sizes
 
 Do not assume this list is a command to implement everything. Use it as design context.
 
@@ -1752,51 +1531,44 @@ When making changes, preserve local-save compatibility and the stable-controls r
 
 ---
 
-# 40. Connected management rebuild (v10)
+# 40. Unified OCC and incident lifecycle (v11)
 
-The product now uses one planning → operations → review loop under the working identity
-**Airline Operations Manager**:
+The current prototype adds:
 
-- a seven-simulation-day operating cycle automatically records weekly reviews
-- the Performance widget derives on-time performance, completion, load factor, average delay,
-  aircraft utilization, and direct operating margin from settled/cancelled flight records
-- Commercial Performance supports 7/30/90-day scenarios, cash runway, and schedule-level
-  contribution including direct costs plus allocated payroll and aircraft lease
-- the transaction ledger remains available under collapsed `Accounting details`
-- OCC flight readiness evaluates aircraft, qualified/rested crew, fuel, slot, weather, and rotation
-- OCC actions can hold, cancel, acknowledge, or fuel a flight early
-- cancellation posts passenger recovery/handling costs and preserves the cancelled flight record
-- recovery ferry flights are explicit non-revenue flight instances with operating costs
-- a missing physical aircraft position blocks the next departure until a recovery flight resolves it
+- one OCC workspace with all panels open by default
+- persistent incident records, deadlines, departmental tasks, external requests, resource assignments, and history
+- multi-step coordination paths for sick calls, MEL findings, ATC restrictions, gate conflicts, and closures
+- incident-aware flight readiness and attention queues
+- diversion-aware maps, aircraft positions, details, and positioning constraints
+- capacity-limited aircraft, personnel, and slot-series requests with persistent allocation lead times
+- removal of all finance, money, pricing, payroll, purchase, lease, and sale surfaces
+- an end-to-end browser fixture covering all five incident types and resource requests
 
-`js/management.js` must remain DOM-free. It receives state/callbacks and owns deterministic
-domain calculations. Keep state/persistence, simulation, UI rendering, and map/bootstrap code in
-their respective `js/` files until a controlled module or TypeScript migration is explicitly
-undertaken. The files are classic scripts and therefore intentionally share a browser-global scope.
-
----
+Legacy economic fields and management helpers are retained only where removing them would break
+old saves or the current demand model. They are not part of current gameplay.
 
 # 41. Summary
 
-AeroSim is no longer just a visual prototype.
+The current prototype is a browser-first airline operations-control simulation with:
 
-The current code already contains interacting systems for:
+- a persistent timestamp-derived clock
+- live aircraft movement and a delay-aware timeline
+- recurring round-trip schedules with rolling materialization
+- timestamp-derived pre-flight, turnaround, and post-flight task models with dependency progress
+- strategic slot coordination and temporary recovery slots
+- staffing, maintenance, weather, fuel, and positioning constraints
+- a persistent, actionable five-type incident lifecycle with no automatic deadline fallback
+- separate Dispatch, Crew Control, Maintenance Control, and Station Operations task widgets
+- timestamp-derived departmental work and simulated external captain, ATC, airport, and handler responses
+- aircraft substitution, diversions, cancellations, and recovery flights
+- capacity-limited operational resource requests with persistent lead times
+- dispatch releases with alternates, crew-duty legality, airport flow, airspace restrictions, and MEL restrictions
+- split-duty round trips and augmented long-haul crews with contextual recovery actions
+- passenger connection risk and protection decisions
+- contextual recovery actions with downstream delay and misconnection consequences
+- seven-day OCC objectives and scoring
+- one unified OCC workspace with no financial game
 
-- real-time flight motion
-- recurring schedules
-- aircraft ownership
-- aircraft substitution
-- disruptions
-- technical defects
-- delay propagation
-- airport slots
-- slot portfolio ownership
-- schedule timeline
-- planned vs actual times
-- operational slot misses
-- flight/aircraft detail selection
-- persistent local state
-
-The biggest engineering risk is now accidental regression caused by the monolithic UI refresh model.
-
-The biggest product opportunity is evolving the current one-route-per-aircraft schedule model into true aircraft rotations while keeping the operational simulation coherent.
+Preserve planned versus actual timestamps, physical aircraft continuity, additive save migration,
+and control stability during refreshes. Treat operational decisions and cascading disruption as
+the core game loop.

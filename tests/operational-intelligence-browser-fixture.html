@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>AeroSim operational intelligence fixture</title></head>
+<body>
+<pre id="result">RUNNING</pre>
+<iframe id="app" title="AeroSim test application" style="width:1440px;height:1000px"></iframe>
+<script>
+  const HOUR=3600000,MIN=60000,now=Date.now();
+  const departure=now+3*HOUR,arrival=now+5*HOUR,onwardDeparture=arrival+50*MIN;
+  localStorage.removeItem('aerosim_occ_ui_v1');
+  localStorage.setItem('aerosim_mvp_v6',JSON.stringify({
+    version:6,clock:{realBase:now,simBase:now,speed:1},cash:0,home:'FRA',
+    nextAircraft:4,nextFlight:4,nextService:1,nextSlotRight:1,nextIncident:2,nextResourceRequest:1,
+    aircraft:[
+      {id:'AC1',tail:'D-AS01',model:'A320neo',cabin:{economy:160,business:10,first:0},location:'FRA',condition:88,flightHours:220,cycles:140,fuelGallons:0,melItems:[],acquisitionType:'requested',acquiredAt:now},
+      {id:'AC2',tail:'D-AS02',model:'A320neo',cabin:{economy:160,business:10,first:0},location:'LHR',condition:96,flightHours:40,cycles:20,fuelGallons:0,melItems:[],acquisitionType:'requested',acquiredAt:now},
+      {id:'AC3',tail:'D-AS03',model:'A350-900',cabin:{economy:280,business:20,first:5},location:'FRA',condition:97,flightHours:80,cycles:18,fuelGallons:0,melItems:[],acquisitionType:'requested',acquiredAt:now}
+    ],
+    flights:[
+      {id:'AS1',aircraftId:'AC1',from:'FRA',to:'LHR',departure,arrival,handlingDelayMin:30,incidentChecks:{operationalGeneration:true},opsChecked:true,weatherChecked:true,fare:160,fares:{economy:160,business:420,first:800},load:.82,pax:145,classPax:{economy:135,business:10,first:0},classLoads:{economy:.84,business:1,first:0},revenue:25800,costs:18000,baseCosts:18000,settled:false,departureLogged:false},
+      {id:'AS2',aircraftId:'AC2',from:'LHR',to:'JFK',departure:onwardDeparture,arrival:onwardDeparture+7*HOUR,incidentChecks:{operationalGeneration:true},opsChecked:true,weatherChecked:true,fare:500,fares:{economy:500,business:1300,first:2500},load:.7,pax:120,classPax:{economy:110,business:10,first:0},classLoads:{economy:.69,business:1,first:0},revenue:68000,costs:46000,baseCosts:46000,settled:false,departureLogged:false},
+      {id:'AS3',aircraftId:'AC3',from:'FRA',to:'SIN',departure:now+6*HOUR,arrival:now+19*HOUR,incidentChecks:{operationalGeneration:true},opsChecked:true,weatherChecked:true,fare:650,fares:{economy:650,business:1700,first:3300},load:.78,pax:238,classPax:{economy:215,business:18,first:5},classLoads:{economy:.77,business:.9,first:1},revenue:186000,costs:110000,baseCosts:110000,settled:false,departureLogged:false}
+    ],
+    incidents:[{id:'INC1',type:'mel_defect',flightId:'AS1',aircraftId:'AC1',airport:'FRA',detectedAt:now,deadline:now+60*MIN,status:'open',severity:'critical',blocking:true,training:true,selectedAction:'',resolvedAt:0,outcome:'',automaticResolution:false}],
+    services:[],slotRights:[],transactions:[],personnelTransfers:[],resourceRequests:[],
+    personnel:{assignments:{FRA:{captains:4,firstOfficers:4,cabinCrew:12,groundHandling:12,operations:4,customerService:4},LHR:{captains:4,firstOfficers:4,cabinCrew:12,groundHandling:12,operations:4,customerService:4}},qualifications:{FRA:{captains:{'Airbus A320 family':4},firstOfficers:{'Airbus A320 family':4}},LHR:{captains:{'Airbus A320 family':4},firstOfficers:{'Airbus A320 family':4}}},lastPayrollAt:now},
+    fuelMarket:{pricePerGallon:2.45,updatedAt:now},ops:{automaticDisruptions:true},management:{cycleStart:now,reviews:[]},
+    stats:{revenue:0,costs:0,staffCosts:0,leaseCosts:0,transferCosts:0,cancellationCosts:0,scheduledMaintenanceCosts:0,cancelled:0,pax:0,completed:0}
+  }));
+  const frame=document.getElementById('app');
+  frame.addEventListener('load',()=>setTimeout(()=>{
+    try{
+      const doc=frame.contentDocument;
+      doc.querySelector('[data-flight-id="AS1"]')?.click();
+      const pane=doc.getElementById('flightDetailsPane');
+      const checks={
+        dispatch:Boolean(pane.querySelector('.dispatch-section')&&pane.textContent.includes('Flight duty period')&&pane.textContent.includes('Alternate')),
+        networkConstraints:pane.textContent.includes('Airport flow')&&pane.textContent.includes('Airspace'),
+        connections:Boolean(pane.querySelector('.connection-section')&&pane.textContent.includes('Passenger connections')&&pane.textContent.includes('AS2')),
+        contextualRecoveryActions:Boolean(pane.querySelector('#flight-section-ground [data-apply-recovery="expedite"]')&&pane.querySelector('#flight-section-connections [data-apply-recovery="protect-connections"]')&&!pane.querySelector('.recovery-plan-list,.occ-action-panel')),
+        melContext:Boolean(pane.querySelector('.incident-technical')&&pane.textContent.includes('MEL')&&pane.textContent.includes('ATA')),
+        score:Boolean(doc.getElementById('kpiOccScore')&&Number(doc.getElementById('kpiOccScore').textContent)<=100),
+        objectives:Boolean(doc.querySelector('.scenario-objectives'))
+      };
+      doc.querySelector('[data-flight-id="AS3"]')?.click();
+      checks.crewDutyResolution=Boolean(doc.querySelector('#flightDetailsPane [data-apply-recovery="augment-crew"]')&&doc.getElementById('flightDetailsPane').textContent.includes('Assign augmented crew'));
+      doc.querySelector('#flightDetailsPane [data-apply-recovery="augment-crew"]')?.click();
+      checks.augmentedCrewApplied=!doc.getElementById('flightDetailsPane').textContent.includes('Crew duty limit')&&JSON.parse(localStorage.getItem('aerosim_mvp_v6')).flights.find(item=>item.id==='AS3')?.crewAugmented===true;
+      doc.querySelector('[data-flight-id="AS1"]')?.click();
+      frame.contentWindow.performOperationalTask('INC1:mx-inspect');
+      frame.contentWindow.processOperationalWorkflows(Number.MAX_SAFE_INTEGER);
+      frame.contentWindow.performOperationalTask('INC1:mx-disposition','defer');
+      frame.contentWindow.performOperationalTask('INC1:dispatch-release');
+      doc.querySelector('[data-aircraft-toggle="AC1"]')?.click();
+      checks.aircraftMel=Boolean(doc.getElementById('aircraftDetailsPane').querySelector('.mel-section')&&doc.getElementById('aircraftDetailsPane').textContent.includes('Deferred defects'));
+      doc.getElementById('resourceMenuToggle').click();
+      doc.querySelector('[data-resource-page="personnel"]')?.click();
+      checks.resourceCapacity=/available|allocation/.test(doc.getElementById('personnelRequestPreview').textContent);
+      const saved=JSON.parse(localStorage.getItem('aerosim_mvp_v6'));
+      checks.melPersisted=saved.aircraft.find(item=>item.id==='AC1').melItems.some(item=>item.status==='open');
+      const passed=Object.values(checks).every(Boolean);
+      document.getElementById('result').textContent=`${passed?'PASS':'FAIL'} ${JSON.stringify(checks)}`;
+    }catch(error){ document.getElementById('result').textContent=`FAIL ${error.stack||error}`; }
+  },1500));
+  frame.src='../airline-manager-mvp-v9.2.html?operational-intelligence-smoke=1';
+</script>
+</body>
+</html>

@@ -235,7 +235,7 @@ window.AeroManagement = (() => {
     return changed;
   }
 
-  function flightReadiness({flight,aircraft,now,staffingShortages=[],fuelPlan=null}){
+  function flightReadiness({flight,aircraft,now,staffingShortages=[],fuelPlan=null,openIncidents=[]}){
     const departure=flight.actualDeparture??flight.departure;
     const maintenance=aircraft?maintenanceStatus(aircraft,now):null;
     const weather=weatherAt(flight.from,departure);
@@ -244,14 +244,16 @@ window.AeroManagement = (() => {
     const aircraftBlocked=!aircraft||flight.cancelled||
       (aircraft.defectUntil&&aircraft.defectUntil>departure)||maintenance?.active||maintenance?.grounding||
       (departure>now&&aircraft.location!==flight.from);
-    add('aircraft','Aircraft',aircraftBlocked?'block':maintenance?.due?'warn':'ready',
+    add('aircraft','Aircraft availability',aircraftBlocked?'block':maintenance?.due?'warn':'ready',
       !aircraft?'Not assigned':flight.cancelled?'Flight cancelled':maintenance?.active?'Scheduled maintenance in progress':maintenance?.grounding?'Mandatory check overdue':aircraft.defectUntil>departure?'Technical defect unresolved':aircraft.location!==flight.from?`Aircraft currently at ${aircraft.location}`:maintenance?.due?'Maintenance due soon':'Available');
-    add('crew','Crew',staffingShortages.length?'block':'ready',staffingShortages.length?staffingShortages.join(' · '):'Qualified crew and ground team available');
+    add('crew','Crew availability',staffingShortages.length?'block':'ready',staffingShortages.length?staffingShortages.join(' · '):'Qualified crew and ground team available');
     const fuelReady=flight.fueled||now<flight.departure-60*MIN;
-    add('fuel','Fuel',fuelReady?'ready':'warn',flight.fueled?`${Math.round(flight.fuelOnboardAtDeparture||0)} US gal onboard`:now<flight.departure-60*MIN?'Automatic fueling opens 60 minutes before departure':`Top-up required${fuelPlan?` · ${Math.round(fuelPlan.requiredGal)} US gal target`:''}`);
-    add('slot','Slot',flight.slotMissed?'warn':'ready',flight.slotMissed?'Original slot missed; recovery slot assigned':'Planned slot protected');
-    add('weather','Weather',weather.level==='severe'?'block':weather.level==='caution'?'warn':'ready',`${weather.conditions} · wind ${weather.windKph} km/h`);
-    add('rotation','Turnaround',flight.propagatedDelayMin?'warn':'ready',flight.propagatedDelayMin?`Inbound rotation adds ${flight.propagatedDelayMin} minutes`:'Aircraft rotation connected');
+    add('fuel','Fuel status',fuelReady?'ready':'warn',flight.fueled?`${Math.round(flight.fuelOnboardAtDeparture||0)} US gal onboard`:now<flight.departure-60*MIN?'Automatic fueling opens 60 minutes before departure':`Top-up required${fuelPlan?` · ${Math.round(fuelPlan.requiredGal)} US gal target`:''}`);
+    add('slot','Departure slot',flight.slotMissed?'warn':'ready',flight.slotMissed?'Original slot missed; recovery slot assigned':'Planned slot protected');
+    add('weather','Departure weather',weather.level==='severe'?'block':weather.level==='caution'?'warn':'ready',`${weather.conditions} · wind ${weather.windKph} km/h`);
+    add('rotation','Inbound rotation',flight.propagatedDelayMin?'warn':'ready',flight.propagatedDelayMin?`Inbound rotation adds ${flight.propagatedDelayMin} minutes`:'Aircraft rotation connected');
+    add('incident','Open incidents',openIncidents.some(incident=>incident.blocking)?'block':openIncidents.length?'warn':'ready',
+      openIncidents.length?openIncidents.map(incident=>incident.title||incident.type).join(' · '):'No unresolved operational incidents');
     const score={ready:0,warn:1,block:2};
     const overall=gates.reduce((worst,gate)=>score[gate.status]>score[worst]?gate.status:worst,'ready');
     return {overall,gates,weather,maintenance};

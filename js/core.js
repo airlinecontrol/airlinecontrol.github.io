@@ -17,7 +17,39 @@ const AIRPORTS = {
   FCO:{iata:'FCO',name:'Rome Fiumicino',lat:41.8003,lon:12.2389},
   DXB:{iata:'DXB',name:'Dubai',lat:25.2532,lon:55.3657},
   SIN:{iata:'SIN',name:'Singapore',lat:1.3644,lon:103.9915},
-  HND:{iata:'HND',name:'Tokyo Haneda',lat:35.5494,lon:139.7798}
+  HND:{iata:'HND',name:'Tokyo Haneda',lat:35.5494,lon:139.7798},
+
+  // Global network expansion.
+  IST:{iata:'IST',name:'Istanbul',lat:41.274874,lon:28.732136},
+  MUC:{iata:'MUC',name:'Munich',lat:48.353802,lon:11.7861},
+  ZRH:{iata:'ZRH',name:'Zurich',lat:47.458056,lon:8.548056},
+  BCN:{iata:'BCN',name:'Barcelona',lat:41.2971,lon:2.07846},
+  DUB:{iata:'DUB',name:'Dublin',lat:53.428713,lon:-6.262121},
+  ATL:{iata:'ATL',name:'Atlanta',lat:33.6367,lon:-84.428101},
+  ORD:{iata:'ORD',name:"Chicago O'Hare",lat:41.9786,lon:-87.9048},
+  DFW:{iata:'DFW',name:'Dallas/Fort Worth',lat:32.896801,lon:-97.038002},
+  LAX:{iata:'LAX',name:'Los Angeles',lat:33.942501,lon:-118.407997},
+  MIA:{iata:'MIA',name:'Miami',lat:25.796011,lon:-80.289751},
+  YYZ:{iata:'YYZ',name:'Toronto Pearson',lat:43.675935,lon:-79.629421},
+  ICN:{iata:'ICN',name:'Seoul Incheon',lat:37.469101,lon:126.450996},
+  HKG:{iata:'HKG',name:'Hong Kong',lat:22.31184,lon:113.914862},
+  PVG:{iata:'PVG',name:'Shanghai Pudong',lat:31.1434,lon:121.805},
+  DEL:{iata:'DEL',name:'Delhi',lat:28.55563,lon:77.09519},
+  BKK:{iata:'BKK',name:'Bangkok Suvarnabhumi',lat:13.6811,lon:100.747002},
+  DOH:{iata:'DOH',name:'Doha Hamad',lat:25.273056,lon:51.608056},
+  JNB:{iata:'JNB',name:'Johannesburg O.R. Tambo',lat:-26.140081,lon:28.246801},
+  GRU:{iata:'GRU',name:'São Paulo Guarulhos',lat:-23.431274,lon:-46.469954},
+  SYD:{iata:'SYD',name:'Sydney',lat:-33.946098,lon:151.177002},
+
+  // Operational alternates for diversion and recovery gameplay.
+  EWR:{iata:'EWR',name:'Newark Liberty',lat:40.6894,lon:-74.170545},
+  LGW:{iata:'LGW',name:'London Gatwick',lat:51.148744,lon:-0.185739},
+  ORY:{iata:'ORY',name:'Paris Orly',lat:48.729499,lon:2.358963},
+  NRT:{iata:'NRT',name:'Tokyo Narita',lat:35.76858,lon:140.388714},
+  AUH:{iata:'AUH',name:'Abu Dhabi',lat:24.440966,lon:54.649237},
+  MXP:{iata:'MXP',name:'Milan Malpensa',lat:45.6306,lon:8.72811},
+  DUS:{iata:'DUS',name:'Düsseldorf',lat:51.289501,lon:6.76678},
+  KUL:{iata:'KUL',name:'Kuala Lumpur',lat:2.74558,lon:101.709999}
 };
 
 // Local synthetic market profiles, normalized to 0–1. They describe the metropolitan market,
@@ -32,7 +64,35 @@ const AIRPORT_MARKETS = {
   FCO:{size:.76,business:.58,tourism:1.00,wealth:.72,hub:.58,region:'Europe',season:'summer'},
   DXB:{size:.93,business:.90,tourism:.96,wealth:.91,hub:1.00,region:'Middle East',season:'winter'},
   SIN:{size:.89,business:.97,tourism:.86,wealth:.96,hub:.97,region:'Asia',season:'winter'},
-  HND:{size:1.00,business:1.00,tourism:.84,wealth:.96,hub:.94,region:'Asia',season:'spring'}
+  HND:{size:1.00,business:1.00,tourism:.84,wealth:.96,hub:.94,region:'Asia',season:'spring'},
+  IST:{size:.94,business:.85,tourism:.88,wealth:.76,hub:.99,region:'Europe',season:'summer'},
+  MUC:{size:.78,business:.91,tourism:.72,wealth:.90,hub:.83,region:'Europe',season:'summer'},
+  ZRH:{size:.70,business:.96,tourism:.70,wealth:.98,hub:.79,region:'Europe',season:'summer'},
+  BCN:{size:.82,business:.68,tourism:.98,wealth:.77,hub:.65,region:'Europe',season:'summer'},
+  DUB:{size:.68,business:.82,tourism:.78,wealth:.87,hub:.70,region:'Europe',season:'summer'},
+  ATL:{size:.99,business:.90,tourism:.62,wealth:.87,hub:1.00,region:'North America',season:'summer'},
+  ORD:{size:.96,business:.93,tourism:.72,wealth:.91,hub:.98,region:'North America',season:'summer'},
+  DFW:{size:.95,business:.90,tourism:.64,wealth:.89,hub:.99,region:'North America',season:'summer'},
+  LAX:{size:.99,business:.92,tourism:.98,wealth:.95,hub:.94,region:'North America',season:'summer'},
+  MIA:{size:.85,business:.82,tourism:.99,wealth:.90,hub:.76,region:'North America',season:'winter'},
+  YYZ:{size:.90,business:.95,tourism:.80,wealth:.93,hub:.91,region:'North America',season:'summer'},
+  ICN:{size:.93,business:.95,tourism:.81,wealth:.95,hub:.98,region:'Asia',season:'spring'},
+  HKG:{size:.92,business:.97,tourism:.91,wealth:.96,hub:.98,region:'Asia',season:'winter'},
+  PVG:{size:.98,business:.96,tourism:.80,wealth:.91,hub:.96,region:'Asia',season:'spring'},
+  DEL:{size:.98,business:.89,tourism:.87,wealth:.75,hub:.95,region:'Asia',season:'winter'},
+  BKK:{size:.91,business:.72,tourism:1.00,wealth:.74,hub:.91,region:'Asia',season:'winter'},
+  DOH:{size:.82,business:.91,tourism:.88,wealth:.94,hub:.98,region:'Middle East',season:'winter'},
+  JNB:{size:.76,business:.84,tourism:.76,wealth:.71,hub:.79,region:'Africa',season:'summer'},
+  GRU:{size:.96,business:.91,tourism:.88,wealth:.77,hub:.93,region:'South America',season:'winter'},
+  SYD:{size:.91,business:.94,tourism:.96,wealth:.95,hub:.88,region:'Oceania',season:'winter'},
+  EWR:{size:.91,business:.91,tourism:.72,wealth:.92,hub:.89,region:'North America',season:'summer'},
+  LGW:{size:.78,business:.70,tourism:.90,wealth:.85,hub:.68,region:'Europe',season:'summer'},
+  ORY:{size:.73,business:.72,tourism:.92,wealth:.84,hub:.58,region:'Europe',season:'summer'},
+  NRT:{size:.87,business:.90,tourism:.86,wealth:.93,hub:.91,region:'Asia',season:'spring'},
+  AUH:{size:.73,business:.90,tourism:.86,wealth:.95,hub:.89,region:'Middle East',season:'winter'},
+  MXP:{size:.76,business:.86,tourism:.87,wealth:.86,hub:.73,region:'Europe',season:'summer'},
+  DUS:{size:.68,business:.88,tourism:.57,wealth:.89,hub:.66,region:'Europe',season:'summer'},
+  KUL:{size:.84,business:.85,tourism:.92,wealth:.82,hub:.91,region:'Asia',season:'winter'}
 };
 
 const AIRPORT_OPS = {
@@ -40,7 +100,21 @@ const AIRPORT_OPS = {
   JFK:{slotIntervalMin:15,graceMin:10}, MAD:{slotIntervalMin:15,graceMin:10},
   AMS:{slotIntervalMin:10,graceMin:8}, CDG:{slotIntervalMin:10,graceMin:8},
   FCO:{slotIntervalMin:15,graceMin:10}, DXB:{slotIntervalMin:15,graceMin:10},
-  SIN:{slotIntervalMin:10,graceMin:8}, HND:{slotIntervalMin:10,graceMin:8}
+  SIN:{slotIntervalMin:10,graceMin:8}, HND:{slotIntervalMin:10,graceMin:8},
+  IST:{slotIntervalMin:10,graceMin:8}, MUC:{slotIntervalMin:15,graceMin:10},
+  ZRH:{slotIntervalMin:15,graceMin:10}, BCN:{slotIntervalMin:15,graceMin:10},
+  DUB:{slotIntervalMin:15,graceMin:10}, ATL:{slotIntervalMin:10,graceMin:8},
+  ORD:{slotIntervalMin:10,graceMin:8}, DFW:{slotIntervalMin:10,graceMin:8},
+  LAX:{slotIntervalMin:10,graceMin:8}, MIA:{slotIntervalMin:15,graceMin:10},
+  YYZ:{slotIntervalMin:10,graceMin:8}, ICN:{slotIntervalMin:10,graceMin:8},
+  HKG:{slotIntervalMin:10,graceMin:8}, PVG:{slotIntervalMin:10,graceMin:8},
+  DEL:{slotIntervalMin:10,graceMin:8}, BKK:{slotIntervalMin:10,graceMin:8},
+  DOH:{slotIntervalMin:10,graceMin:8}, JNB:{slotIntervalMin:15,graceMin:10},
+  GRU:{slotIntervalMin:10,graceMin:8}, SYD:{slotIntervalMin:10,graceMin:8},
+  EWR:{slotIntervalMin:10,graceMin:8}, LGW:{slotIntervalMin:10,graceMin:8},
+  ORY:{slotIntervalMin:15,graceMin:10}, NRT:{slotIntervalMin:10,graceMin:8},
+  AUH:{slotIntervalMin:15,graceMin:10}, MXP:{slotIntervalMin:15,graceMin:10},
+  DUS:{slotIntervalMin:15,graceMin:10}, KUL:{slotIntervalMin:15,graceMin:10}
 };
 const MIN_TURN_MIN = 35;
 const FUEL_MARKET_STEP = 6 * HOUR;
@@ -67,22 +141,56 @@ const AIRPORT_COSTS = {
   FCO:{landingPerTonne:9,passengerFee:20,securityFee:6,handlingBase:1800,handlingPerPax:6,parkingHour:140},
   DXB:{landingPerTonne:11,passengerFee:23,securityFee:7,handlingBase:2300,handlingPerPax:8,parkingHour:180},
   SIN:{landingPerTonne:12,passengerFee:24,securityFee:7,handlingBase:2300,handlingPerPax:8,parkingHour:190},
-  HND:{landingPerTonne:16,passengerFee:30,securityFee:9,handlingBase:2800,handlingPerPax:9,parkingHour:250}
+  HND:{landingPerTonne:16,passengerFee:30,securityFee:9,handlingBase:2800,handlingPerPax:9,parkingHour:250},
+  IST:{landingPerTonne:12,passengerFee:23,securityFee:7,handlingBase:2300,handlingPerPax:8,parkingHour:180},
+  MUC:{landingPerTonne:13.5,passengerFee:26,securityFee:8,handlingBase:2300,handlingPerPax:8,parkingHour:190},
+  ZRH:{landingPerTonne:17,passengerFee:32,securityFee:9,handlingBase:2700,handlingPerPax:9,parkingHour:260},
+  BCN:{landingPerTonne:10,passengerFee:21,securityFee:7,handlingBase:1900,handlingPerPax:7,parkingHour:150},
+  DUB:{landingPerTonne:12,passengerFee:24,securityFee:8,handlingBase:2100,handlingPerPax:8,parkingHour:170},
+  ATL:{landingPerTonne:12,passengerFee:24,securityFee:9,handlingBase:2500,handlingPerPax:8,parkingHour:210},
+  ORD:{landingPerTonne:14,passengerFee:28,securityFee:10,handlingBase:2800,handlingPerPax:9,parkingHour:240},
+  DFW:{landingPerTonne:12,passengerFee:24,securityFee:9,handlingBase:2500,handlingPerPax:8,parkingHour:210},
+  LAX:{landingPerTonne:15,passengerFee:31,securityFee:10,handlingBase:3000,handlingPerPax:10,parkingHour:270},
+  MIA:{landingPerTonne:12,passengerFee:26,securityFee:9,handlingBase:2500,handlingPerPax:8,parkingHour:210},
+  YYZ:{landingPerTonne:14,passengerFee:29,securityFee:9,handlingBase:2700,handlingPerPax:9,parkingHour:230},
+  ICN:{landingPerTonne:14,passengerFee:27,securityFee:8,handlingBase:2600,handlingPerPax:9,parkingHour:220},
+  HKG:{landingPerTonne:16,passengerFee:31,securityFee:9,handlingBase:2900,handlingPerPax:10,parkingHour:270},
+  PVG:{landingPerTonne:13,passengerFee:25,securityFee:8,handlingBase:2500,handlingPerPax:8,parkingHour:210},
+  DEL:{landingPerTonne:10,passengerFee:19,securityFee:7,handlingBase:2000,handlingPerPax:7,parkingHour:150},
+  BKK:{landingPerTonne:9,passengerFee:18,securityFee:6,handlingBase:1900,handlingPerPax:7,parkingHour:140},
+  DOH:{landingPerTonne:12,passengerFee:24,securityFee:7,handlingBase:2400,handlingPerPax:8,parkingHour:190},
+  JNB:{landingPerTonne:9,passengerFee:17,securityFee:6,handlingBase:1800,handlingPerPax:6,parkingHour:130},
+  GRU:{landingPerTonne:10,passengerFee:21,securityFee:7,handlingBase:2200,handlingPerPax:7,parkingHour:170},
+  SYD:{landingPerTonne:15,passengerFee:30,securityFee:9,handlingBase:2800,handlingPerPax:9,parkingHour:240},
+  EWR:{landingPerTonne:15,passengerFee:31,securityFee:11,handlingBase:3000,handlingPerPax:10,parkingHour:260},
+  LGW:{landingPerTonne:14,passengerFee:29,securityFee:9,handlingBase:2600,handlingPerPax:9,parkingHour:230},
+  ORY:{landingPerTonne:11,passengerFee:23,securityFee:8,handlingBase:2100,handlingPerPax:7,parkingHour:170},
+  NRT:{landingPerTonne:15,passengerFee:29,securityFee:9,handlingBase:2700,handlingPerPax:9,parkingHour:240},
+  AUH:{landingPerTonne:11,passengerFee:22,securityFee:7,handlingBase:2200,handlingPerPax:8,parkingHour:175},
+  MXP:{landingPerTonne:11,passengerFee:23,securityFee:7,handlingBase:2100,handlingPerPax:7,parkingHour:170},
+  DUS:{landingPerTonne:12,passengerFee:24,securityFee:8,handlingBase:2200,handlingPerPax:8,parkingHour:180},
+  KUL:{landingPerTonne:10,passengerFee:20,securityFee:6,handlingBase:2100,handlingPerPax:7,parkingHour:160}
 };
 
-// Game abstraction: prices represent recurring seasonal slot-series rights.
-const SLOT_MARKET = {
-  FRA:{basePrice:4_500_000,scarcity:1.25},
-  LHR:{basePrice:12_000_000,scarcity:1.85},
-  JFK:{basePrice:6_500_000,scarcity:1.35},
-  MAD:{basePrice:2_500_000,scarcity:1.00},
-  AMS:{basePrice:7_000_000,scarcity:1.55},
-  CDG:{basePrice:6_000_000,scarcity:1.40},
-  FCO:{basePrice:2_800_000,scarcity:1.00},
-  DXB:{basePrice:5_500_000,scarcity:1.25},
-  SIN:{basePrice:5_000_000,scarcity:1.20},
-  HND:{basePrice:9_000_000,scarcity:1.65}
-};
+function validateAirportCatalogs(){
+  const required={
+    markets:[AIRPORT_MARKETS,['size','business','tourism','wealth','hub','region','season']],
+    operations:[AIRPORT_OPS,['slotIntervalMin','graceMin']],
+    costs:[AIRPORT_COSTS,['landingPerTonne','passengerFee','securityFee','handlingBase','handlingPerPax','parkingHour']]
+  };
+  const airportCodes=Object.keys(AIRPORTS);
+  for(const [catalogName,[catalog,fields]] of Object.entries(required)){
+    const extras=Object.keys(catalog).filter(code=>!AIRPORTS[code]);
+    if(extras.length) throw new Error(`Airport ${catalogName} contains unknown codes: ${extras.join(', ')}`);
+    for(const code of airportCodes){
+      if(!catalog[code]) throw new Error(`${code} is missing its airport ${catalogName} profile.`);
+      const missing=fields.filter(field=>catalog[code][field]===undefined);
+      if(missing.length) throw new Error(`${code} airport ${catalogName} profile is missing: ${missing.join(', ')}`);
+    }
+  }
+  return true;
+}
+validateAirportCatalogs();
 
 const MODELS = {
   'ATR 42-600':{manufacturer:'ATR',segment:'Regional turboprop',seats:48,speedKmh:535,maxRangeKm:1345,price:18_000_000,costPerKm:2.6},
@@ -222,12 +330,6 @@ function timestampAtMinuteAfter(readyTs,minute){
   if(d.getTime()<readyTs) d.setDate(d.getDate()+1);
   return d.getTime();
 }
-function slotSeriesPrice(airportCode,ts){
-  const market=SLOT_MARKET[airportCode]||{basePrice:2_000_000,scarcity:1};
-  const hour=new Date(ts).getHours();
-  const peak=(hour>=7&&hour<10)||(hour>=16&&hour<20)?1.55:(hour>=6&&hour<22?1.15:.82);
-  return Math.round(market.basePrice*market.scarcity*peak/100_000)*100_000;
-}
 function slotRightAt(airportCode,ts){
   const minute=minuteOfDay(ts);
   return state.slotRights.find(r=>r.airport===airportCode&&r.minuteOfDay===minute)||null;
@@ -238,21 +340,24 @@ function slotRightById(id){
 function slotAssignedService(rightId){
   return state.services.find(s=>s.active&&(s.originSlotRightId===rightId||s.destinationSlotRightId===rightId))||null;
 }
-function acquireSlotRight(airportCode,ts,{silent=false,source='market'}={}){
+function requestSlotRight(airportCode,ts,{silent=false,source='operations request',force=false}={}){
   const aligned=alignTimestampToAirportSlot(ts,airportCode);
   const existing=slotRightAt(airportCode,aligned);
   if(existing) return existing;
-  const price=source==='grandfathered'?0:slotSeriesPrice(airportCode,aligned);
-  if(state.cash<price){
-    if(!silent) toast(`Not enough cash for ${airportCode} ${hhmm(aligned)} slot series (${money(price)}).`);
-    return null;
+  if(!force&&(state.resourceRequests||[]).some(item=>item.status==='pending'&&item.kind==='slot'&&item.payload?.airport===airportCode&&item.payload?.timestamp===aligned)) return null;
+  if(!force&&typeof resourceAvailability==='function'&&typeof queueResourceRequest==='function'){
+    const key=String(new Date(aligned).getHours());
+    const supply=resourceAvailability('slot',key,airportCode);
+    if(!supply.available){
+      queueResourceRequest('slot',{key,location:airportCode,airport:airportCode,timestamp:aligned},supply);
+      return null;
+    }
   }
-  postTransaction(-price,'Slots',`Acquired ${airportCode} ${hhmm(aligned)} slot series`);
   const right={
     id:'SL'+state.nextSlotRight++,
     airport:airportCode,
     minuteOfDay:minuteOfDay(aligned),
-    price,source,acquiredAt:simNow()
+    price:0,source:source==='market'?'requested':source,acquiredAt:simNow()
   };
   state.slotRights.push(right);
   save();
@@ -426,10 +531,9 @@ function flightPersonnelTransferCount(flightId){
 
 function externalTransferPlan(from,to,amount,t=simNow()){
   const km=distanceKm(AIRPORTS[from],AIRPORTS[to]);
-  const farePerPerson=Math.round((75+km*.12)/5)*5;
   const departure=t+2*HOUR;
   const arrival=departure+(.65+km/800)*HOUR;
-  return {km,farePerPerson,cost:farePerPerson*amount,departure,arrival};
+  return {km,cost:0,departure,arrival};
 }
 
 function processPersonnelTransfers(t=simNow()){
@@ -448,10 +552,13 @@ function processPersonnelTransfers(t=simNow()){
       transfer.arrival=flightActualArrival(flight);
     }
     if(t>=transfer.arrival){
-      changeStaff(transfer.to,transfer.role,transfer.amount);
-      for(const [family,count] of Object.entries(transfer.qualifications||{})) changeQualification(transfer.to,transfer.role,family,count);
+      const flight=transfer.method==='own'&&state.flights.find(f=>f.id===transfer.flightId);
+      const arrivalAirport=flight?flightOperationalDestination(flight):transfer.to;
+      transfer.actualTo=arrivalAirport;
+      changeStaff(arrivalAirport,transfer.role,transfer.amount);
+      for(const [family,count] of Object.entries(transfer.qualifications||{})) changeQualification(arrivalAirport,transfer.role,family,count);
       transfer.status='completed'; transfer.completedAt=transfer.arrival; changed=true;
-      logEvent(`${transfer.id}: ${transfer.amount} ${PERSONNEL[transfer.role].label.toLowerCase()} arrived at ${transfer.to}.`);
+      logEvent(`${transfer.id}: ${transfer.amount} ${PERSONNEL[transfer.role].label.toLowerCase()} arrived at ${arrivalAirport}.`);
     }
   }
   return changed;
@@ -473,7 +580,7 @@ function newState(){
   const s={
     version:VERSION,
     clock:{realBase:real,simBase:sim,speed:1},
-    cash:165_000_000,
+    cash:0,
     home:'FRA',
     nextAircraft:1,
     nextFlight:1,
@@ -481,12 +588,22 @@ function newState(){
     nextSlotRight:1,
     nextTransaction:2,
     nextPersonnelTransfer:1,
+    nextIncident:1,
+    nextResourceRequest:1,
+    nextExternalRequest:1,
+    nextResourceAssignment:1,
+    incidentExerciseIndex:0,
     slotRights:[],
     aircraft:[],
     flights:[],
     services:[],
-    transactions:[{id:'TX1',timestamp:sim,amount:165_000_000,category:'Opening',description:'Initial shareholder capital',balanceAfter:165_000_000}],
+    incidents:[],
+    coordinationTasks:[],
+    externalRequests:[],
+    resourceAssignments:[],
+    transactions:[],
     personnelTransfers:[],
+    resourceRequests:[],
     fuelMarket:{pricePerGallon:FUEL_MARKET_BASE_EUR_GAL,updatedAt:sim},
     personnel:{assignments:{},lastPayrollAt:sim},
     ops:{automaticDisruptions:true},
@@ -502,6 +619,29 @@ function migrateState(parsed){
   if(!Array.isArray(parsed.flights)) parsed.flights=[];
   if(!Array.isArray(parsed.aircraft)) parsed.aircraft=[];
   if(!Array.isArray(parsed.slotRights)) parsed.slotRights=[];
+  if(!Array.isArray(parsed.incidents)) parsed.incidents=[];
+  if(!Array.isArray(parsed.coordinationTasks)) parsed.coordinationTasks=[];
+  if(!Array.isArray(parsed.externalRequests)) parsed.externalRequests=[];
+  if(!Array.isArray(parsed.resourceAssignments)) parsed.resourceAssignments=[];
+  if(!Number.isFinite(parsed.nextExternalRequest)) parsed.nextExternalRequest=parsed.externalRequests.length+1;
+  if(!Number.isFinite(parsed.nextResourceAssignment)) parsed.nextResourceAssignment=parsed.resourceAssignments.length+1;
+  if(!Array.isArray(parsed.resourceRequests)) parsed.resourceRequests=[];
+  if(!Number.isFinite(parsed.nextResourceRequest)) parsed.nextResourceRequest=parsed.resourceRequests.length+1;
+  if(!Number.isFinite(parsed.nextIncident)) parsed.nextIncident=parsed.incidents.length+1;
+  if(!Number.isFinite(parsed.incidentExerciseIndex)) parsed.incidentExerciseIndex=0;
+  for(const incident of parsed.incidents){
+    if(!incident.status) incident.status=incident.resolvedAt?'resolved':'open';
+    if(!Number.isFinite(incident.detectedAt)) incident.detectedAt=parsed.clock?.simBase||Date.now();
+    if(!Number.isFinite(incident.deadline)) incident.deadline=incident.detectedAt+30*MIN;
+    if(incident.blocking===undefined) incident.blocking=incident.status==='open';
+    if(incident.training===undefined) incident.training=false;
+    if(incident.selectedAction===undefined) incident.selectedAction='';
+    if(incident.outcome===undefined) incident.outcome='';
+    if(incident.technicalContext===undefined) incident.technicalContext=null;
+    if(incident.classification===undefined) incident.classification='incident';
+    if(incident.workflowCreatedAt===undefined) incident.workflowCreatedAt=0;
+    if(incident.overdue===undefined) incident.overdue=false;
+  }
   if(!Array.isArray(parsed.transactions)){
     parsed.transactions=[{id:'TX1',timestamp:parsed.clock?.simBase||Date.now(),amount:parsed.cash||0,category:'Opening',description:'Balance brought forward from existing save',balanceAfter:parsed.cash||0}];
   }
@@ -540,7 +680,11 @@ function migrateState(parsed){
   if(!parsed.ops) parsed.ops={automaticDisruptions:true};
   parsed.ops.automaticDisruptions=true;
   for(const ac of parsed.aircraft){
-    if(!ac.acquisitionType) ac.acquisitionType='owned';
+    if(!ac.acquisitionType) ac.acquisitionType='requested';
+    if(ac.acquisitionType!=='requested'){
+      ac.resourceSource=ac.resourceSource||'legacy save';
+      ac.acquisitionType='requested';
+    }
     if(!Number.isFinite(ac.acquiredAt)) ac.acquiredAt=parsed.clock?.simBase||Date.now();
     if(ac.defectUntil===undefined) ac.defectUntil=0;
     if(ac.defectReason===undefined) ac.defectReason='';
@@ -548,11 +692,23 @@ function migrateState(parsed){
     if(!Number.isFinite(ac.flightHours)) ac.flightHours=0;
     if(!Number.isFinite(ac.cycles)) ac.cycles=0;
     if(!Number.isFinite(ac.fuelGallons)) ac.fuelGallons=0;
+    if(!Number.isFinite(ac.issueAcknowledgedAt)) ac.issueAcknowledgedAt=0;
+    if(ac.issueAcknowledgedKey===undefined) ac.issueAcknowledgedKey='';
+    if(!Array.isArray(ac.melItems)) ac.melItems=[];
     if(!ac.cabin) ac.cabin=defaultCabin(ac.model);
   }
   for(const f of parsed.flights){
-    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','enrouteDelayMin','propagatedDelayMin','slotDelayMin'])
+    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','incidentDelayMin','enrouteDelayMin','propagatedDelayMin','slotDelayMin'])
       if(f[k]===undefined) f[k]=0;
+    for(const k of ['airportDelayMin','airspaceDelayMin']) if(f[k]===undefined) f[k]=0;
+    if(f.constraintChecked===undefined) f.constraintChecked=Boolean(f.departureLogged);
+    if(f.airportConstraintLabel===undefined) f.airportConstraintLabel='';
+    if(f.airspaceConstraintLabel===undefined) f.airspaceConstraintLabel='';
+    if(f.connectionPax===undefined) f.connectionPax=0;
+    if(f.connectionAtRiskPax===undefined) f.connectionAtRiskPax=0;
+    if(f.connectionMissedPax===undefined) f.connectionMissedPax=0;
+    if(f.crewAugmented===undefined) f.crewAugmented=false;
+    if(!f.incidentChecks || typeof f.incidentChecks!=='object') f.incidentChecks={};
     if(f.staffingBlocked===undefined) f.staffingBlocked=false;
     if(f.staffingShortage===undefined) f.staffingShortage='';
     if(f.slotMissed===undefined) f.slotMissed=false;
@@ -622,30 +778,26 @@ let toastTimer=null;
 const SPLIT_KEY='aerosim_center_split_pct';
 const LEFT_SIDEBAR_SPLIT_KEY='aerosim_left_sidebar_width';
 const RIGHT_SIDEBAR_SPLIT_KEY='aerosim_right_sidebar_width';
-const WORKSPACE_UI_KEY='aerosim_workspace_ui_v1';
+const WORKSPACE_UI_KEY='aerosim_occ_ui_v1';
 const WORKSPACE_WIDGETS={
-  'flight-planner':{views:['planning','all'],defaultOpen:false},
-  'occ-flights':{views:['occ','all'],defaultOpen:true},
-  'occ-attention':{views:['occ','all'],defaultOpen:true},
-  'occ-recovery':{views:['occ','all'],defaultOpen:false},
-  'my-aircraft':{views:['planning','occ','all'],defaultOpen:true},
-  'aircraft-market':{views:['planning','all'],defaultOpen:false},
-  'management-cycle':{views:['planning','occ','all'],defaultOpen:true},
-  performance:{views:['planning','occ','all'],defaultOpen:true},
-  'slot-market':{views:['planning','all'],defaultOpen:false},
-  'slot-portfolio':{views:['planning','all'],defaultOpen:true},
-  finance:{views:['planning','all'],defaultOpen:true},
-  personnel:{views:['planning','occ','all'],defaultOpen:true},
-  'hire-personnel':{views:['planning','all'],defaultOpen:true},
-  maintenance:{views:['planning','occ','all'],defaultOpen:true},
-  weather:{views:['occ','all'],defaultOpen:true}
+  'context-workbench':{views:['occ'],defaultOpen:true},
+  'dispatch-control':{views:['occ'],defaultOpen:false},
+  'crew-control':{views:['occ'],defaultOpen:false},
+  'maintenance-control':{views:['occ'],defaultOpen:false},
+  'station-operations':{views:['occ'],defaultOpen:false},
+  'flight-operations':{views:['occ'],defaultOpen:true},
+  'flight-planning':{views:['occ'],defaultOpen:false},
+  'my-aircraft':{views:['occ'],defaultOpen:true},
+  'management-cycle':{views:['occ'],defaultOpen:false},
+  'network-support':{views:['occ'],defaultOpen:false},
+  weather:{views:['occ'],defaultOpen:false},
+  'personnel-relocation':{views:['occ'],defaultOpen:false}
 };
 function loadWorkspaceUi(){
   try{
     const parsed=JSON.parse(localStorage.getItem(WORKSPACE_UI_KEY)||'{}');
-    const activeView=['planning','occ','all'].includes(parsed.activeView)?parsed.activeView:'planning';
-    return {activeView,collapsed:parsed.collapsed||{planning:{},occ:{},all:{}},scheduleRanges:parsed.scheduleRanges||{planning:48,occ:24,all:48}};
-  }catch(_){ return {activeView:'planning',collapsed:{planning:{},occ:{},all:{}},scheduleRanges:{planning:48,occ:24,all:48}}; }
+    return {activeView:'occ',collapsed:parsed.collapsed||{occ:{}},scheduleRanges:{occ:Number(parsed.scheduleRanges?.occ)||24}};
+  }catch(_){ return {activeView:'occ',collapsed:{occ:{}},scheduleRanges:{occ:24}}; }
 }
 let workspaceUi=loadWorkspaceUi();
 let activeWorkspaceView=workspaceUi.activeView;
@@ -656,37 +808,12 @@ let scheduleRangeHours=24;
 let lastScheduleSignature='';
 let lastScheduleRenderAt=0;
 let aircraftSelectSignature='';
-let slotPortfolioSignature='';
-let sidebarSearchTokens=[];
-let sidebarSearchTimer=null;
-let financeSignature='';
 let occSignature='';
 let managementSignature='';
 let maintenanceSignature='';
 let weatherSignature='';
-let recoverySignature='';
-let latestManagementForecast=null;
-
 function postTransaction(amount,category,description,reference=''){
-  const value=Math.round(Number(amount)||0);
-  if(!value) return null;
-  state.cash+=value;
-  const transaction={
-    id:'TX'+state.nextTransaction++,timestamp:simNow(),amount:value,category,description,reference,
-    balanceAfter:state.cash
-  };
-  state.transactions.push(transaction);
-  if(state.transactions.length>500) state.transactions.splice(0,state.transactions.length-500);
-  return transaction;
-}
-
-function normalizeSidebarSearch(value){
-  return String(value??'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
-}
-function matchesSidebarSearch(...values){
-  if(!sidebarSearchTokens.length) return true;
-  const haystack=normalizeSidebarSearch(values.join(' '));
-  return sidebarSearchTokens.every(token=>haystack.includes(token));
+  return null;
 }
 
 function simNow(){
@@ -721,13 +848,10 @@ function resetLocalSave(){
   try{
     selectedAircraftId=null;
     selectedFlightId=null;
-    sidebarSearchTokens=[];
-    leftSidebarSearch.value='';
     scheduleWindowOffsetHours=-2;
     lastScheduleSignature='';
     lastScheduleRenderAt=0;
     aircraftSelectSignature='';
-    slotPortfolioSignature='';
     routeSignature='';
 
     document.getElementById('speed').value='1';

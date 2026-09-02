@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>AeroSim ground operations fixture</title></head>
+<body>
+<pre id="result">RUNNING</pre>
+<iframe id="app" title="AeroSim test application" style="width:1280px;height:900px"></iframe>
+<script>
+  const MIN=60*1000,HOUR=60*MIN,now=Date.now();
+  const flight=(id,aircraftId,from,to,departure,arrival,extra={})=>({
+    id,aircraftId,from,to,departure,arrival,fare:150,fares:{economy:150,business:390,first:750},
+    load:.7,pax:110,classPax:{economy:100,business:10,first:0},classLoads:{economy:.7,business:.5,first:0},
+    revenue:0,costs:0,baseCosts:0,settled:false,departureLogged:false,...extra
+  });
+  localStorage.removeItem('aerosim_occ_ui_v1');
+  localStorage.setItem('aerosim_mvp_v6',JSON.stringify({
+    version:6,clock:{realBase:now,simBase:now,speed:1},cash:0,home:'FRA',
+    nextAircraft:3,nextFlight:4,nextService:1,nextSlotRight:1,nextIncident:1,
+    aircraft:[
+      {id:'AC1',tail:'D-AS01',model:'A320neo',cabin:{economy:150,business:15,first:0},location:'FRA',condition:98,flightHours:10,cycles:5,fuelGallons:0,acquisitionType:'requested',acquiredAt:now},
+      {id:'AC2',tail:'D-AS02',model:'A320neo',cabin:{economy:150,business:15,first:0},location:'FRA',condition:99,flightHours:2,cycles:1,fuelGallons:500,acquisitionType:'requested',acquiredAt:now}
+    ],
+    flights:[
+      flight('AS1','AC1','FRA','LHR',now+3*HOUR,now+5*HOUR,{handlingDelayMin:15}),
+      flight('AS2','AC1','LHR','FRA',now+5*HOUR+50*MIN,now+7*HOUR+50*MIN),
+      flight('AS3','AC2','LHR','FRA',now-130*MIN,now-10*MIN,{settled:true,departureLogged:true,fueled:true})
+    ],
+    services:[],incidents:[],slotRights:[],transactions:[],personnelTransfers:[],
+    personnel:{assignments:{FRA:{captains:10,firstOfficers:10,cabinCrew:30,groundHandling:30,operations:10,customerService:10},LHR:{captains:10,firstOfficers:10,cabinCrew:30,groundHandling:30,operations:10,customerService:10}},qualifications:{FRA:{captains:{'Airbus A320 family':10},firstOfficers:{'Airbus A320 family':10}},LHR:{captains:{'Airbus A320 family':10},firstOfficers:{'Airbus A320 family':10}}},lastPayrollAt:now},
+    fuelMarket:{pricePerGallon:2.45,updatedAt:now},ops:{automaticDisruptions:true},
+    stats:{revenue:0,costs:0,staffCosts:0,leaseCosts:0,transferCosts:0,cancelled:0,pax:0,completed:0}
+  }));
+
+  const frame=document.getElementById('app');
+  frame.addEventListener('load',()=>setTimeout(()=>{
+    try{
+      const win=frame.contentWindow,doc=frame.contentDocument,appState=win.eval('state');
+      const firstFlight=appState.flights.find(item=>item.id==='AS1');
+      const plannedDeparture=firstFlight.departure;
+      const firstOps=win.groundOperationsForFlight(firstFlight,win.simNow());
+      const secondOps=win.groundOperationsForFlight(appState.flights.find(item=>item.id==='AS2'),win.simNow());
+      const finalOps=win.groundOperationsForFlight(appState.flights.find(item=>item.id==='AS3'),win.simNow());
+      win.settleSelectedFlight('AS1');
+      const pane=doc.getElementById('flightDetailsPane');
+      const checks={
+        firstFlightPreflight:firstOps.departure.kind==='preflight'&&firstOps.departure.label.includes('First-flight'),
+        handlingFeedsReadyTime:firstOps.departure.readyAt===plannedDeparture+15*MIN&&firstFlight.actualDeparture>=firstOps.departure.readyAt,
+        plannedTimePreserved:firstFlight.departure===plannedDeparture,
+        turnaroundModeled:secondOps.departure.kind==='turnaround'&&secondOps.departure.tasks.some(task=>task.id==='deboarding'),
+        finalPostflightModeled:finalOps.postflight.kind==='postflight'&&finalOps.postflight.progress>0&&finalOps.postflight.progress<1,
+        bothPhasesShown:pane.querySelectorAll('[data-ground-phase]').length===2,
+        taskProgressBars:pane.querySelectorAll('.ground-task-progress[role="progressbar"]').length===firstOps.departure.tasks.length+firstOps.postflight.tasks.length,
+        phaseProgressBars:pane.querySelectorAll('.ground-phase-progress[role="progressbar"]').length===2,
+        handlingTaskIdentified:Boolean(pane.querySelector('.ground-task.delayed')),
+        taskDependencies:secondOps.departure.tasks.find(task=>task.id==='boarding').startAt>=secondOps.departure.tasks.find(task=>task.id==='cleaning').endAt
+      };
+      win.settleSelected('AC2');
+      const aircraftPane=doc.getElementById('aircraftDetailsPane');
+      checks.aircraftShowsPostflight=Boolean(aircraftPane.querySelector('[data-ground-phase="postflight"]'))&&aircraftPane.textContent.includes('Post-arrival servicing');
+      const passed=Object.values(checks).every(Boolean);
+      document.getElementById('result').textContent=`${passed?'PASS':'FAIL'} ${JSON.stringify(checks)}`;
+    }catch(error){ document.getElementById('result').textContent=`FAIL ${error.stack||error}`; }
+  },1700));
+  frame.src='../airline-manager-mvp-v9.2.html?ground-operations-smoke=1';
+</script>
+</body>
+</html>
