@@ -21,6 +21,7 @@ let lastFlightListSignature='';
 let lastAircraftListSignature='';
 let lastManagementSignature='';
 let lastDeskStackSignature='';
+let lastWeatherStripSignature='';
 
 const managementContentHome=document.querySelector('.management-content');
 const embeddedManagementPages=new Map([...document.querySelectorAll('[data-management-content]')].map(element=>[
@@ -29,11 +30,34 @@ const embeddedManagementPages=new Map([...document.querySelectorAll('[data-manag
 
 const baseSettleSelected=settleSelected;
 const baseSettleSelectedFlight=settleSelectedFlight;
-settleSelected=function(acId){ contextMode='context'; return baseSettleSelected(acId); };
-settleSelectedFlight=function(flightId){ contextMode='context'; return baseSettleSelectedFlight(flightId); };
+settleSelected=function(acId){
+  contextMode='context';
+  const result=baseSettleSelected(acId);
+  lastDeskStackSignature='';
+  renderDeskStack(true);
+  return result;
+};
+settleSelectedFlight=function(flightId){
+  contextMode='context';
+  const result=baseSettleSelectedFlight(flightId);
+  lastDeskStackSignature='';
+  renderDeskStack(true);
+  return result;
+};
+
+workspaceUi.collapsed??={occ:{}};
+workspaceUi.collapsed.occ??={};
+workspaceUi.collapsed.rail??={};
+workspaceUi.nextDeskPanels??={};
+workspaceUi.nextActiveIncidentId??='';
 
 function esc(value){
   return String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+}
+function infoTip(text){
+  if(!String(text||'').trim()) return '';
+  const copy=esc(text);
+  return `<span class="info-tip" title="${copy}" aria-label="${copy}" tabindex="0">i</span>`;
 }
 function shortClock(ms){ return new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit'}).format(new Date(ms)); }
 function shortDay(ms){ return new Intl.DateTimeFormat('en-GB',{weekday:'short',day:'2-digit',month:'short'}).format(new Date(ms)); }
@@ -45,8 +69,64 @@ function currentScheduleFares(){
   const economy=Math.max(60,Math.round(45+km*.105));
   return {economy,business:Math.round(economy*2.65),first:Math.round(economy*5.2)};
 }
-function closeFlightPlanningWidget(){ showWorkspace('operations'); }
-function setWidgetOpen(){}
+function saveWorkspaceUi(){ localStorage.setItem(WORKSPACE_UI_KEY,JSON.stringify(workspaceUi)); }
+function deskCollapseKey(desk){ return `next:${desk}`; }
+function isDeskOpen(desk){ return workspaceUi.collapsed.occ[deskCollapseKey(desk)]!==true; }
+function isRailWidgetOpen(widget){ return workspaceUi.collapsed.rail?.[widget]!==true; }
+function activeDeskPanel(desk){ return workspaceUi.nextDeskPanels?.[desk]||''; }
+function setDeskOpen(desk,open,{persist=true}={}){
+  workspaceUi.collapsed.occ[deskCollapseKey(desk)]=!open;
+  if(persist) saveWorkspaceUi();
+}
+function setRailWidgetOpen(widget,open,{persist=true}={}){
+  workspaceUi.collapsed.rail??={};
+  workspaceUi.collapsed.rail[widget]=!open;
+  if(persist) saveWorkspaceUi();
+}
+function refreshRailCollapseState(){
+  document.querySelectorAll('[data-rail-widget]').forEach(section=>{
+    const widget=section.dataset.railWidget;
+    const open=isRailWidgetOpen(widget);
+    section.classList.toggle('collapsed',!open);
+    const toggle=section.querySelector('[data-toggle-rail]');
+    const body=section.querySelector('.rail-widget-body');
+    if(toggle) toggle.setAttribute('aria-expanded',String(open));
+    if(body) body.hidden=!open;
+    const caret=toggle?.querySelector('.toggle-caret');
+    if(caret) caret.textContent=open?'▾':'▸';
+  });
+}
+function bindRailWidgetToggles(){
+  document.querySelectorAll('[data-toggle-rail]').forEach(button=>button.addEventListener('click',()=>{
+    const widget=button.dataset.toggleRail;
+    setRailWidgetOpen(widget,!isRailWidgetOpen(widget),{persist:true});
+    refreshRailCollapseState();
+  }));
+}
+function setDeskPanel(desk,panel,{toggle=true}={}){
+  workspaceUi.nextDeskPanels??={};
+  if(panel&&(!toggle||activeDeskPanel(desk)!==panel)) workspaceUi.nextDeskPanels[desk]=panel;
+  else delete workspaceUi.nextDeskPanels[desk];
+  setDeskOpen(desk,true,{persist:false});
+  saveWorkspaceUi();
+}
+function activeIncidentCase(incidents){
+  if(!incidents.length) return null;
+  const selected=incidents.find(incident=>incident.id===workspaceUi.nextActiveIncidentId);
+  if(selected) return selected;
+  const flightIncident=selectedFlightId&&incidents.find(incident=>incident.flightId===selectedFlightId);
+  return flightIncident||incidents[0];
+}
+function setActiveIncidentCase(incidentId){
+  workspaceUi.nextActiveIncidentId=incidentId||'';
+  setDeskOpen('incidents',true,{persist:false});
+  saveWorkspaceUi();
+}
+function closeFlightPlanningWidget(){ setDeskPanel('planning',''); lastDeskStackSignature=''; renderDeskStack(true); }
+function setWidgetOpen(widget,open,{persist=false}={}){
+  const desk=widget?.dataset?.deskWidget;
+  if(desk) setDeskOpen(desk,open,{persist});
+}
 function incidentCopy(incident){
   const definition=INCIDENT_DEFINITIONS[incident?.type]||{};
   const title=incident?.title||definition.title||String(incident?.type||'Operational issue').replaceAll('_',' ');
@@ -99,7 +179,7 @@ function attentionForFlight(flight){
   if(flight.slotMissed) return {label:`Departure slot missed · ${flight.slotDelayMin||0} min wait`,critical:false};
   if(flight.weatherDelayMin) return {label:`Weather · ${flight.weatherDelayMin} min`,critical:false};
   if(flight.airportDelayMin||flight.airspaceDelayMin) return {label:`Network restriction · ${(flight.airportDelayMin||0)+(flight.airspaceDelayMin||0)} min`,critical:false};
-  if(flight.handlingDelayMin) return {label:`Ground handling · ${flight.handlingDelayMin} min`,critical:false};
+  if(flight.handlingDelayMin) return {label:`${flight.handlingDelayCause||'Ground handling'} · ${flight.handlingDelayMin} min`,critical:false};
   const delay=flightTotalDepartureDelayMin(flight);
   return delay?{label:`Departure delayed ${delay} min`,critical:false}:null;
 }
@@ -143,14 +223,17 @@ function refreshOccWidgets(force=false){
   const signature=[selectedFlightId,active.map(f=>`${f.id}:${attentionForFlight(f)?.label||''}:${Math.floor(flightProgress(f)*50)}`).join('|'),upcoming.map(f=>`${f.id}:${flightActualDeparture(f)}:${attentionForFlight(f)?.label||''}`).join('|')].join('::');
   if(!force&&signature===lastFlightListSignature) return;
   lastFlightListSignature=signature;
-  document.getElementById('flightListCount').textContent=active.length+upcoming.length;
+  const flightListCount=document.getElementById('flightListCount');
+  if(flightListCount) flightListCount.textContent=active.length+upcoming.length;
   document.getElementById('activeFlightCount').textContent=active.length;
   document.getElementById('upcomingFlightCount').textContent=upcoming.length;
-  document.getElementById('activeFlightList').innerHTML=active.length?active.map(f=>flightListRow(f,true)).join(''):'<div class="empty-state">No flights are airborne.</div>';
-  document.getElementById('upcomingFlightList').innerHTML=upcoming.length?upcoming.map(f=>flightListRow(f)).join(''):'<div class="empty-state">No flights in the next 24 hours.</div>';
+  document.getElementById('activeFlightList').innerHTML=active.length?active.map(f=>flightListItem(f,true)).join(''):'<div class="empty-state">No flights are airborne.</div>';
+  document.getElementById('upcomingFlightList').innerHTML=upcoming.length?upcoming.map(f=>flightListItem(f)).join(''):'<div class="empty-state">No flights in the next 24 hours.</div>';
+  refreshRailCollapseState();
   document.querySelectorAll('[data-next-flight]').forEach(button=>button.addEventListener('click',()=>{
     contextMode='context'; settleSelectedFlight(button.dataset.nextFlight);
   }));
+  bindLeftInlineDetails();
 }
 
 function refreshFleetList(force=false){
@@ -161,21 +244,12 @@ function refreshFleetList(force=false){
   if(!force&&signature===lastAircraftListSignature) return;
   lastAircraftListSignature=signature;
   document.getElementById('aircraftListCount').textContent=state.aircraft.length;
-  document.getElementById('aircraftList').innerHTML=state.aircraft.length?state.aircraft.map(ac=>{
-    const active=aircraftActiveFlight(ac.id),next=aircraftUpcomingFlight(ac.id),issue=attentionForAircraft(ac);
-    const place=active?`${active.from} → ${flightOperationalDestination(active)}`:ac.location;
-    const sub=active?`Airborne · ${active.id}`:next?`Next ${next.id} · ${shortClock(flightActualDeparture(next))}`:'Available';
-    const rotation=state.flights.filter(f=>f.aircraftId===ac.id&&!f.cancelled&&flightActualDeparture(f)>simNow()&&flightActualDeparture(f)<=simNow()+24*HOUR).sort((a,b)=>flightActualDeparture(a)-flightActualDeparture(b)).slice(0,2);
-    return `<button class="list-row ${issue?'needs-attention':''} ${selectedAircraftId===ac.id&&!selectedFlightId?'selected':''}" type="button" data-next-aircraft="${esc(ac.id)}">
-      ${issue?'<i class="attention-marker"></i>':''}<span class="list-primary"><span>${esc(ac.tail)}</span><span>${esc(place)}</span></span>
-      <span class="list-secondary"><span>${esc(ac.model)}</span><span>${esc(sub)}</span></span>
-      ${rotation.length?`<span class="rotation-line">${rotation.map(f=>`${esc(f.id)} ${shortClock(flightActualDeparture(f))} ${esc(f.from)}→${esc(flightOperationalDestination(f))}`).join(' · ')}</span>`:''}
-      ${issue?`<span class="list-reason">${esc(issue)}</span>`:''}
-    </button>`;
-  }).join(''):'<div class="empty-state">No aircraft assigned.</div>';
+  document.getElementById('aircraftList').innerHTML=state.aircraft.length?state.aircraft.map(aircraftListItem).join(''):'<div class="empty-state">No aircraft assigned.</div>';
+  refreshRailCollapseState();
   document.querySelectorAll('[data-next-aircraft]').forEach(button=>button.addEventListener('click',()=>{
     contextMode='context'; settleSelected(button.dataset.nextAircraft);
   }));
+  bindLeftInlineDetails();
 }
 
 function phaseMarkup(operation){
@@ -188,89 +262,85 @@ function phaseMarkup(operation){
   </div>`;
 }
 
-function contextHeader(eyebrow,title,subtitle=''){
-  return `<header class="context-header"><div><span class="context-eyebrow">${esc(eyebrow)}</span><h1>${esc(title)}</h1>${subtitle?`<p>${esc(subtitle)}</p>`:''}</div><button class="icon-button" type="button" data-close-context aria-label="Close">×</button></header>`;
-}
-
 function fact(label,value){ return `<div class="fact"><span>${esc(label)}</span><b>${esc(value)}</b></div>`; }
 
-function renderFlightContext(flight){
+function flightInlineDetailsMarkup(flight){
   const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
   const issue=attentionForFlight(flight);
   const incident=issue?.incident;
-  const workflow=incident?incidentWorkflowProgress(incident):null;
   const duty=crewDutyForFlight(flight);
   const ground=groundOperationsForFlight(flight);
   const now=simNow();
   const operation=flightActualArrival(flight)<=now?{flight,phase:ground?.postflight}:flightActualDeparture(flight)>now?{flight,phase:ground?.departure}:null;
   const delay=flightTotalDepartureDelayMin(flight);
-  const pane=document.getElementById('contextPane');
-  pane.innerHTML=`${contextHeader('Flight',`${flight.from} → ${flightOperationalDestination(flight)}`,`${flight.id} · ${statusOfFlight(flight)}`)}
-    ${issue?`<section class="attention-summary ${issue.critical?'critical':'warning'}"><b>${esc(issue.label)}</b>${incident?`<span>${esc(incidentCopy(incident).summary)}</span><div class="next-action">Next: ${esc(workflow?.current?.label||'Review case')}</div><button class="primary-button" type="button" data-handle-incident="${esc(incident.id)}">Handle task</button>`:''}</section>`:''}
-    <div class="fact-grid">${fact('Scheduled',`${shortClock(flight.departure)}–${shortClock(flight.arrival)}`)}${fact('Expected',`${shortClock(flightActualDeparture(flight))}–${shortClock(flightActualArrival(flight))}`)}${fact('Departure delay',delay?`+${delay} min`:'On time')}${fact('Aircraft',aircraft?`${aircraft.tail} · ${aircraft.model}`:'Unassigned')}</div>
+  return `<article class="left-inline-details" data-left-flight-details="${esc(flight.id)}">
+    ${issue?`<section class="attention-summary ${issue.critical?'critical':'warning'}"><b>${esc(issue.label)}</b>${incident?`<span>${esc(incidentCopy(incident).summary)}</span>`:''}</section>`:''}
+    <div class="fact-grid">${fact('Scheduled',`${shortClock(flight.departure)}-${shortClock(flight.arrival)}`)}${fact('Expected',`${shortClock(flightActualDeparture(flight))}-${shortClock(flightActualArrival(flight))}`)}${fact('Delay',delay?`+${delay} min`:'On time')}${fact('Aircraft',aircraft?`${aircraft.tail} · ${aircraft.model}`:'Unassigned')}</div>
     <section class="context-section"><h2>Ground progress</h2>${operation?phaseMarkup(operation):flightActualDeparture(flight)<=now&&now<flightActualArrival(flight)?'<div class="simple-row"><span>Current phase</span><b>Airborne</b></div>':phaseMarkup(null)}</section>
     <section class="context-section"><h2>Crew duty</h2><div class="simple-row"><span>Planned duty</span><b>${Number(duty.dutyHours||0).toFixed(1)} h / ${Number(duty.maxHours||0).toFixed(1)} h</b></div><div class="simple-row"><span>Sectors</span><b>${duty.sectors||1}${rotationUsesThroughCrew(flight)?' · through crew':''}</b></div><div class="simple-row"><span>Legality</span><b>${duty.legal?'Within limit':'Limit exceeded'}</b></div></section>
     ${aircraft?`<section class="context-section"><button class="object-link" type="button" data-context-aircraft="${esc(aircraft.id)}"><span>Assigned aircraft</span><b>${esc(aircraft.tail)} →</b></button></section>`:''}
-    ${!flight.cancelled&&flightActualDeparture(flight)>now?`<div class="context-actions"><button class="danger-button" type="button" data-cancel-next-flight="${esc(flight.id)}">Cancel flight</button></div>`:''}`;
-  bindContextCommon();
-  pane.querySelector('[data-handle-incident]')?.addEventListener('click',()=>openIncidentTask(incident));
-  pane.querySelector('[data-context-aircraft]')?.addEventListener('click',button=>{contextMode='context';settleSelected(button.currentTarget.dataset.contextAircraft);});
-  pane.querySelector('[data-cancel-next-flight]')?.addEventListener('click',button=>cancelFlight(button.currentTarget.dataset.cancelNextFlight));
+  </article>`;
 }
 
-function renderAircraftContext(aircraft){
+function aircraftInlineDetailsMarkup(aircraft){
   const active=aircraftActiveFlight(aircraft.id),upcoming=aircraftUpcomingFlight(aircraft.id);
   const incident=openIncidentForAircraft(aircraft.id);
   const maintenance=Management.maintenanceStatus(aircraft,simNow());
   const ground=aircraftGroundOperation(aircraft);
   const fuel=aircraftFuelPerformance(MODELS[aircraft.model]);
-  const pane=document.getElementById('contextPane');
-  pane.innerHTML=`${contextHeader('Aircraft',aircraft.tail,aircraft.model)}
-    ${incident?`<section class="attention-summary critical"><b>${esc(incidentCopy(incident).title)}</b><span>${esc(incidentCopy(incident).summary)}</span><div class="next-action">Next: ${esc(incidentWorkflowProgress(incident).current?.label||'Review case')}</div><button class="primary-button" type="button" data-handle-aircraft-incident>Handle task</button></section>`:''}
-    <div class="fact-grid">${fact('Location',active?`${active.from} → ${flightOperationalDestination(active)}`:aircraft.location)}${fact('Condition',`${Math.round(aircraft.condition??100)}%`)}${fact('Utilisation',`${Math.round(aircraft.flightHours||0)} h · ${aircraft.cycles||0} cycles`)}${fact('Fuel',`${Math.round(aircraft.fuelGallons||0)} / ${Math.round(fuel.tankGallons)} gal`)}</div>
+  return `<article class="left-inline-details" data-left-aircraft-details="${esc(aircraft.id)}">
+    ${incident?`<section class="attention-summary critical"><b>${esc(incidentCopy(incident).title)}</b><span>${esc(incidentCopy(incident).summary)}</span></section>`:''}
+    <div class="fact-grid">${fact('Location',active?`${active.from} → ${flightOperationalDestination(active)}`:aircraft.location)}${fact('Condition',`${Math.round(aircraft.condition??100)}%`)}${fact('Utilisation',`${Math.round(aircraft.flightHours||0)} h · ${aircraft.cycles||0} cycles`)}${fact('Fuel',`${Math.round(aircraft.fuelGallons||0)} / ${Math.round(fuel.fuelCapacityGal)} gal`)}</div>
     <section class="context-section"><h2>Current ground work</h2>${phaseMarkup(ground)}</section>
     <section class="context-section"><h2>Maintenance</h2><div class="simple-row"><span>Status</span><b>${esc(maintenance.label)}</b></div><div class="simple-row"><span>Next limit</span><b>${Math.max(0,Math.round(maintenance.remainingHours||0))} h / ${Math.max(0,Math.round(maintenance.remainingCycles||0))} cycles</b></div></section>
-    <section class="context-section"><h2>Flying programme</h2>${active?`<button class="object-link" type="button" data-context-flight="${esc(active.id)}"><span>Active</span><b>${esc(active.id)} · ${esc(active.from)} → ${esc(flightOperationalDestination(active))}</b></button>`:''}${upcoming?`<button class="object-link" type="button" data-context-flight="${esc(upcoming.id)}"><span>Next</span><b>${esc(upcoming.id)} · ${shortClock(flightActualDeparture(upcoming))}</b></button>`:''}${!active&&!upcoming?'<div class="simple-row"><span>Assignment</span><b>Available</b></div>':''}</section>`;
-  bindContextCommon();
-  pane.querySelector('[data-handle-aircraft-incident]')?.addEventListener('click',()=>openIncidentTask(incident));
-  pane.querySelectorAll('[data-context-flight]').forEach(button=>button.addEventListener('click',()=>{contextMode='context';settleSelectedFlight(button.dataset.contextFlight);}));
+    <section class="context-section"><h2>Flying programme</h2>${active?`<button class="object-link" type="button" data-context-flight="${esc(active.id)}"><span>Active</span><b>${esc(active.id)} · ${esc(active.from)} → ${esc(flightOperationalDestination(active))}</b></button>`:''}${upcoming?`<button class="object-link" type="button" data-context-flight="${esc(upcoming.id)}"><span>Next</span><b>${esc(upcoming.id)} · ${shortClock(flightActualDeparture(upcoming))}</b></button>`:''}${!active&&!upcoming?'<div class="simple-row"><span>Assignment</span><b>Available</b></div>':''}</section>
+  </article>`;
 }
 
-function renderFlightSummary(flight){
-  const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId),issue=attentionForFlight(flight),incident=issue?.incident,duty=crewDutyForFlight(flight),now=simNow(),ground=groundOperationsForFlight(flight);
-  const phase=flightActualArrival(flight)<=now?ground?.postflight:flightActualDeparture(flight)>now?ground?.departure:null;
-  const pane=document.getElementById('contextPane'); pane.classList.add('context-compact');
-  pane.innerHTML=`${contextHeader('Selected flight',`${flight.from} → ${flightOperationalDestination(flight)}`,`${flight.id} · ${aircraft?.tail||'Unassigned'} · ${statusOfFlight(flight)}`)}
-    ${issue?`<section class="attention-summary ${issue.critical?'critical':'warning'}"><b>${esc(issue.label)}</b>${incident?`<span>Next: ${esc(incidentWorkflowProgress(incident).current?.label||'Review case')}</span><button class="primary-button" type="button" data-summary-task>Work task</button>`:''}</section>`:''}
-    <div class="compact-status-lines"><div class="compact-status-line"><span>Expected</span><b>${shortClock(flightActualDeparture(flight))}–${shortClock(flightActualArrival(flight))}</b><em>${flightTotalDepartureDelayMin(flight)?`+${flightTotalDepartureDelayMin(flight)} min`:'On time'}</em></div>
-    <div class="compact-status-line"><span>Ground</span><b>${esc(phase?.label||'No active ground phase')}</b><div class="progress-track"><span style="width:${formatPct(phase?.progress||0)}"></span></div></div>
-    <div class="compact-status-line"><span>Crew duty</span><b>${Number(duty.dutyHours||0).toFixed(1)} / ${Number(duty.maxHours||0).toFixed(1)} h</b><em>${duty.legal?'Legal':'Exceeded'}</em></div></div>
-    <button class="secondary-button compact-details-action" type="button" data-full-flight>Open full flight details</button>`;
-  bindContextCommon();
-  pane.querySelector('[data-summary-task]')?.addEventListener('click',()=>openIncidentTask(incident));
-  pane.querySelector('[data-full-flight]')?.addEventListener('click',()=>{contextMode='details';lastContextSignature='';renderContext(true);});
+function flightListItem(flight,active=false){
+  const selected=selectedFlightId===flight.id;
+  const issue=attentionForFlight(flight);
+  return `<article class="left-list-card ${selected?'selected':''} ${issue?'needs-attention':''}" data-left-card-flight="${esc(flight.id)}">${flightListRow(flight,active)}${selected?flightInlineDetailsMarkup(flight):''}</article>`;
 }
 
-function renderAircraftSummary(aircraft){
-  const active=aircraftActiveFlight(aircraft.id),next=aircraftUpcomingFlight(aircraft.id),maintenance=Management.maintenanceStatus(aircraft,simNow()),ground=aircraftGroundOperation(aircraft),incident=openIncidentForAircraft(aircraft.id);
-  const pane=document.getElementById('contextPane'); pane.classList.add('context-compact');
-  pane.innerHTML=`${contextHeader('Selected aircraft',aircraft.tail,`${aircraft.model} · ${active?'Airborne':aircraft.location}`)}
-    ${incident?`<section class="attention-summary critical"><b>${esc(incidentCopy(incident).title)}</b><span>Next: ${esc(incidentWorkflowProgress(incident).current?.label||'Review case')}</span><button class="primary-button" type="button" data-summary-task>Work task</button></section>`:''}
-    <div class="compact-status-lines"><div class="compact-status-line"><span>Condition</span><b>${Math.round(aircraft.condition??100)}%</b><em>${esc(maintenance.label)}</em></div><div class="compact-status-line"><span>Ground</span><b>${esc(ground?.phase?.label||'No active ground work')}</b><div class="progress-track"><span style="width:${formatPct(ground?.phase?.progress||0)}"></span></div></div><div class="compact-status-line"><span>Programme</span><b>${esc(active?.id||next?.id||'Available')}</b><em>${next?shortClock(flightActualDeparture(next)):''}</em></div></div>
-    <button class="secondary-button compact-details-action" type="button" data-full-aircraft>Open full aircraft details</button>`;
-  bindContextCommon(); pane.querySelector('[data-summary-task]')?.addEventListener('click',()=>openIncidentTask(incident)); pane.querySelector('[data-full-aircraft]')?.addEventListener('click',()=>{contextMode='details';lastContextSignature='';renderContext(true);});
+function aircraftListItem(aircraft){
+  const active=aircraftActiveFlight(aircraft.id),next=aircraftUpcomingFlight(aircraft.id),issue=attentionForAircraft(aircraft);
+  const place=active?`${active.from} → ${flightOperationalDestination(active)}`:aircraft.location;
+  const sub=active?`Airborne · ${active.id}`:next?`Next ${next.id} · ${shortClock(flightActualDeparture(next))}`:'Available';
+  const rotation=state.flights.filter(f=>f.aircraftId===aircraft.id&&!f.cancelled&&flightActualDeparture(f)>simNow()&&flightActualDeparture(f)<=simNow()+24*HOUR).sort((a,b)=>flightActualDeparture(a)-flightActualDeparture(b)).slice(0,2);
+  const selected=selectedAircraftId===aircraft.id&&!selectedFlightId;
+  return `<article class="left-list-card ${selected?'selected':''} ${issue?'needs-attention':''}" data-left-card-aircraft="${esc(aircraft.id)}"><button class="list-row ${issue?'needs-attention':''} ${selected?'selected':''}" type="button" data-next-aircraft="${esc(aircraft.id)}">
+      ${issue?'<i class="attention-marker"></i>':''}<span class="list-primary"><span>${esc(aircraft.tail)}</span><span>${esc(place)}</span></span>
+      <span class="list-secondary"><span>${esc(aircraft.model)}</span><span>${esc(sub)}</span></span>
+      ${rotation.length?`<span class="rotation-line">${rotation.map(f=>`${esc(f.id)} ${shortClock(flightActualDeparture(f))} ${esc(f.from)}→${esc(flightOperationalDestination(f))}`).join(' · ')}</span>`:''}
+      ${issue?`<span class="list-reason">${esc(issue)}</span>`:''}
+    </button>${selected?aircraftInlineDetailsMarkup(aircraft):''}</article>`;
 }
 
 function bindContextCommon(){
   document.querySelector('[data-close-context]')?.addEventListener('click',()=>{
     selectedFlightId=null; selectedAircraftId=null; contextMode='context'; lastContextSignature=''; renderContext(true); refreshOccWidgets(true); refreshFleetList(true); refreshScheduleTimeline(true); updateMapData();
   });
-  document.querySelectorAll('#contextPane .ground-task-toggle').forEach(button=>button.addEventListener('click',()=>{
-    const list=button.nextElementSibling,expanded=button.getAttribute('aria-expanded')==='true';
-    button.setAttribute('aria-expanded',String(!expanded));
-    if(list) list.hidden=expanded;
-    button.textContent=expanded?`Show ${list?.children.length||0} ground tasks`:'Hide ground tasks';
+  document.querySelectorAll('.ground-task-toggle').forEach(button=>{
+    if(button.dataset.boundGroundToggle) return;
+    button.dataset.boundGroundToggle='true';
+    button.addEventListener('click',()=>{
+      const list=button.nextElementSibling,expanded=button.getAttribute('aria-expanded')==='true';
+      button.setAttribute('aria-expanded',String(!expanded));
+      if(list) list.hidden=expanded;
+      button.textContent=expanded?`Show ${list?.children.length||0} ground tasks`:'Hide ground tasks';
+    });
+  });
+}
+
+function bindLeftInlineDetails(){
+  document.querySelectorAll('.left-inline-details [data-context-aircraft]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation(); contextMode='context'; settleSelected(button.dataset.contextAircraft);
   }));
+  document.querySelectorAll('.left-inline-details [data-context-flight]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation(); contextMode='context'; settleSelectedFlight(button.dataset.contextFlight);
+  }));
+  bindContextCommon();
 }
 
 function actionableTasks(){
@@ -285,6 +355,7 @@ function taskStateLabel(task){
 
 function openIncidentTask(incident){
   if(!incident) return;
+  setActiveIncidentCase(incident.id);
   ensureIncidentWorkflow(incident);
   const task=incidentWorkflowProgress(incident).current;
   if(task) openTask(task.id);
@@ -293,6 +364,8 @@ function openTask(taskId){
   const task=state.coordinationTasks.find(item=>item.id===taskId);
   if(!task) return;
   focusedTaskId=task.id;
+  if(task.incidentId) setActiveIncidentCase(task.incidentId);
+  setDeskPanel(taskDesk(task),`task:${task.id}`,{toggle:false});
   selectedFlightId=task.flightId; selectedAircraftId=task.aircraftId;
   contextMode='context'; lastContextSignature=''; lastDeskStackSignature='';
   renderContext(true); refreshDepartmentWidgets(true); refreshOccWidgets(true); refreshFleetList(true); refreshScheduleTimeline(true); updateMapData();
@@ -309,22 +382,48 @@ function taskActions(task,incident){
     const remaining=Math.max(0,Math.ceil(((task.completesAt||simNow())-simNow())/MIN));
     return `<div class="task-waiting"><b>${task.status==='waiting_external'?'Request sent':'Work underway'}</b><span>${esc(task.pendingOutcome||task.detail)} · <em data-inline-task-remaining>${remaining} min remaining</em></span><div class="progress-track"><span data-inline-task-progress style="width:${formatPct(progress)}"></span></div></div>`;
   }
+  const blocker=['technical_strategy','recovery_strategy'].includes(task.kind)?'':taskResourceBlocker(task,incident);
+  if(blocker) return `<div class="attention-summary critical"><b>Resource unavailable</b><span>${esc(blocker)}</span></div>`;
   if(task.kind==='crew_allocation'){
     const options=crewPoolOptions(incident);
-    return options.length?`<div class="task-form"><label>Qualified personnel pool<select data-task-crew-pool>${options.map(option=>`<option value="${esc(option.id)}">${esc(option.label)}</option>`).join('')}</select></label><button class="primary-button" type="button" data-task-action="allocate">Allocate crew</button></div>`:'<div class="attention-summary critical"><b>No qualified crew available</b><span>Request or position qualified personnel under Planning and resources.</span></div>';
+    return options.length?`<div class="task-form"><label>Qualified personnel pool<select data-task-crew-pool>${options.map(option=>`<option value="${esc(option.id)}">${esc(option.label)}</option>`).join('')}</select></label><button class="primary-button" type="button" data-task-action="allocate">Allocate crew</button></div>`:'<div class="attention-summary critical"><b>No qualified crew available</b><span>Request or position qualified personnel in the Personnel desk.</span></div>';
+  }
+  if(task.kind==='technical_strategy'||task.kind==='recovery_strategy'){
+    const fallback=[{id:'defer',label:'Defer under MEL',detail:'Continue with documented restrictions.'},{id:'repair',label:'Repair aircraft',detail:'Ground the aircraft for engineering sign-off.'},{id:'substitute',label:'Use replacement aircraft',detail:'Assign a serviceable spare or borrowed aircraft.'}];
+    const options=task.strategyOptions||fallback;
+    return `<div class="choice-list">${options.map(option=>{
+      const optionBlocker=branchStrategyOptionBlocker(task,incident,option.id);
+      const consequence=operationalOptionConsequence(task,incident,option.id);
+      return `<button class="choice-button" type="button" data-task-action="${esc(option.id)}" ${optionBlocker?'disabled':''}><b>${esc(option.label||option.id)}</b><span>${esc(optionBlocker||option.detail||'Select this recovery path.')}</span>${consequence?`<em class="choice-consequence">${esc(consequence)}</em>`:''}</button>`;
+    }).join('')}</div>`;
   }
   if(task.kind==='maintenance_disposition') return `<div class="choice-list"><button class="choice-button" type="button" data-task-action="defer"><b>Defer under MEL</b><br>Document restrictions and continue if permitted.</button><button class="choice-button" type="button" data-task-action="repair"><b>Repair aircraft</b><br>Ground the aircraft while engineering completes the repair.</button></div>`;
-  if(task.kind==='atc_coordination') return `<div class="choice-list"><button class="choice-button" type="button" data-task-action="accept">Accept assigned CTOT · 45 min</button><button class="choice-button" type="button" data-task-action="priority">Request earlier opportunity from ATC</button></div>`;
-  if(task.kind==='stand_request') return `<div class="choice-list"><button class="choice-button" type="button" data-task-action="remote">Request remote stand</button><button class="choice-button" type="button" data-task-action="tow">Request tow to another gate</button><button class="choice-button" type="button" data-task-action="wait_gate">Hold for planned gate</button></div>`;
-  if(task.kind==='alternate_selection'){
-    const options=diversionOptionsForIncident(incident);
-    return options.length?`<div class="task-form"><label>Operational alternate<select data-task-alternate>${options.map(option=>`<option value="${option.code}">${option.code} · ${Math.round(option.destinationKm)} km from destination · ${option.weather.level}</option>`).join('')}</select></label><button class="primary-button" type="button" data-task-action="alternate">Select alternate</button></div>`:'<div class="attention-summary critical"><b>No suitable alternate available</b></div>';
+  if(task.kind==='maintenance_defer') return `<button class="primary-button" type="button" data-task-action="defer">Confirm MEL deferral</button>`;
+  if(task.kind==='maintenance_repair') return `<button class="primary-button" type="button" data-task-action="repair">Start repair</button>`;
+  if(task.kind==='maintenance_clearance') return `<button class="primary-button" type="button" data-task-action="complete">Record engineering clearance</button>`;
+  if(task.kind==='crew_augmentation') return `<button class="primary-button" type="button" data-task-action="complete">Assign augmented crew</button>`;
+  if(task.kind==='aircraft_substitution'){
+    const options=incidentAircraftReplacementOptions(incident);
+    return options.length?`<div class="task-form"><label>Replacement aircraft<select data-task-replacement-aircraft>${options.map(option=>`<option value="${esc(option.id)}">${esc(option.label)} · ${esc(option.detail)}</option>`).join('')}</select></label><button class="primary-button" type="button" data-task-action="substitute-aircraft">Assign replacement</button></div>`:'<div class="attention-summary critical"><b>No replacement aircraft available</b><span>Request an aircraft or reposition a spare in Dispatch & slots, then return to this task.</span></div>';
   }
-  const labels={maintenance_inspection:'Start engineering inspection',flightdeck_recommendation:'Send recommendation',diversion_clearance:'Submit ATC request',alternate_handling:'Request handling',dispatch_release:'Issue release',station_coordination:'Confirm coordination'};
+  if(task.kind==='flight_cancellation') return `<button class="danger-button" type="button" data-task-action="cancel-flight">Cancel affected flight</button>`;
+  if(task.kind==='atc_coordination') return `<button class="primary-button" type="button" data-task-action="complete">${esc(task.label)}</button>`;
+  if(task.kind==='stand_request') return `<button class="primary-button" type="button" data-task-action="complete">${esc(task.label)}</button>`;
+  if(['inbound_wait','turnaround_expedite','slot_coordination','station_recovery','fuel_recovery','security_coordination','connection_protection','medical_assessment','medical_coordination'].includes(task.kind)) return `<button class="primary-button" type="button" data-task-action="complete">${esc(task.label)}</button>`;
+  if(task.kind==='alternate_selection'){
+    const options=diversionOptionsForIncident(incident,{includeReturnOrigin:false});
+    return options.length?`<div class="task-form"><label>Operational alternate<select data-task-alternate>${options.map(option=>`<option value="${option.code}">${option.returnOrigin?'Return to origin':option.code} · ${option.returnOrigin?'origin airport':`${Math.round(option.destinationKm)} km from destination`} · fuel ${option.fuel.estimated?'estimated':'planned'}</option>`).join('')}</select></label><button class="primary-button" type="button" data-task-action="alternate">Select alternate</button></div>`:'<div class="attention-summary critical"><b>No suitable alternate available</b></div>';
+  }
+  if(task.kind==='return_origin_selection'){
+    const option=diversionOptionsForIncident(incident,{onlyReturnOrigin:true})[0];
+    return option?`<button class="primary-button" type="button" data-task-action="complete">Confirm return to ${esc(option.code)}</button>`:'<div class="attention-summary critical"><b>Return unavailable</b><span>Fuel, weather, or handling does not support a return right now.</span></div>';
+  }
+  const labels={maintenance_inspection:'Start engineering inspection',atc_coordination:task.label,flightdeck_recommendation:'Send recommendation',diversion_clearance:'Submit ATC request',alternate_handling:'Request handling',dispatch_release:'Issue release',station_coordination:'Confirm coordination'};
   return `<button class="primary-button" type="button" data-task-action="complete">${esc(labels[task.kind]||'Complete task')}</button>`;
 }
 
 const OCC_OWNER_LABELS={dispatch:'Dispatch',crew:'Crew Control',maintenance:'Maintenance',station:'Station Operations'};
+const OCC_DESK_LABELS={planning:'Dispatch & Planning',personnel:'Personnel',maintenance:'Maintenance',airports:'Airports'};
 
 function openOperationalIncidents(){
   const incidents=state.incidents.filter(item=>item.status==='open').sort((a,b)=>Number(Boolean(b.blocking))-Number(Boolean(a.blocking))||(a.detectedAt||0)-(b.detectedAt||0));
@@ -332,27 +431,194 @@ function openOperationalIncidents(){
   return incidents;
 }
 
+function taskDesk(task){
+  if(task.department==='crew') return 'personnel';
+  if(task.department==='maintenance') return 'maintenance';
+  if(task.department==='station') return 'airports';
+  if(task.department==='dispatch') return 'planning';
+  return 'planning';
+}
+
+function taskPriority(task){
+  const selected=task.flightId&&task.flightId===selectedFlightId ? -100 : task.aircraftId&&task.aircraftId===selectedAircraftId ? -80 : 0;
+  const status={available:0,in_progress:1,waiting_external:2,blocked:3};
+  return selected+(status[task.status]??4);
+}
+
+function tasksForDesk(desk){
+  return actionableTasks().filter(task=>{
+    const incident=state.incidents.find(item=>item.id===task.incidentId);
+    return taskDesk(task)===desk&&taskRelevantToIncidentStrategy(task,incident);
+  }).sort((a,b)=>taskPriority(a)-taskPriority(b)||(a.createdAt||0)-(b.createdAt||0)||a.id.localeCompare(b.id));
+}
+
+function taskObjectLabel(task){
+  const flight=state.flights.find(item=>item.id===task.flightId);
+  const aircraft=state.aircraft.find(item=>item.id===task.aircraftId);
+  if(flight) return `${flight.id} · ${flight.from} → ${flightOperationalDestination(flight)}`;
+  if(aircraft) return `${aircraft.tail} · ${aircraft.model}`;
+  return task.incidentId||'Operational task';
+}
+
+function blockedTaskCopy(task){
+  const tasks=incidentTasks(task.incidentId);
+  const blockers=task.dependsOn
+    .map(id=>tasks.find(item=>item.id===id))
+    .filter(item=>item&&item.status!=='completed')
+    .map(item=>item.label);
+  return blockers.length?`Waiting for ${blockers.join(' · ')}`:'Waiting for an earlier step.';
+}
+
+function departmentTaskMarkup(task,{compact=false}={}){
+  const incident=state.incidents.find(item=>item.id===task.incidentId);
+  const copy=incidentCopy(incident);
+  const active=task.status!=='blocked';
+  return `<article class="department-task ${focusedTaskId===task.id?'focused':''} ${active?'':'queued'}" data-inline-task="${esc(task.id)}">
+    <div class="department-task-head"><div><span>${esc(taskObjectLabel(task))}</span><b>${esc(task.label)}</b></div><em>${esc(taskStateLabel(task))}</em></div>
+    ${compact?'':`<p>${esc(copy.title)} · ${esc(task.detail)}</p>`}
+    ${active?`<div class="inline-task-action">${taskActions(task,incident)}</div>`:`<p>${esc(blockedTaskCopy(task))}</p>`}
+  </article>`;
+}
+
+function deskTaskPanelMarkup(desk){
+  const panel=activeDeskPanel(desk);
+  if(!panel.startsWith('task:')) return '';
+  const taskId=panel.slice(5);
+  const task=state.coordinationTasks.find(item=>item.id===taskId);
+  if(!task||taskDesk(task)!==desk) return '';
+  if(['available','in_progress','waiting_external'].includes(task.status)) return '';
+  return `<section class="desk-action-panel" data-active-desk-panel="${esc(panel)}"><header><b>${esc(task.label)}</b><button class="icon-button" type="button" data-close-desk-panel="${esc(desk)}" aria-label="Close">×</button></header>${departmentTaskMarkup(task)}</section>`;
+}
+
+function deskActiveTasksMarkup(desk){
+  const tasks=tasksForDesk(desk).filter(task=>['available','in_progress','waiting_external'].includes(task.status));
+  if(!tasks.length) return '';
+  return `<section class="desk-section desk-active-task-section"><h2>Active task${tasks.length===1?'':'s'}</h2>${tasks.map(task=>departmentTaskMarkup(task,{compact:true})).join('')}</section>`;
+}
+
+function caseStepStatusLabel(task){
+  if(task.status==='completed') return 'Complete';
+  if(task.status==='waiting_external') return 'Waiting reply';
+  if(task.status==='in_progress') return 'In progress';
+  if(task.status==='available') return 'Ready';
+  if(task.status==='blocked') return 'Blocked';
+  return task.status||'Open';
+}
+function caseStepsMarkup(incident,currentTask){
+  const tasks=playableIncidentTasks(incident);
+  return `<section class="case-console-section"><h2>Coordination chain</h2><div class="case-step-list">${tasks.map(task=>`<div class="case-step ${task.id===currentTask?.id?'current':''} ${esc(task.status)}"><span>${esc(caseStepStatusLabel(task))}</span><b>${esc(OCC_OWNER_LABELS[task.department]||'Operations')}</b><em>${esc(task.label)}</em></div>`).join('')}</div></section>`;
+}
+function impactStatusLabel(status){
+  if(status==='auto') return 'Defaulted';
+  if(status==='handled') return 'Handled';
+  if(status==='accepted') return 'Accepted';
+  if(status==='cleared') return 'Cleared';
+  return 'Impact';
+}
+function incidentImpactDetail(impact){
+  const context=impact.context||{};
+  if(impact.type==='slot_miss_risk') return `${context.slotDelayMin||0} min slot delay`;
+  if(impact.type==='connection_risk') return `${context.atRiskPax||0} at risk · ${context.missedPax||0} missed`;
+  if(impact.type==='crew_duty_risk') return context.label||'Duty envelope at risk';
+  return impact.summary||INCIDENT_DEFINITIONS[impact.type]?.summary||'Operational impact';
+}
+function caseImpactsMarkup(incident){
+  const impacts=(incident.impacts||[]).filter(Boolean);
+  if(!impacts.length) return '';
+  return `<section class="case-console-section"><h2>Linked impacts</h2><div class="case-step-list">${impacts.map(impact=>`<div class="case-step ${esc(impact.status||'open')}"><span>${esc(impactStatusLabel(impact.status))}</span><b>${esc(impact.title||INCIDENT_DEFINITIONS[impact.type]?.title||impact.type)}</b><em>${esc(incidentImpactDetail(impact))}</em></div>`).join('')}</div></section>`;
+}
+function caseLogMarkup(incident){
+  const entries=[{time:incident.detectedAt,text:`${incidentCopy(incident).title} detected at ${incident.airport||'operation'}.`}];
+  for(const impact of incident.impacts||[]){
+    if(impact.createdAt) entries.push({time:impact.createdAt,text:`Impact linked: ${impact.title||INCIDENT_DEFINITIONS[impact.type]?.title||impact.type}.`});
+  }
+  for(const task of incidentTasks(incident.id)){
+    if(task.startedAt) entries.push({time:task.startedAt,text:`${task.label} started.`});
+    const request=(state.externalRequests||[]).find(item=>item.taskId===task.id);
+    if(request?.submittedAt) entries.push({time:request.submittedAt,text:`Request sent to ${request.counterparty}.`});
+    if(task.completedAt) entries.push({time:task.completedAt,text:task.outcome||`${task.label} complete.`});
+  }
+  if(incident.resolvedAt) entries.push({time:incident.resolvedAt,text:incident.outcome||'Case resolved.'});
+  const rows=entries.sort((a,b)=>a.time-b.time).slice(-6);
+  return `<section class="case-console-section"><h2>Case log</h2><div class="case-log-list">${rows.map(row=>`<div class="case-log-row"><span>${shortClock(row.time)}</span><b>${esc(row.text)}</b></div>`).join('')}</div></section>`;
+}
+function caseActiveTaskMarkup(incident,task){
+  if(!task) return '<section class="case-console-section"><h2>Active task</h2><div class="occ-clear-state"><b>Coordination complete</b><span>The case will close once operational constraints refresh.</span></div></section>';
+  if(task.status==='blocked') return `<section class="case-console-section"><h2>Active task</h2><article class="case-blocked-task"><b>${esc(task.label)}</b><span>${esc(blockedTaskCopy(task))}</span></article></section>`;
+  return `<section class="case-console-section case-active-task"><h2>Active task</h2>${departmentTaskMarkup(task,{compact:true})}</section>`;
+}
+function incidentDecisionSummary(incident,task){
+  if(task) return `${OCC_OWNER_LABELS[task.department]||'Operations'} · ${caseStepStatusLabel(task)}`;
+  if(incident.status==='resolved') return 'Resolved';
+  return 'Coordination complete';
+}
 function incidentCaseMarkup(incident){
   const copy=incidentCopy(incident),progress=incidentWorkflowProgress(incident),task=progress.current;
   const flight=state.flights.find(item=>item.id===incident.flightId),aircraft=state.aircraft.find(item=>item.id===incident.aircraftId);
   const reference=flight?`${flight.id} · ${flight.from} → ${flightOperationalDestination(flight)}`:aircraft?`${aircraft.tail} · ${aircraft.model}`:'Operational case';
-  const remaining=incidentTasks(incident.id).filter(item=>item.required&&item.status!=='completed');
-  const following=remaining.filter(item=>item.id!==task?.id).slice(0,3);
-  return `<article class="incident-case ${focusedTaskId===task?.id?'focused':''}" data-incident-case="${esc(incident.id)}">
+  const expanded=workspaceUi.nextActiveIncidentId===incident.id;
+  return `<article class="incident-case case-console ${expanded?'expanded':'compact'} ${focusedTaskId===task?.id?'focused':''}" data-incident-case="${esc(incident.id)}">
     <header class="incident-case-header"><button type="button" data-case-object="${esc(flight?'flight':'aircraft')}" data-case-object-id="${esc(flight?.id||aircraft?.id||'')}"><span>${esc(reference)}</span><b>${esc(copy.title)}</b></button><em>${incident.blocking?'Blocking':'Open'}</em></header>
     <p>${esc(copy.summary)}</p>
-    <div class="incident-meta"><span>Owner · ${esc(OCC_OWNER_LABELS[task?.department]||'Operations')}</span><span>${progress.completed}/${progress.total} steps</span></div>
+    <div class="incident-meta"><span>${esc(incidentDecisionSummary(incident,task))}</span><span>${progress.completed}/${progress.total} steps</span></div>
     <div class="progress-track"><span style="width:${formatPct(progress.progress)}"></span></div>
-    ${task?`<section class="case-current-task ${focusedTaskId===task.id?'focused':''}" data-inline-task="${esc(task.id)}"><div class="case-task-heading"><span>${esc(taskStateLabel(task))}</span><b>${esc(task.label)}</b></div><p>${esc(task.detail)}</p><div class="inline-task-action">${taskActions(task,incident)}</div></section>`:'<div class="empty-state">No further action is required.</div>'}
-    ${following.length?`<div class="case-next-steps"><span>Then</span>${following.map(item=>`<b>${esc(item.label)}</b>`).join('')}</div>`:''}
+    ${expanded?`${caseActiveTaskMarkup(incident,task)}${caseImpactsMarkup(incident)}${caseStepsMarkup(incident,task)}${caseLogMarkup(incident)}`:`<button class="case-open-link" type="button" data-open-case="${esc(incident.id)}">Open case</button>`}
   </article>`;
 }
 
-function occWidgetMarkup(key,kicker,title,count,status,content,tools=''){
-  return `<section class="occ-board-widget ${count?'has-work':''}" id="occ-desk-${key}" data-desk-widget="${key}">
-    <header class="occ-widget-header"><div><span>${esc(kicker)}</span><h1>${esc(title)}</h1></div><div class="occ-widget-state">${tools}<b>${count}</b><span>${esc(status)}</span></div></header>
-    <div class="occ-widget-body">${content}</div>
+function deskActionBar(desk,actions){
+  return `<div class="desk-action-bar">${actions.map(action=>{
+    if(action.kind==='direct') return `<button class="desk-action-link" type="button" ${action.attr||''}>${esc(action.label)}</button>`;
+    return `<button class="desk-action-link ${activeDeskPanel(desk)===action.panel?'active':''}" type="button" data-desk-panel="${esc(desk)}:${esc(action.panel)}">${esc(action.label)}</button>`;
+  }).join('')}</div>`;
+}
+
+function deskPanelMarkup(desk,panel,title,content=''){
+  if(activeDeskPanel(desk)!==panel) return '';
+  const body=content||`<div class="occ-management-host" data-occ-page-host="${esc(panel)}"></div>`;
+  return `<section class="desk-action-panel" data-active-desk-panel="${esc(panel)}"><header><b>${esc(title)}</b><button class="icon-button" type="button" data-close-desk-panel="${esc(desk)}" aria-label="Close">×</button></header>${body}</section>`;
+}
+
+function airportPanelMarkup(kind){
+  const selected=selectedFlightId&&state.flights.find(item=>item.id===selectedFlightId&&!item.cancelled);
+  if(kind==='alternates'){
+    const incident=selected&&openIncidentsForFlight(selected.id).find(item=>item.type==='destination_closure');
+    const options=incident?diversionOptionsForIncident(incident):selected?Object.keys(AIRPORTS).filter(code=>code!==selected.from&&code!==selected.to).map(code=>{
+      const weather=Management.weatherAt(code,simNow());
+      return {code,weather,destinationKm:distanceKm(AIRPORTS[selected.to],AIRPORTS[code]),handling:staffAt(code,'groundHandling'),returnOrigin:false};
+    }).sort((a,b)=>a.destinationKm-b.destinationKm).slice(0,5):[];
+    return options.length?options.map(item=>`<div class="desk-list-row"><div><b>${esc(item.returnOrigin?'Return to origin':item.code)} · ${esc(AIRPORTS[item.code]?.name||'Airport')}</b><span>${esc(item.weather.label)} · ${item.returnOrigin?'origin airport':`${Math.round(item.destinationKm)} km from destination`} · ${item.handling} handlers${item.fuel?` · fuel ${item.fuel.estimated?'estimated':'planned'}`:''}</span></div><em>${esc(item.weather.level)}</em></div>`).join(''):'<div class="empty-state">Select a flight to review alternates.</div>';
+  }
+  return airportOpsMarkup();
+}
+
+function selectedAlternatesMarkup(){
+  const selected=selectedFlightId&&state.flights.find(item=>item.id===selectedFlightId&&!item.cancelled);
+  if(!selected) return '';
+  return `<section class="desk-section"><h2>Suitable alternates</h2>${airportPanelMarkup('alternates')}</section>`;
+}
+
+function sparesPanelMarkup(){
+  const selected=selectedFlightId&&state.flights.find(item=>item.id===selectedFlightId&&!item.cancelled);
+  const candidates=selected?rotationReplacementCandidates(selected):state.aircraft.filter(ac=>!aircraftActiveFlight(ac.id)&&!aircraftUpcomingFlight(ac.id)&&!aircraftIsDefective(ac)).slice(0,5);
+  return candidates.length?candidates.map(ac=>`<div class="desk-list-row"><div><b>${esc(ac.tail)} · ${esc(ac.model)}</b><span>${esc(ac.location)} · condition ${Math.round(ac.condition??100)}%</span></div><em>spare</em></div>`).join(''):'<div class="empty-state">No spare aircraft match the current operation.</div>';
+}
+
+function occWidgetMarkup(key,kicker,title,count,status,actions,content){
+  const context=[kicker,status].filter(Boolean).join(' · ');
+  const open=isDeskOpen(key);
+  return `<section class="occ-board-widget ${count?'has-work':''} ${open?'':'collapsed'}" id="occ-desk-${key}" data-desk-widget="${key}">
+    <header class="occ-widget-header"><button class="occ-widget-toggle" type="button" data-toggle-desk="${esc(key)}" aria-expanded="${open}" aria-controls="occ-body-${esc(key)}"><span class="toggle-caret">${open?'▾':'▸'}</span><span class="widget-title"><h1>${esc(title)}</h1>${infoTip(context)}</span><span class="occ-widget-state"><b>${count}</b></span></button></header>
+    <div class="occ-widget-body" id="occ-body-${esc(key)}" ${open?'':'hidden'}>${actions}${content}</div>
   </section>`;
+}
+
+function ensurePageInfoTip(page){
+  const heading=page.querySelector('.page-heading');
+  const help=heading?.querySelector('p');
+  const title=heading?.querySelector('h1');
+  if(!heading||!help||!title||heading.querySelector('.info-tip')) return;
+  title.insertAdjacentHTML('afterend',infoTip(help.textContent.trim()));
 }
 
 function mountOccManagementPages(root){
@@ -363,6 +629,7 @@ function mountOccManagementPages(root){
     if(!page||!host) continue;
     page.hidden=false;
     page.classList.add('active');
+    ensurePageInfoTip(page);
     host.appendChild(page);
   }
 }
@@ -376,86 +643,279 @@ function bindInlineTaskActions(root){
     let actionId=action,payload={};
     if(action==='allocate'){actionId='';payload.optionId=card.querySelector('[data-task-crew-pool]')?.value;}
     if(action==='alternate'){actionId='';payload.airport=card.querySelector('[data-task-alternate]')?.value;}
+    if(action==='substitute-aircraft'){actionId='';payload.optionId=card.querySelector('[data-task-replacement-aircraft]')?.value;}
+    if(action==='cancel-flight') actionId='';
     if(action==='complete') actionId='';
     focusedTaskId=task.id;
-    performOperationalTask(task.id,actionId,payload);
+    const desk=taskDesk(task);
+    const taskPanel=`task:${task.id}`;
+    const performed=performOperationalTask(task.id,actionId,payload);
+    if(performed&&task.status==='completed'&&activeDeskPanel(desk)===taskPanel){
+      focusedTaskId='';
+      setDeskPanel(desk,'');
+      lastDeskStackSignature='';
+      renderDeskStack(true);
+    }
   }));
 }
 
-function resourceActivityMarkup(requests,transfers){
+function transferStatusCopy(transfer,t=simNow()){
+  if(transfer.status==='completed') return {label:'completed',detail:`Arrived ${shortClock(transfer.completedAt||transfer.arrival)}`};
+  if(transfer.status==='cancelled') return {label:'cancelled',detail:'Returned to origin roster'};
+  const remaining=Math.max(0,Math.ceil(((transfer.arrival||t)-t)/MIN));
+  const phase=t>=transfer.departure?'in transit':'booked';
+  return {label:phase,detail:`ETA ${shortClock(transfer.arrival)} · ${remaining} min`};
+}
+
+function resourceActivityMarkup(requests,transfers,title='Activity underway'){
   if(!requests.length&&!transfers.length) return '';
   const requestRows=requests.map(item=>{
     const payload=item.payload||{},subject=payload.model||PERSONNEL[payload.role]?.label||payload.airport||item.location||item.kind;
     return `<div class="desk-list-row"><div><b>${esc(item.id)} · ${esc(subject)}</b><span>${esc(item.kind)} request${item.location?` · ${esc(item.location)}`:''}</span></div><em>Expected ${shortClock(item.readyAt)}</em></div>`;
   });
-  const transferRows=transfers.map(item=>`<div class="desk-list-row"><div><b>${esc(item.id)} · ${esc(item.from)} → ${esc(item.to)}</b><span>${item.amount} ${esc(PERSONNEL[item.role]?.label||item.role)} · ${esc(item.method==='own'?item.flightId:'external service')}</span></div><em>${esc(item.status)}</em></div>`);
-  return `<section class="desk-section"><h2>Activity underway</h2>${[...requestRows,...transferRows].join('')}</section>`;
+  const transferRows=transfers.map(item=>{
+    const status=transferStatusCopy(item);
+    return `<div class="desk-list-row"><div><b>${esc(item.id)} · ${esc(item.from)} → ${esc(item.actualTo||item.to)}</b><span>${item.amount} ${esc(PERSONNEL[item.role]?.label||item.role)} · ${esc(item.method==='own'?item.flightId:'external service')} · ${esc(status.detail)}</span></div><em>${esc(status.label)}</em></div>`;
+  });
+  return `<section class="desk-section"><h2>${esc(title)}</h2>${[...requestRows,...transferRows].join('')}</section>`;
+}
+
+function dispatchOccActionsMarkup(){
+  const flight=selectedFlightId&&state.flights.find(item=>item.id===selectedFlightId&&!item.cancelled);
+  if(!flight) return '<section class="desk-section occ-actions-section"><h2>OCC actions</h2><div class="empty-state">Select a flight to hold, swap aircraft, or cancel.</div></section>';
+  const now=simNow();
+  const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
+  const beforeDeparture=!flight.departureLogged&&flightActualDeparture(flight)>now;
+  const rotation=rotationForFlight(flight);
+  const pairedReturn=rotation.returnFlight&&flight.serviceLeg!=='return'?rotation.returnFlight:null;
+  const scope=flight.serviceId&&rotation.outbound
+    ? `Round trip ${rotation.outbound.id}${pairedReturn?` + ${pairedReturn.id}`:''}`
+    : 'Selected flight';
+  const candidates=manualSwapCandidatesForFlight(flight);
+  const swapBlocked=beforeDeparture
+    ? flight.fueled?'Aircraft swap unavailable after fueling.':!candidates.length?'No suitable replacement aircraft is available.':''
+    : 'Aircraft swap is only available before departure.';
+  return `<section class="desk-section occ-actions-section" data-dispatch-occ-flight="${esc(flight.id)}">
+    <h2>OCC actions</h2>
+    <div class="occ-action-context"><b>${esc(flight.id)} · ${esc(flight.from)} → ${esc(flightOperationalDestination(flight))}</b><span>${esc(scope)} · ${esc(aircraft?`${aircraft.tail} · ${aircraft.model}`:'unassigned')} · expected ${shortClock(flightActualDeparture(flight))}</span></div>
+    <div class="occ-action-row">
+      <div><b>Delay departure</b><span>${beforeDeparture?'Manual operational hold':'Flight already departed'}</span></div>
+      <div class="occ-action-controls"><button class="secondary-button" type="button" data-occ-delay-flight="${esc(flight.id)}" data-delay-min="15" ${beforeDeparture?'':'disabled'}>+15</button><button class="secondary-button" type="button" data-occ-delay-flight="${esc(flight.id)}" data-delay-min="30" ${beforeDeparture?'':'disabled'}>+30</button><input type="number" min="5" max="240" step="5" value="15" aria-label="Custom delay minutes" data-occ-custom-delay><button class="secondary-button" type="button" data-occ-custom-delay-flight="${esc(flight.id)}" ${beforeDeparture?'':'disabled'}>Apply</button></div>
+    </div>
+    <div class="occ-action-row">
+      <div><b>Swap aircraft</b><span>${swapBlocked||`${candidates.length} suitable candidate${candidates.length===1?'':'s'}`}</span></div>
+      ${candidates.length?`<div class="occ-action-controls wide"><select data-occ-swap-aircraft>${candidates.map(ac=>`<option value="${esc(ac.id)}">${esc(ac.tail)} · ${esc(ac.model)} · ${esc(ac.location)}</option>`).join('')}</select><button class="secondary-button" type="button" data-occ-swap-flight="${esc(flight.id)}">${flight.serviceId?'Swap round trip':'Swap flight'}</button></div>`:''}
+    </div>
+    <div class="occ-action-row danger">
+      <div><b>Cancel flight</b><span>${beforeDeparture?`${scope}${pairedReturn?' will be cancelled together':''}`:'Cancellation is only available before departure'}</span></div>
+      <button class="danger-button" type="button" data-occ-cancel-flight="${esc(flight.id)}" ${beforeDeparture?'':'disabled'}>Cancel</button>
+    </div>
+  </section>`;
+}
+
+function personnelSnapshotMarkup(){
+  const selectedFlight=selectedFlightId&&state.flights.find(item=>item.id===selectedFlightId);
+  const focusCodes=[selectedFlight?.from,selectedFlight&&flightOperationalDestination(selectedFlight),state.home].filter(Boolean);
+  const codes=[...new Set([...focusCodes,...operationalAirportCodes()])].slice(0,6);
+  return `<section class="desk-section"><h2>Staff availability</h2>${codes.length?codes.map(code=>{
+    return `<div class="desk-list-row"><div><b>${esc(code)} · ${esc(AIRPORTS[code]?.name||'Station')}</b><span>${staffAt(code,'captains')} captains · ${staffAt(code,'firstOfficers')} first officers · ${staffAt(code,'cabinCrew')} cabin · ${staffAt(code,'groundHandling')} handling</span></div><em>${selectedFlight?.from===code?'origin':selectedFlight&&flightOperationalDestination(selectedFlight)===code?'arrival':'station'}</em></div>`;
+  }).join(''):'<div class="empty-state">No staffed stations yet.</div>'}</section>`;
+}
+
+function maintenanceSnapshotMarkup(){
+  const now=simNow();
+  const aircraft=state.aircraft.slice().sort((a,b)=>{
+    const aSelected=a.id===selectedAircraftId?-100:0,bSelected=b.id===selectedAircraftId?-100:0;
+    const aStatus=Management.maintenanceStatus(a,now),bStatus=Management.maintenanceStatus(b,now);
+    const aScore=(aStatus.grounding?0:aStatus.due?1:a.melItems?.some(item=>item.status==='open')?2:3)+aSelected;
+    const bScore=(bStatus.grounding?0:bStatus.due?1:b.melItems?.some(item=>item.status==='open')?2:3)+bSelected;
+    return aScore-bScore||a.tail.localeCompare(b.tail);
+  }).slice(0,5);
+  return `<section class="desk-section"><h2>Aircraft condition</h2>${aircraft.length?aircraft.map(ac=>{
+    const status=Management.maintenanceStatus(ac,now),mel=(ac.melItems||[]).filter(item=>['open','expired'].includes(item.status));
+    return `<div class="desk-list-row"><div><b>${esc(ac.tail)} · ${esc(status.label)}</b><span>Condition ${Math.round(ac.condition??100)}% · ${Math.round(status.remainingHours)} h / ${Math.round(status.remainingCycles)} cycles${mel.length?` · ${mel.length} MEL`:''}</span></div><em>${esc(ac.location)}</em></div>`;
+  }).join(''):'<div class="empty-state">No aircraft assigned.</div>'}</section>`;
+}
+
+function externalRepliesMarkup(){
+  const requests=(state.externalRequests||[]).slice().sort((a,b)=>{
+    const activeA=a.status==='submitted'?0:1,activeB=b.status==='submitted'?0:1;
+    return activeA-activeB||(b.submittedAt||0)-(a.submittedAt||0);
+  }).slice(0,5);
+  if(!requests.length) return `<section class="desk-section"><h2>External replies</h2><div class="empty-state">No ATC, flight deck, station, or handler replies are pending.</div></section>`;
+  return `<section class="desk-section"><h2>External replies</h2>${requests.map(request=>{
+    const task=state.coordinationTasks.find(item=>item.id===request.taskId);
+    const remaining=Math.max(0,Math.ceil(((request.respondsAt||simNow())-simNow())/MIN));
+    return `<div class="desk-list-row"><div><b>${esc(request.counterparty||'Counterparty')}</b><span>${esc(taskObjectLabel(task||{}))} · ${esc(request.outcome||'Awaiting response')}</span></div><em>${request.status==='submitted'?`${remaining} min`:esc(request.status)}</em></div>`;
+  }).join('')}</section>`;
+}
+
+function planningDeskMarkup(requests){
+  const aircraftRequests=requests.filter(item=>item.kind==='aircraft');
+  const slotRequests=requests.filter(item=>item.kind==='slot');
+  return `${deskPanelMarkup('planning','planning','Plan flight')}
+    ${deskPanelMarkup('planning','aircraft','Request aircraft')}
+    ${deskPanelMarkup('planning','slots','Request slot series')}
+    ${deskActiveTasksMarkup('planning')}${deskTaskPanelMarkup('planning')}${dispatchOccActionsMarkup()}
+    ${resourceActivityMarkup([...aircraftRequests,...slotRequests],[],'Resource requests')}${externalRepliesMarkup()}`;
+}
+
+function personnelDeskMarkup(requests,transfers){
+  return `${deskPanelMarkup('personnel','personnel','Request personnel')}
+    ${deskPanelMarkup('personnel','relocation','Move personnel')}
+    ${deskActiveTasksMarkup('personnel')}${deskTaskPanelMarkup('personnel')}${personnelSnapshotMarkup()}${resourceActivityMarkup(requests.filter(item=>item.kind==='personnel'),transfers,'Personnel movement') || ''}`;
+}
+
+function maintenanceDeskMarkup(){
+  return `${deskPanelMarkup('maintenance','maintenance','Schedule or cancel check')}
+    ${deskActiveTasksMarkup('maintenance')}${deskTaskPanelMarkup('maintenance')}${maintenanceSnapshotMarkup()}`;
+}
+
+function incidentsDeskMarkup(incidents){
+  return `<div class="incident-case-list">${incidents.length?incidents.map(incidentCaseMarkup).join(''):'<div class="occ-clear-state"><b>Operation normal</b><span>No unresolved incidents require coordination.</span></div>'}</div>`;
+}
+
+function airportsDeskMarkup(){
+  return `${deskActiveTasksMarkup('airports')}${deskTaskPanelMarkup('airports')}${airportOpsMarkup()}${selectedAlternatesMarkup()}`;
 }
 
 function renderDeskStack(force=false){
   const root=document.getElementById('deskStack');
   if(!root) return;
   const incidents=openOperationalIncidents();
+  const activeIncident=activeIncidentCase(incidents);
+  workspaceUi.nextActiveIncidentId=activeIncident?.id||'';
   const activeRequests=(state.resourceRequests||[]).filter(item=>!['delivered','cancelled'].includes(item.status));
   const activeTransfers=(state.personnelTransfers||[]).filter(item=>!['completed','cancelled'].includes(item.status));
   const airportWarnings=operationalAirportCodes().filter(code=>Management.weatherAt(code,simNow()).level!=='normal');
+  const planningTasks=tasksForDesk('planning'),personnelTasks=tasksForDesk('personnel'),maintenanceTasks=tasksForDesk('maintenance'),airportTasks=tasksForDesk('airports');
+  const aircraftIssues=state.aircraft.filter(ac=>{
+    const status=Management.maintenanceStatus(ac,simNow());
+    return status.due||status.grounding||(ac.melItems||[]).some(item=>['open','expired'].includes(item.status));
+  });
+  const transferSignature=(state.personnelTransfers||[]).map(item=>`${item.id}:${item.status}:${item.departure}:${item.arrival}:${item.actualTo||''}:${item.status==='scheduled'&&simNow()>=item.departure?'transit':'waiting'}`).join('|');
   const signature=[
-    incidents.map(item=>`${item.id}:${item.status}:${item.blocking?1:0}`).join('|'),
-    actionableTasks().map(t=>`${t.id}:${t.status}:${t.completesAt}`).join('|'),
+    selectedFlightId||'',selectedAircraftId||'',
+    workspaceUi.nextActiveIncidentId||'',
+    incidents.map(item=>`${item.id}:${item.status}:${item.blocking?1:0}:${(item.impacts||[]).map(impact=>`${impact.key}:${impact.status}:${impact.summary}`).join(',')}`).join('|'),
+    actionableTasks().map(t=>`${t.id}:${t.status}:${t.completesAt}:${t.outcome||''}:${JSON.stringify(t.selection||{})}`).join('|'),
+    (state.externalRequests||[]).map(item=>`${item.id}:${item.status}:${item.respondsAt}`).join('|'),
+    activeRequests.map(item=>`${item.id}:${item.status}:${item.readyAt}`).join('|'),
     state.flights.map(f=>`${f.id}:${flightActualDeparture(f)}:${flightActualArrival(f)}:${f.staffingBlocked?1:0}:${f.slotMissed?1:0}`).join('|'),
     state.aircraft.map(ac=>`${ac.id}:${ac.location}:${attentionForAircraft(ac)}:${Math.round(ac.condition??100)}`).join('|'),
     airportWarnings.join('|'),state.slotRights.length,
-    JSON.stringify(state.personnel.assignments||{}),(state.personnelTransfers||[]).map(item=>`${item.id}:${item.status}`).join('|')
+    JSON.stringify(state.personnel.assignments||{}),transferSignature,
+    JSON.stringify(workspaceUi.collapsed.occ||{}),JSON.stringify(workspaceUi.nextDeskPanels||{})
   ].join('::');
   if(!force&&signature===lastDeskStackSignature) return;
   if(!force&&root.contains(document.activeElement)) return;
   lastDeskStackSignature=signature;
   restoreEmbeddedManagementPages();
-  root.innerHTML=`<header class="occ-board-header"><div><span>Live workspace</span><b>OCC actions</b></div><em>Act here · monitor flights on the left</em></header>
-    ${occWidgetMarkup('incidents','Operational work','Open incidents',incidents.length,incidents.length?`${incidents.length} unresolved case${incidents.length===1?'':'s'}`:'No action required',`<div class="incident-case-list">${incidents.length?incidents.map(incidentCaseMarkup).join(''):'<div class="occ-clear-state"><b>Operation normal</b><span>No unresolved incidents require coordination.</span></div>'}</div>`,`<button class="small-button" type="button" data-training-incident>Training scenario</button>`)}
-    ${occWidgetMarkup('resources','Planning & control','Planning and resources',activeRequests.length+activeTransfers.length,activeRequests.length||activeTransfers.length?'Requests or transfers underway':'Controls ready',`${resourceActivityMarkup(activeRequests,activeTransfers)}${fleetRecoveryMarkup()}<div class="resource-module occ-management-host" data-occ-page-host="planning"></div><div class="resource-module occ-management-host" data-occ-page-host="personnel"></div><div class="resource-module occ-management-host" data-occ-page-host="relocation"></div><div class="resource-module occ-management-host" data-occ-page-host="aircraft"></div><div class="resource-module occ-management-host" data-occ-page-host="slots"></div><div class="resource-module occ-management-host" data-occ-page-host="maintenance"></div>`)}
-    ${occWidgetMarkup('network','Operational picture','Network and weather',airportWarnings.length,airportWarnings.length?`${airportWarnings.length} weather warning${airportWarnings.length===1?'':'s'}`:'Stations normal',networkWeatherMarkup())}`;
+  root.innerHTML=`${occWidgetMarkup('incidents','Operational work','Open incidents',incidents.length,incidents.length?`${incidents.length} unresolved case${incidents.length===1?'':'s'}`:'No action required',deskActionBar('incidents',[
+      {kind:'direct',label:'Training scenario',attr:'data-training-incident'}
+    ]),incidentsDeskMarkup(incidents))}
+    ${occWidgetMarkup('planning','Dispatch planning','Dispatch & slots',planningTasks.length+activeRequests.filter(item=>['aircraft','slot'].includes(item.kind)).length+(state.externalRequests||[]).filter(item=>item.status==='submitted').length,planningTasks.length?'Dispatch work queued':activeRequests.some(item=>['aircraft','slot'].includes(item.kind))?'Requests underway':'Planner ready',deskActionBar('planning',[
+      {panel:'planning',label:'Plan flight'},
+      {panel:'aircraft',label:'Request aircraft'},
+      {panel:'slots',label:'Request slots'}
+    ]),planningDeskMarkup(activeRequests))}
+    ${occWidgetMarkup('personnel','People desk','Personnel',personnelTasks.length+activeRequests.filter(item=>item.kind==='personnel').length+activeTransfers.length,personnelTasks.length?'Crew work queued':activeTransfers.length?'Movements underway':'Staffing ready',deskActionBar('personnel',[
+      {panel:'personnel',label:'Request personnel'},
+      {panel:'relocation',label:'Move personnel'}
+    ]),personnelDeskMarkup(activeRequests,activeTransfers))}
+    ${occWidgetMarkup('maintenance','Engineering desk','Maintenance',maintenanceTasks.length+aircraftIssues.length,maintenanceTasks.length?'Engineering work queued':aircraftIssues.length?'Aircraft need attention':'Fleet serviceable',deskActionBar('maintenance',[
+      {panel:'maintenance',label:'Schedule check'}
+    ]),maintenanceDeskMarkup())}
+    ${occWidgetMarkup('airports','Network desk','Airports',airportWarnings.length+airportTasks.length,airportTasks.length?'Airport work queued':airportWarnings.length?`${airportWarnings.length} weather warning${airportWarnings.length===1?'':'s'}`:'Stations normal','',airportsDeskMarkup())}`;
   mountOccManagementPages(root);
+  root.querySelectorAll('[data-toggle-desk]').forEach(button=>button.addEventListener('click',event=>{
+    if(event.target.closest('.info-tip')) return;
+    const desk=button.dataset.toggleDesk;
+    setDeskOpen(desk,!isDeskOpen(desk),{persist:true});
+    lastDeskStackSignature=''; renderDeskStack(true);
+  }));
+  root.querySelectorAll('[data-desk-panel]').forEach(button=>button.addEventListener('click',()=>{
+    const [desk,panel]=button.dataset.deskPanel.split(':');
+    setDeskPanel(desk,panel);
+    lastDeskStackSignature=''; renderDeskStack(true);
+  }));
+  root.querySelectorAll('[data-open-case]').forEach(button=>button.addEventListener('click',()=>{
+    const incident=state.incidents.find(item=>item.id===button.dataset.openCase);
+    if(!incident) return;
+    setActiveIncidentCase(incident.id);
+    if(incident.flightId) settleSelectedFlight(incident.flightId);
+    else if(incident.aircraftId) settleSelected(incident.aircraftId);
+    lastDeskStackSignature=''; renderDeskStack(true);
+  }));
+  root.querySelectorAll('[data-close-desk-panel]').forEach(button=>button.addEventListener('click',()=>{
+    setDeskPanel(button.dataset.closeDeskPanel,'');
+    lastDeskStackSignature=''; renderDeskStack(true);
+  }));
   root.querySelector('[data-training-incident]')?.addEventListener('click',generateTrainingIncident);
   root.querySelectorAll('[data-case-object]').forEach(button=>button.addEventListener('click',()=>button.dataset.caseObject==='flight'?settleSelectedFlight(button.dataset.caseObjectId):settleSelected(button.dataset.caseObjectId)));
-  root.querySelector('[data-desk-sub-rotation]')?.addEventListener('click',button=>substituteSelectedRotation(button.dataset.deskSubRotation,document.getElementById('deskReplacementAircraft').value));
-  root.querySelector('[data-desk-change-service]')?.addEventListener('click',button=>{const flight=state.flights.find(item=>item.id===button.dataset.deskChangeService),service=flight&&state.services.find(item=>item.id===flight.serviceId);if(service)changeServiceAircraft(service.id,document.getElementById('deskReplacementAircraft').value);});
+  root.querySelectorAll('[data-open-task]').forEach(button=>button.addEventListener('click',()=>openTask(button.dataset.openTask)));
+  root.querySelectorAll('[data-occ-delay-flight]').forEach(button=>button.addEventListener('click',()=>delayFlight(button.dataset.occDelayFlight,Number(button.dataset.delayMin)||15)));
+  root.querySelectorAll('[data-occ-custom-delay-flight]').forEach(button=>button.addEventListener('click',()=>{
+    const minutes=clamp(Math.round(Number(button.closest('[data-dispatch-occ-flight]')?.querySelector('[data-occ-custom-delay]')?.value)||15),5,240);
+    delayFlight(button.dataset.occCustomDelayFlight,minutes);
+  }));
+  root.querySelectorAll('[data-occ-swap-flight]').forEach(button=>button.addEventListener('click',()=>{
+    const select=button.closest('[data-dispatch-occ-flight]')?.querySelector('[data-occ-swap-aircraft]');
+    if(select) swapSelectedFlightAircraft(button.dataset.occSwapFlight,select.value);
+  }));
+  root.querySelectorAll('[data-occ-cancel-flight]').forEach(button=>button.addEventListener('click',()=>cancelFlight(button.dataset.occCancelFlight)));
   bindInlineTaskActions(root);
   refreshManagement(true);
 }
 
 function openDesk(desk){
-  const destination=['dispatch','crew','maintenance','station','incidents'].includes(desk)?'incidents':['fleet','resources'].includes(desk)?'resources':'network';
+  const destination=desk==='crew'?'personnel':desk==='maintenance'?'maintenance':desk==='station'?'airports':desk==='dispatch'?'planning':['fleet','resources'].includes(desk)?'planning':['network','weather','airports'].includes(desk)?'airports':'incidents';
+  setDeskOpen(destination,true,{persist:true});
+  lastDeskStackSignature=''; renderDeskStack(true);
   document.getElementById(`occ-desk-${destination}`)?.scrollIntoView({behavior:'smooth',block:'start'});
 }
 function closeDesk(){}
-function fleetRecoveryMarkup(){
-  const flight=selectedFlightId&&state.flights.find(f=>f.id===selectedFlightId&&f.serviceId&&!f.cancelled&&flightActualDeparture(f)>simNow());
-  if(!flight) return '';
-  const replacements=rotationReplacementCandidates(flight);
-  return `<section class="desk-section"><h2>Aircraft recovery</h2><div class="simple-row"><span>Selected rotation</span><b>${esc(flight.id)} · ${esc(flight.from)} → ${esc(flight.to)} · ${shortDay(flightActualDeparture(flight))} ${shortClock(flightActualDeparture(flight))}</b></div>${replacements.length?`<div class="task-form"><label>Available replacement<select id="deskReplacementAircraft">${replacements.map(ac=>`<option value="${esc(ac.id)}">${esc(ac.tail)} · ${esc(ac.model)} · ${esc(ac.location)}</option>`).join('')}</select></label><div class="occ-desk-actions"><button class="primary-button" type="button" data-desk-sub-rotation="${esc(flight.id)}">Sub this round trip</button><button class="secondary-button" type="button" data-desk-change-service="${esc(flight.id)}">Change future schedule</button></div></div>`:`<div class="attention-summary warning"><b>No suitable spare aircraft</b><span>A replacement must be at ${esc(flight.from)}, have sufficient range, and be free for the complete rotation.</span></div>`}</section>`;
-}
 function operationalAirportCodes(){
   const now=simNow(),flights=state.flights.filter(f=>!f.cancelled&&flightActualDeparture(f)<now+24*HOUR&&flightActualArrival(f)>now);
   const used=new Set([state.home,...flights.flatMap(f=>[f.from,flightOperationalDestination(f)]),...state.slotRights.map(right=>right.airport),...Object.keys(state.personnel.assignments||{})]);
   return Object.keys(AIRPORTS).filter(code=>used.has(code));
 }
-function networkWeatherMarkup(){
+function weatherIcon(weather){
+  const text=`${weather?.label||''} ${weather?.conditions||''}`.toLowerCase();
+  if(text.includes('storm')||weather?.level==='severe') return '⛈';
+  if(text.includes('rain')) return '☔';
+  if(text.includes('fog')||text.includes('cloud')) return '☁';
+  if(text.includes('snow')) return '❄';
+  if(weather?.level&&weather.level!=='normal') return '⛅';
+  return '☀';
+}
+function renderWeatherStrip(force=false){
+  const root=document.getElementById('weatherStrip');
+  if(!root) return;
+  const now=simNow();
+  const codes=operationalAirportCodes();
+  const signature=codes.map(code=>{
+    const weather=Management.weatherAt(code,now);
+    return `${code}:${weather.label}:${weather.windKph}:${weather.delayMin}:${weather.level}`;
+  }).join('|');
+  if(!force&&signature===lastWeatherStripSignature) return;
+  lastWeatherStripSignature=signature;
+  root.innerHTML=`<div class="weather-strip-scroll">${codes.length?codes.map(code=>{
+    const weather=Management.weatherAt(code,now);
+    return `<div class="weather-chip ${weather.level!=='normal'?'warning':''}" title="${esc(weather.conditions)} · wind ${weather.windKph} km/h · expected delay ${weather.delayMin} min"><span class="weather-icon" aria-hidden="true">${weatherIcon(weather)}</span><b>${esc(code)}</b><span>${esc(weather.label)}</span><em>${Math.round(weather.capacityFactor*100)}%</em></div>`;
+  }).join(''):'<div class="weather-chip empty"><span class="weather-icon" aria-hidden="true">☀</span><b>No active stations</b></div>'}</div>`;
+}
+function airportOpsMarkup(){
   const now=simNow(),flights=state.flights.filter(f=>!f.cancelled&&flightActualDeparture(f)>now&&flightActualDeparture(f)<now+24*HOUR);
   const codes=operationalAirportCodes();
   return `<div class="airport-ops-list">${codes.map(code=>{
-    const departures=flights.filter(f=>f.from===code),arrivals=flights.filter(f=>flightOperationalDestination(f)===code),weather=Management.weatherAt(code,now),slots=state.slotRights.filter(right=>right.airport===code);
-    return `<article class="airport-ops-row ${weather.level!=='normal'?'warning':''}"><header><div><b>${esc(code)}</b><span>${esc(AIRPORTS[code].name)}</span></div><em>${esc(weather.label)} · ${Math.round(weather.capacityFactor*100)}%</em></header><p>${departures.length} departures · ${arrivals.length} arrivals · ${slots.length} slot series</p><p>${staffAt(code,'captains')} captains · ${staffAt(code,'firstOfficers')} first officers · ${staffAt(code,'cabinCrew')} cabin · ${staffAt(code,'groundHandling')} handling · ${staffAt(code,'operations')} operations</p><p class="weather-line">${esc(weather.conditions)} · wind ${weather.windKph} km/h · expected delay ${weather.delayMin} min</p></article>`;
+    const departures=flights.filter(f=>f.from===code),arrivals=flights.filter(f=>flightOperationalDestination(f)===code),slots=state.slotRights.filter(right=>right.airport===code);
+    return `<article class="airport-ops-row"><header><div><b>${esc(code)}</b><span>${esc(AIRPORTS[code].name)}</span></div><em>${departures.length+arrivals.length} movements</em></header><p>${departures.length} departures · ${arrivals.length} arrivals · ${slots.length} slot series</p><p>${staffAt(code,'groundHandling')} handling · ${staffAt(code,'operations')} operations · ${staffAt(code,'customerService')} customer service</p></article>`;
   }).join('')||'<div class="empty-state">No active stations.</div>'}</div>`;
 }
 
 function renderSelectionContext(expanded=false){
   const pane=document.getElementById('contextPane');
-  pane.classList.toggle('context-compact',!expanded);
-  const flight=selectedFlightId&&state.flights.find(item=>item.id===selectedFlightId);
-  if(flight){pane.hidden=false;return expanded?renderFlightContext(flight):renderFlightSummary(flight);}
-  const aircraft=selectedAircraftId&&state.aircraft.find(item=>item.id===selectedAircraftId);
-  if(aircraft){pane.hidden=false;return expanded?renderAircraftContext(aircraft):renderAircraftSummary(aircraft);}
   pane.hidden=true;
   pane.innerHTML='';
 }
@@ -471,17 +931,16 @@ function refreshFlightDetails(force=false){ renderContext(force); }
 function refreshAircraftDetails(force=false){ renderContext(force); }
 function refreshGroundTaskProgress(){
   const now=simNow();
-  if(contextMode==='details'){
-    let operation=null;
-    const flight=selectedFlightId&&state.flights.find(item=>item.id===selectedFlightId);
-    if(flight){
-      const ground=groundOperationsForFlight(flight,now);
-      operation=flightActualArrival(flight)<=now?{flight,phase:ground?.postflight}:flightActualDeparture(flight)>now?{flight,phase:ground?.departure}:null;
-    }else{
-      const aircraft=selectedAircraftId&&state.aircraft.find(item=>item.id===selectedAircraftId);
-      if(aircraft) operation=aircraftGroundOperation(aircraft,now);
-    }
-    const root=document.querySelector('#contextPane .ground-overview');
+  let operation=null;
+  const flight=selectedFlightId&&state.flights.find(item=>item.id===selectedFlightId);
+  if(flight){
+    const ground=groundOperationsForFlight(flight,now);
+    operation=flightActualArrival(flight)<=now?{flight,phase:ground?.postflight}:flightActualDeparture(flight)>now?{flight,phase:ground?.departure}:null;
+  }else{
+    const aircraft=selectedAircraftId&&state.aircraft.find(item=>item.id===selectedAircraftId);
+    if(aircraft) operation=aircraftGroundOperation(aircraft,now);
+  }
+  document.querySelectorAll('.left-inline-details .ground-overview').forEach(root=>{
     if(root&&operation?.phase&&root.dataset.groundPhase===operation.phase.key){
       root.querySelector('[data-ground-phase-progress]')?.style.setProperty('width',formatPct(operation.phase.progress));
       const percent=root.querySelector('.ground-percent'); if(percent) percent.textContent=formatPct(operation.phase.progress);
@@ -492,7 +951,7 @@ function refreshGroundTaskProgress(){
         const status=row.querySelector('em'); if(status) status.textContent=task.status==='complete'?'Complete':task.status==='active'?'In progress':'Planned';
       }
     }
-  }
+  });
   document.querySelectorAll('[data-inline-task]').forEach(card=>{
     const task=state.coordinationTasks.find(item=>item.id===card.dataset.inlineTask);
     if(!task||!['in_progress','waiting_external'].includes(task.status)) return;
@@ -717,7 +1176,7 @@ function refreshPersonnelTransferOptions(){
   select.innerHTML=flights.length?flights.map(f=>`<option value="${esc(f.id)}">${esc(f.id)} · ${shortDay(flightActualDeparture(f))} ${shortClock(flightActualDeparture(f))}</option>`).join(''):'<option value="">No suitable own flight</option>';
   if(flights.some(f=>f.id===previous)) select.value=previous;
   const available=staffAt(from,role),same=from===to,plan=external&&!same?externalTransferPlan(from,to,amount):null,selected=flights.find(f=>f.id===select.value);
-  document.getElementById('personnelTransferPreview').textContent=same?'Choose two different airports.':available<amount?`Only ${available} available at ${from}.`:external?`External service · arrival ${formatTime(plan.arrival)}.`:selected?`Non-revenue travel on ${selected.id} · arrival ${formatTime(flightActualArrival(selected))}.`:'No own flight has enough spare seats.';
+  document.getElementById('personnelTransferPreview').textContent=same?'Choose two different airports.':available<amount?`Only ${available} available at ${from}.`:external?`New external booking · estimated arrival ${formatTime(plan.arrival)}.`:selected?`New non-revenue booking on ${selected.id} · arrival ${formatTime(flightActualArrival(selected))}.`:'No own flight has enough spare seats.';
   document.getElementById('transferPersonnelBtn').disabled=same||available<amount||(!external&&!selected);
 }
 function createPersonnelTransfer(){
@@ -733,7 +1192,10 @@ function createPersonnelTransfer(){
 }
 function renderPersonnelTransfers(){
   const transfers=[...(state.personnelTransfers||[])].sort((a,b)=>b.createdAt-a.createdAt).slice(0,30);
-  document.getElementById('personnelTransferList').innerHTML=transfers.length?transfers.map(item=>`<div class="data-row"><div><b>${esc(item.id)} · ${esc(item.from)} → ${esc(item.actualTo||item.to)}</b><span>${item.amount} ${esc(PERSONNEL[item.role]?.label||item.role)} · ${esc(item.method==='own'?item.flightId:'external service')}</span></div><em>${esc(item.status)}</em></div>`).join(''):'<div class="empty-state">No personnel transfers.</div>';
+  document.getElementById('personnelTransferList').innerHTML=transfers.length?transfers.map(item=>{
+    const status=transferStatusCopy(item);
+    return `<div class="data-row"><div><b>${esc(item.id)} · ${esc(item.from)} → ${esc(item.actualTo||item.to)}</b><span>${item.amount} ${esc(PERSONNEL[item.role]?.label||item.role)} · ${esc(item.method==='own'?item.flightId:'external service')} · ${esc(status.detail)}</span></div><em>${esc(status.label)}</em></div>`;
+  }).join(''):'<div class="empty-state">No personnel transfers.</div>';
 }
 
 function refreshMaintenance(){
@@ -747,7 +1209,8 @@ function refreshMaintenance(){
 }
 
 function refreshManagement(force=false){
-  const signature=[managementPage,state.aircraft.length,state.slotRights.length,JSON.stringify(state.personnel.assignments),state.personnelTransfers?.length,state.resourceRequests?.map(r=>`${r.id}:${r.status}`).join('|')].join('::');
+  const transferSignature=(state.personnelTransfers||[]).map(item=>`${item.id}:${item.status}:${item.departure}:${item.arrival}:${item.actualTo||''}:${item.status==='scheduled'&&simNow()>=item.departure?'transit':'waiting'}`).join('|');
+  const signature=[managementPage,state.aircraft.length,state.slotRights.length,JSON.stringify(state.personnel.assignments),transferSignature,state.resourceRequests?.map(r=>`${r.id}:${r.status}`).join('|')].join('::');
   if(!force&&signature===lastManagementSignature) return; lastManagementSignature=signature;
   refreshAircraftSelect(force); refreshAircraftRequestPreview(); refreshPersonnelRequestPreview(); refreshSlotBuyPreview(); refreshPersonnelTransferOptions();
   renderManagementAircraft(); renderManagementPersonnel(); refreshSlotPortfolio(force); renderPersonnelTransfers(); refreshMaintenance(); refreshSchedulePreview();
@@ -755,7 +1218,7 @@ function refreshManagement(force=false){
 function refreshPersonnel(force=false){ if(force||nextWorkspace==='management'){renderManagementPersonnel();renderPersonnelTransfers();refreshPersonnelTransferOptions();} }
 function refreshResourceRequestSummary(force=false){ if(force||nextWorkspace==='management') refreshManagement(force); }
 function refreshManagementCycle(force=false){ if(force||nextWorkspace==='management') refreshManagement(force); }
-function refreshWeather(){}
+function refreshWeather(force=false){ renderWeatherStrip(force); }
 
 function applyWorkspaceView(){
   document.getElementById('speed').value=String(state.clock.speed);
@@ -775,7 +1238,7 @@ function initWorkspaceSplitter(){
 }
 
 function refreshAll(){
-  processEvents(); recalculateOperations(); refreshHeader(); refreshAircraftSelect(true); refreshOccWidgets(true); refreshFleetList(true); refreshDepartmentWidgets(true); renderContext(true); refreshManagement(true); updateMapData(); refreshScheduleTimeline(true);
+  processEvents(); recalculateOperations(); refreshHeader(); refreshAircraftSelect(true); refreshOccWidgets(true); refreshFleetList(true); refreshDepartmentWidgets(true); renderContext(true); refreshManagement(true); updateMapData(); refreshWeather(true); refreshScheduleTimeline(true);
 }
 
 populateManagementControls();
@@ -813,5 +1276,12 @@ document.getElementById('schedulePrevBtn').addEventListener('click',()=>{schedul
 document.getElementById('scheduleNowBtn').addEventListener('click',centerScheduleOnNow);
 document.getElementById('scheduleNextBtn').addEventListener('click',()=>{scheduleWindowOffsetHours+=12;lastScheduleSignature='';refreshScheduleTimeline(true);});
 document.getElementById('scheduleRange').addEventListener('change',event=>{scheduleRangeHours=Number(event.target.value)||24;lastScheduleSignature='';refreshScheduleTimeline(true);});
-document.getElementById('resetBtn').addEventListener('click',()=>{if(window.confirm('Delete this local airline save? Aircraft, flights, schedules, tasks, and slot rights will be removed.'))resetLocalSave();});
+function confirmLocalReset(){
+  if(window.confirm('Delete this local airline save? Aircraft, flights, schedules, tasks, and slot rights will be removed.')) resetLocalSave();
+}
+document.getElementById('resetBtn')?.addEventListener('click',confirmLocalReset);
+document.getElementById('resetTopbarBtn')?.addEventListener('click',confirmLocalReset);
+bindRailWidgetToggles();
 initWorkspaceSplitter();
+refreshRailCollapseState();
+refreshWeather(true);

@@ -585,7 +585,7 @@ function refreshPersonnelTransferOptions(){
     transferPersonnelBtn.disabled=sameAirport||available<amount||!selected;
   }else{
     const plan=sameAirport?null:externalTransferPlan(from,to,amount);
-    personnelTransferPreview.textContent=sameAirport?'Choose two different airports.':!available?`No ${PERSONNEL[role]?.label.toLowerCase()||'personnel'} available at ${from}.`:`External positioning service · estimated arrival ${formatTime(plan.arrival)}.`;
+    personnelTransferPreview.textContent=sameAirport?'Choose two different airports.':!available?`No ${PERSONNEL[role]?.label.toLowerCase()||'personnel'} available at ${from}.`:`New external positioning booking · estimated arrival ${formatTime(plan.arrival)}.`;
     transferPersonnelBtn.disabled=sameAirport||available<amount||!plan;
   }
 }
@@ -626,11 +626,12 @@ function renderPersonnelTransfers(){
   list.innerHTML=transfers.length?`<div class="estimate-title" style="margin-top:10px">Transfers</div>${transfers.map(transfer=>{
     const inTransit=transfer.status==='scheduled'&&simNow()>=transfer.departure;
     const status=transfer.status==='scheduled'?(inTransit?'in transit':'booked'):transfer.status;
+    const remaining=Math.max(0,Math.ceil(((transfer.arrival||simNow())-simNow())/MIN));
     const arrivalAirport=transfer.actualTo||transfer.to;
     return `<div class="personnel-transfer-row ${transfer.status}">
       <div class="row-between"><b>${transfer.from} → ${arrivalAirport}</b><span class="tag">${status}</span></div>
       <div class="tiny muted">${transfer.amount} ${PERSONNEL[transfer.role]?.label||transfer.role} · ${transfer.method==='own'?`${transfer.flightId} · non-revenue`:'external positioning service'}</div>
-      <div class="tiny muted">${transfer.status==='cancelled'?'Returned to origin roster':`${arrivalAirport!==transfer.to?`Diverted from ${transfer.to} · `:''}Arrival ${formatTime(transfer.arrival)}`}</div>
+      <div class="tiny muted">${transfer.status==='cancelled'?'Returned to origin roster':transfer.status==='completed'?`Arrived ${formatTime(transfer.completedAt||transfer.arrival)}`:`${arrivalAirport!==transfer.to?`Diverted from ${transfer.to} · `:''}ETA ${formatTime(transfer.arrival)} · ${remaining} min`}</div>
     </div>`;
   }).join('')}`:'';
 }
@@ -751,7 +752,7 @@ function flightProblemLabels(flight,readiness){
   if(flight.maintenanceBlocked||flight.maintenanceDelayMin) labels.push('Maintenance prevents departure');
   if(flight.positioningBlocked||flight.positioningDelayMin) labels.push('Aircraft not at departure airport');
   if(flight.slotMissed||flight.slotDelayMin) labels.push('Original departure slot missed');
-  if(flight.handlingDelayMin) labels.push(`Ground task delay · +${flight.handlingDelayMin} min`);
+  if(flight.handlingDelayMin) labels.push(`${flight.handlingDelayCause||'Ground task delay'} · +${flight.handlingDelayMin} min`);
   const delay=flightTotalDepartureDelayMin(flight);
   if(delay) labels.push(`Delay +${delay}m`);
   for(const gate of readiness?.gates||[]){
@@ -1096,22 +1097,48 @@ function operationalTaskActionMarkup(task,incident,flight,t){
     return `${workflowTaskProgressMarkup(task,t)}${request?`<div class="department-counterparty"><span>External party</span><b>${esc(request.counterparty)}</b></div>`:''}`;
   }
   if(task.status!=='available') return '';
+  const blocker=['technical_strategy','recovery_strategy'].includes(task.kind)?'':taskResourceBlocker(task,incident);
+  if(blocker) return `<div class="department-task-blocker">${esc(blocker)}</div>`;
   if(task.kind==='crew_allocation'){
     const options=crewPoolOptions(incident);
     return options.length?`<label for="crewPool-${esc(task.id)}">Personnel pool</label><select id="crewPool-${esc(task.id)}" data-task-payload="optionId">${options.map(option=>`<option value="${esc(option.id)}">${esc(option.label)}</option>`).join('')}</select><button class="btn primary full" type="button" data-operational-task="${esc(task.id)}" style="margin-top:7px">Reserve replacement crew</button>`:'<div class="department-task-blocker">No legal qualified personnel pool is available. Request or relocate personnel, then return to this task.</div>';
   }
   if(task.kind==='maintenance_inspection') return `<button class="btn primary full" type="button" data-operational-task="${esc(task.id)}">Start 25-minute engineering inspection</button>`;
+  if(task.kind==='technical_strategy'||task.kind==='recovery_strategy'){
+    const fallback=[{id:'defer',label:'Defer under MEL',detail:'Continue with documented restrictions.'},{id:'repair',label:'Repair aircraft',detail:'Ground the aircraft for engineering sign-off.'},{id:'substitute',label:'Use replacement aircraft',detail:'Assign a serviceable spare or borrowed aircraft.'}];
+    const options=task.strategyOptions||fallback;
+    return `<div class="department-choice-grid">${options.map(option=>{
+      const optionBlocker=branchStrategyOptionBlocker(task,incident,option.id);
+      const consequence=operationalOptionConsequence(task,incident,option.id);
+      return `<button class="btn ${optionBlocker?'':'primary'}" type="button" data-operational-task="${esc(task.id)}" data-task-action="${esc(option.id)}" ${optionBlocker?'disabled':''}><b>${esc(option.label||option.id)}</b><span>${esc(optionBlocker||option.detail||'Select this recovery path.')}</span>${consequence?`<em class="choice-consequence">${esc(consequence)}</em>`:''}</button>`;
+    }).join('')}</div>${options.map(option=>branchStrategyOptionBlocker(task,incident,option.id)).filter(Boolean).map(message=>`<div class="department-task-blocker">${esc(message)}</div>`).join('')}`;
+  }
   if(task.kind==='maintenance_disposition'){
     const finding=incident.technicalContext;
     return `${finding?`<div class="technical-finding"><b>MEL ${esc(finding.code)} · ATA ${esc(finding.ata)} · CAT ${esc(finding.category)}</b><span>${esc(finding.title)}</span><em>${esc(finding.restriction)}</em></div>`:''}<div class="department-choice-grid"><button class="btn" type="button" data-operational-task="${esc(task.id)}" data-task-action="defer">Defer under MEL</button><button class="btn primary" type="button" data-operational-task="${esc(task.id)}" data-task-action="repair">Begin 2-hour repair</button></div>`;
   }
-  if(task.kind==='atc_coordination') return `<div class="coordination-offer"><b>Assigned regulation</b><span>Current CTOT adds approximately 45 minutes. A priority request may return an earlier opportunity but requires an ATC response.</span></div><div class="department-choice-grid"><button class="btn" type="button" data-operational-task="${esc(task.id)}" data-task-action="accept">Accept assigned CTOT</button><button class="btn primary" type="button" data-operational-task="${esc(task.id)}" data-task-action="priority">Submit priority request</button></div>`;
-  if(task.kind==='stand_request') return `<div class="department-choice-grid three"><button class="btn" type="button" data-operational-task="${esc(task.id)}" data-task-action="remote">Request remote stand</button><button class="btn" type="button" data-operational-task="${esc(task.id)}" data-task-action="tow">Request replacement gate</button><button class="btn" type="button" data-operational-task="${esc(task.id)}" data-task-action="wait_gate">Retain planned gate</button></div>`;
+  if(task.kind==='maintenance_defer') return `<button class="btn primary full" type="button" data-operational-task="${esc(task.id)}" data-task-action="defer">Confirm MEL deferral</button>`;
+  if(task.kind==='maintenance_repair') return `<button class="btn primary full" type="button" data-operational-task="${esc(task.id)}" data-task-action="repair">Begin 2-hour repair</button>`;
+  if(task.kind==='maintenance_clearance') return `<button class="btn primary full" type="button" data-operational-task="${esc(task.id)}">Record engineering clearance</button>`;
+  if(task.kind==='crew_augmentation') return `<button class="btn primary full" type="button" data-operational-task="${esc(task.id)}">Assign augmented crew</button>`;
+  if(task.kind==='aircraft_substitution'){
+    const options=incidentAircraftReplacementOptions(incident);
+    return options.length?`<label for="replacement-${esc(task.id)}">Replacement aircraft</label><select id="replacement-${esc(task.id)}" data-task-payload="optionId">${options.map(option=>`<option value="${esc(option.id)}">${esc(option.label)} · ${esc(option.detail)}</option>`).join('')}</select><button class="btn primary full" type="button" data-operational-task="${esc(task.id)}" style="margin-top:7px">Assign replacement aircraft</button>`:'<div class="department-task-blocker">No suitable spare aircraft is available. Request aircraft or position a spare, then return to this task.</div>';
+  }
+  if(task.kind==='flight_cancellation') return `<button class="btn bad full" type="button" data-operational-task="${esc(task.id)}">Cancel affected flight</button>`;
+  if(task.kind==='atc_coordination') return `<button class="btn primary full" type="button" data-operational-task="${esc(task.id)}">${esc(task.label)}</button>`;
+  if(task.kind==='stand_request') return `<button class="btn primary full" type="button" data-operational-task="${esc(task.id)}">${esc(task.label)}</button>`;
+  if(['inbound_wait','turnaround_expedite','slot_coordination','station_recovery','fuel_recovery','security_coordination','connection_protection','medical_assessment','medical_coordination'].includes(task.kind)) return `<button class="btn primary full" type="button" data-operational-task="${esc(task.id)}">${esc(task.label)}</button>`;
   if(task.kind==='alternate_selection'){
-    const options=diversionOptionsForIncident(incident);
-    return options.length?`<label for="alternate-${esc(task.id)}">Operational alternate</label><select id="alternate-${esc(task.id)}" data-task-payload="airport">${options.map(option=>`<option value="${esc(option.code)}">${esc(option.code)} · ${Math.round(option.destinationKm)} km from destination · ${esc(option.weather.label)} · handling ${option.handling}</option>`).join('')}</select><div class="alternate-comparison">${options.slice(0,3).map(option=>`<span><b>${esc(option.code)}</b>${Math.round(option.km)} km route · ${esc(option.weather.conditions)} · capacity ${Math.round(option.weather.capacityFactor*100)}%</span>`).join('')}</div><button class="btn primary full" type="button" data-operational-task="${esc(task.id)}">Select alternate</button>`:'<div class="department-task-blocker">No suitable alternate is currently available.</div>';
+    const options=diversionOptionsForIncident(incident,{includeReturnOrigin:false});
+    return options.length?`<label for="alternate-${esc(task.id)}">Operational alternate</label><select id="alternate-${esc(task.id)}" data-task-payload="airport">${options.map(option=>`<option value="${esc(option.code)}">${esc(option.returnOrigin?'Return to origin':option.code)} · ${option.returnOrigin?'origin airport':`${Math.round(option.destinationKm)} km from destination`} · ${esc(option.weather.label)} · fuel ${option.fuel.estimated?'estimated':'planned'}</option>`).join('')}</select><div class="alternate-comparison">${options.slice(0,3).map(option=>`<span><b>${esc(option.returnOrigin?'Return':option.code)}</b>${Math.round(option.km)} km route · ${esc(option.weather.conditions)} · fuel ${Math.round(option.fuel.remaining)}/${Math.round(option.fuel.required)} gal</span>`).join('')}</div><button class="btn primary full" type="button" data-operational-task="${esc(task.id)}">Select alternate</button>`:'<div class="department-task-blocker">No suitable alternate is currently available.</div>';
+  }
+  if(task.kind==='return_origin_selection'){
+    const option=diversionOptionsForIncident(incident,{onlyReturnOrigin:true})[0];
+    return option?`<button class="btn primary full" type="button" data-operational-task="${esc(task.id)}">Confirm return to ${esc(option.code)}</button>`:'<div class="department-task-blocker">Return to origin is not currently suitable.</div>';
   }
   const labels={
+    atc_coordination:task.label,
     flightdeck_recommendation:`Send ${incident.selectedAlternate||'alternate'} recommendation to flight deck`,
     diversion_clearance:'Monitor flight-crew ATC clearance request',
     alternate_handling:`Request ${incident.selectedAlternate||'alternate'} stand and handling`,
@@ -1199,11 +1226,21 @@ function incidentContextMarkup(incidents,t,{showFlight=false}={}){
       const context=[incident.id,showFlight?incident.flightId:'',incident.airport?`At ${incident.airport}`:''].filter(Boolean).join(' · ');
       const technical=incident.type==='mel_defect'?(incident.technicalContext||OperationalIntelligence.melFinding(incident.id,incident.detectedAt)):null;
       const tasks=incidentTasks(incident.id),workflow=incidentWorkflowProgress(incident,t);
+      const impacts=(incident.impacts||[]).map(impact=>{
+        const status=impact.status==='auto'?'Defaulted':impact.status==='handled'?'Handled':impact.status==='accepted'?'Accepted':impact.status==='cleared'?'Cleared':'Impact';
+        const context=impact.context||{};
+        const detail=impact.type==='slot_miss_risk'?`${context.slotDelayMin||0} min slot delay`
+          : impact.type==='connection_risk'?`${context.atRiskPax||0} at risk · ${context.missedPax||0} missed`
+            : impact.type==='crew_duty_risk'?(context.label||'Duty envelope at risk')
+              : (impact.summary||INCIDENT_DEFINITIONS[impact.type]?.summary||'Operational impact');
+        return `<div class="case-task-row ${esc(impact.status||'open')}"><span><b>${esc(status)} · ${esc(impact.title||INCIDENT_DEFINITIONS[impact.type]?.title||impact.type)}</b>${esc(detail)}</span></div>`;
+      }).join('');
       return `<div class="incident-context-card open">
         <div class="row-between"><b>${esc(definition.title)}</b><span class="incident-context-state">${esc(incident.overdue?'Coordination overdue':incidentDeadlineText(incident,t))}</span></div>
         <div class="incident-summary">${esc(definition.summary||'Operational intervention required.')}</div>
         <div class="incident-context-meta">${esc(context)}</div>
         ${technical?`<div class="incident-technical"><b>MEL ${esc(technical.code)} · ATA ${esc(technical.ata)} · CAT ${esc(technical.category)}</b><span>${esc(technical.title)} · ${esc(technical.restriction)} · defer to ${formatTime(technical.expiresAt)}</span></div>`:''}
+        ${impacts?`<div class="case-task-list">${impacts}</div>`:''}
         <div class="case-progress"><div class="row-between"><span>Coordination progress</span><b>${workflow.completed}/${workflow.total}</b></div><div class="workflow-progress-bar"><span style="width:${Math.round(workflow.progress*100)}%"></span></div></div>
         <div class="case-task-list">${tasks.map(task=>`<div class="case-task-row ${task.status}"><span><b>${task.status==='completed'?'✓':task.status==='blocked'?'○':'●'} ${esc(OperationalWorkflows.DEPARTMENTS[task.department]?.label||task.department)}</b>${esc(task.label)}</span>${task.status==='completed'?`<em>Complete</em>`:`<button type="button" data-open-department-task="${esc(task.id)}">${task.status==='available'?'Open task':task.status==='blocked'?'Inspect':'View progress'}</button>`}</div>`).join('')}</div>
         ${showFlight?`<button class="incident-context-flight" type="button" data-incident-context-flight="${esc(incident.flightId)}">Open ${esc(incident.flightId)}</button>`:''}
@@ -1337,7 +1374,7 @@ function flightProblemAnchorsMarkup(flight,readiness,incidents,delays,hasService
     else if(gate.key==='slot') add('flight-section-dispatch','Departure slot missed');
     else if(gate.key==='rotation') add('flight-section-ground',readinessIssueLabel(gate)||'Inbound rotation delay');
   }
-  if(flight.handlingDelayMin) add('flight-section-ground',`Ground task delay · +${flight.handlingDelayMin} min`);
+  if(flight.handlingDelayMin) add('flight-section-ground',`${flight.handlingDelayCause||'Ground task delay'} · +${flight.handlingDelayMin} min`);
   if(flight.connectionAtRiskPax||flight.connectionMissedPax) add('flight-section-connections',flight.connectionMissedPax?`${flight.connectionMissedPax} missed connections`:`${flight.connectionAtRiskPax} connections at risk`);
   if(delays.length&&!links.size) add('flight-section-overview',`${delays[0][0]} · +${delays[0][1]} min`);
   if(!links.size) return '';

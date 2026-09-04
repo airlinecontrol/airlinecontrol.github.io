@@ -599,7 +599,8 @@
     .coordination-offer b,.coordination-offer span,.technical-finding b,.technical-finding span,.technical-finding em{display:block}
     .coordination-offer span,.technical-finding span,.technical-finding em{margin-top:3px;color:var(--muted);font-style:normal;line-height:1.35}
     .department-choice-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:7px}.department-choice-grid.three{grid-template-columns:1fr}
-    .department-choice-grid .btn{min-height:31px;padding:5px 7px;font-size:8px}
+    .department-choice-grid .btn{min-height:31px;padding:5px 7px;font-size:8px;text-align:left}
+    .department-choice-grid .btn b,.department-choice-grid .btn span,.department-choice-grid .btn em{display:block}.department-choice-grid .btn span{margin-top:3px;color:#d7edf7;font-size:8px;line-height:1.3}.department-choice-grid .btn .choice-consequence{margin-top:5px;color:#ffe39a;font-size:8px;font-style:normal;line-height:1.25}
     .department-counterparty{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px;color:var(--muted);font-size:8px}
     .workflow-progress{margin:2px 0 6px}.workflow-progress .row-between{font-size:8px}.workflow-progress .row-between span{color:var(--muted)}
     .workflow-progress-bar,.attention-case-progress{display:block;height:5px;margin-top:5px;overflow:hidden;background:#172b36;border-radius:999px}

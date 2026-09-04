@@ -641,6 +641,21 @@ function migrateState(parsed){
     if(incident.classification===undefined) incident.classification='incident';
     if(incident.workflowCreatedAt===undefined) incident.workflowCreatedAt=0;
     if(incident.overdue===undefined) incident.overdue=false;
+    if(incident.affectedRole===undefined) incident.affectedRole=incident.type==='crew_sick'?'captains':'';
+    if(incident.recoveryPlan===undefined) incident.recoveryPlan='';
+    if(!Number.isFinite(incident.recoveryPlanAt)) incident.recoveryPlanAt=0;
+    if(incident.source===undefined) incident.source=incident.training?'training':'legacy';
+    if(incident.sourceKey===undefined) incident.sourceKey='';
+    if(incident.context===undefined) incident.context=null;
+    if(!Number.isFinite(incident.lastDetectedAt)) incident.lastDetectedAt=incident.detectedAt;
+    if(!Array.isArray(incident.impacts)) incident.impacts=[];
+  }
+  for(const task of parsed.coordinationTasks){
+    if(task.branch===undefined) task.branch='';
+    if(task.strategies===undefined) task.strategies=null;
+    if(task.required===undefined) task.required=true;
+    if(task.action===undefined) task.action='';
+    if(task.strategyOptions===undefined) task.strategyOptions=null;
   }
   if(!Array.isArray(parsed.transactions)){
     parsed.transactions=[{id:'TX1',timestamp:parsed.clock?.simBase||Date.now(),amount:parsed.cash||0,category:'Opening',description:'Balance brought forward from existing save',balanceAfter:parsed.cash||0}];
@@ -698,7 +713,7 @@ function migrateState(parsed){
     if(!ac.cabin) ac.cabin=defaultCabin(ac.model);
   }
   for(const f of parsed.flights){
-    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','incidentDelayMin','enrouteDelayMin','propagatedDelayMin','slotDelayMin'])
+    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','incidentDelayMin','enrouteDelayMin','propagatedDelayMin','slotDelayMin','turnaroundRecoveryMin','slotPriorityMin'])
       if(f[k]===undefined) f[k]=0;
     for(const k of ['airportDelayMin','airspaceDelayMin']) if(f[k]===undefined) f[k]=0;
     if(f.constraintChecked===undefined) f.constraintChecked=Boolean(f.departureLogged);
@@ -711,6 +726,7 @@ function migrateState(parsed){
     if(!f.incidentChecks || typeof f.incidentChecks!=='object') f.incidentChecks={};
     if(f.staffingBlocked===undefined) f.staffingBlocked=false;
     if(f.staffingShortage===undefined) f.staffingShortage='';
+    if(f.handlingDelayCause===undefined) f.handlingDelayCause='';
     if(f.slotMissed===undefined) f.slotMissed=false;
     if(f.opsChecked===undefined) f.opsChecked=Boolean(f.departureLogged);
     if(f.enrouteChecked===undefined) f.enrouteChecked=Boolean(f.departureLogged);
@@ -796,8 +812,8 @@ const WORKSPACE_WIDGETS={
 function loadWorkspaceUi(){
   try{
     const parsed=JSON.parse(localStorage.getItem(WORKSPACE_UI_KEY)||'{}');
-    return {activeView:'occ',collapsed:parsed.collapsed||{occ:{}},scheduleRanges:{occ:Number(parsed.scheduleRanges?.occ)||24}};
-  }catch(_){ return {activeView:'occ',collapsed:{occ:{}},scheduleRanges:{occ:24}}; }
+    return {activeView:'occ',collapsed:parsed.collapsed||{occ:{}},scheduleRanges:{occ:Number(parsed.scheduleRanges?.occ)||24},nextDeskPanels:parsed.nextDeskPanels||{}};
+  }catch(_){ return {activeView:'occ',collapsed:{occ:{}},scheduleRanges:{occ:24},nextDeskPanels:{}}; }
 }
 let workspaceUi=loadWorkspaceUi();
 let activeWorkspaceView=workspaceUi.activeView;
@@ -826,21 +842,34 @@ function rebaseClock(newSpeed){
 }
 function save(){ localStorage.setItem(SAVE_KEY,JSON.stringify(state)); }
 
-function resetLocalSave(){
+function setResetControlsDisabled(disabled){
+  document.querySelectorAll('#resetBtn,#resetTopbarBtn').forEach(button=>{ button.disabled=disabled; });
+}
+function setResetStatus(message){
   const resetStatus=document.getElementById('resetStatus');
-  const resetButton=document.getElementById('resetBtn');
-  resetButton.disabled=true;
-  resetStatus.textContent='Resetting local airline data…';
+  if(resetStatus) resetStatus.textContent=message;
+}
+function resetLocalSave(){
+  setResetControlsDisabled(true);
+  setResetStatus('Resetting local airline data…');
   const blank=newState();
   try{
     // Write the replacement immediately so the periodic save and beforeunload
     // handlers can only persist the new blank state from this point onward.
     state=blank;
     localStorage.setItem(SAVE_KEY,JSON.stringify(blank));
+    localStorage.removeItem(WORKSPACE_UI_KEY);
+    localStorage.removeItem(SPLIT_KEY);
+    localStorage.removeItem(`${SPLIT_KEY}_occ`);
+    localStorage.removeItem(`${SPLIT_KEY}_management`);
+    localStorage.removeItem(LEFT_SIDEBAR_SPLIT_KEY);
+    localStorage.removeItem(RIGHT_SIDEBAR_SPLIT_KEY);
+    localStorage.removeItem('aerosim_next_center_split_pct');
+    workspaceUi=loadWorkspaceUi();
   }catch(error){
     console.error('AeroSim reset failed',error);
-    resetButton.disabled=false;
-    resetStatus.textContent='Reset failed because browser storage is unavailable.';
+    setResetControlsDisabled(false);
+    setResetStatus('Reset failed because browser storage is unavailable.');
     toast('Reset failed: browser storage is unavailable.');
     return;
   }
@@ -865,7 +894,7 @@ function resetLocalSave(){
     // The blank state is already safely stored. A reload is the most reliable
     // recovery if any stale renderer fails while clearing the old UI.
     console.error('AeroSim reset render failed; reloading blank save',error);
-    resetStatus.textContent='Data cleared. Reloading the blank airline…';
+    setResetStatus('Data cleared. Reloading the blank airline…');
     window.location.reload();
     return;
   }
@@ -877,12 +906,12 @@ function resetLocalSave(){
     }
   }catch(error){
     console.error('AeroSim reset verification failed',error);
-    resetButton.disabled=false;
-    resetStatus.textContent='Reset could not be verified.';
+    setResetControlsDisabled(false);
+    setResetStatus('Reset could not be verified.');
     toast('Reset could not be verified. Reload and try again.');
     return;
   }
-  resetButton.disabled=false;
-  resetStatus.textContent='Reset complete · 0 aircraft · 0 flights · 0 slot rights';
+  setResetControlsDisabled(false);
+  setResetStatus('Reset complete · 0 aircraft · 0 flights · 0 slot rights');
   toast('Local save reset. Your airline is empty.');
 }

@@ -1,0 +1,50 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AeroSim personnel transfer fixture</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result');
+  const frame=document.getElementById('game');
+  const loadApp=async()=>{
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../aerosim-next.html?fixture=personnel-transfer&cache='+Date.now();
+    await loaded;
+  };
+  await loadApp();
+  try{
+    let w=frame.contentWindow;
+    const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+    w.resetLocalSave();
+    await loadApp();
+    w=frame.contentWindow;
+    w.changeStaff('FRA','cabinCrew',3);
+    const beforeTo=w.staffAt('AMS','cabinCrew');
+    w.document.getElementById('transferPersonnelRole').value='cabinCrew';
+    w.document.getElementById('transferPersonnelAmount').value='2';
+    w.document.getElementById('transferPersonnelFrom').value='FRA';
+    w.document.getElementById('transferPersonnelTo').value='AMS';
+    w.document.getElementById('transferPersonnelMethod').value='external';
+    w.refreshPersonnelTransferOptions();
+    assert(/New external booking/.test(w.document.getElementById('personnelTransferPreview').textContent),'external transfer preview does not distinguish a new booking quote');
+    w.createPersonnelTransfer();
+    let saved=JSON.parse(w.localStorage.getItem('aerosim_mvp_v6'));
+    const transfer=saved.personnelTransfers[0];
+    assert(transfer&&transfer.status==='scheduled','external transfer was not booked');
+    w.eval(`state.clock={realBase:Date.now(),simBase:${transfer.arrival+60_000},speed:1};`);
+    w.processEvents();
+    saved=JSON.parse(w.localStorage.getItem('aerosim_mvp_v6'));
+    const completed=saved.personnelTransfers[0];
+    assert(completed.status==='completed','external transfer did not complete after arrival');
+    assert(completed.actualTo==='AMS','external transfer arrived at the wrong station');
+    assert(w.staffAt('FRA','cabinCrew')===1,'external transfer did not remove staff from origin correctly');
+    assert(w.staffAt('AMS','cabinCrew')===beforeTo+2,'external transfer did not add staff at destination');
+    w.renderPersonnelTransfers();
+    assert(/completed/i.test(w.document.getElementById('personnelTransferList').textContent),'completed transfer is not rendered as completed');
+    result.textContent='PASS personnel transfer lifecycle validated';
+  }catch(error){
+    result.textContent='FAIL '+(error.stack||error);
+  }
+})();
+</script>

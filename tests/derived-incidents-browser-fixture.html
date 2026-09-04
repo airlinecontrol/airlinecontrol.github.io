@@ -1,0 +1,105 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AeroSim derived incident fixture</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result');
+  const frame=document.getElementById('game');
+  const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+  const loadApp=async()=>{
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../aerosim-next.html?fixture=derived-incidents&cache='+Date.now();
+    await loaded;
+  };
+  try{
+    localStorage.removeItem('aerosim_mvp_v6');
+    localStorage.removeItem('aerosim_occ_ui_v1');
+    await loadApp();
+    frame.contentWindow.resetLocalSave();
+    await loadApp();
+    const w=frame.contentWindow;
+    const now=w.simNow();
+    assert(!w.eval('INCIDENT_TYPE_ORDER.includes("baggage_loading_issue")'),'baggage loading should not be in the automatic/training OCC incident order');
+    assert(!w.eval('PRE_DEPARTURE_INCIDENT_GENERATORS.some(item=>item.type==="baggage_loading_issue")'),'baggage loading should not be a random top-level OCC incident');
+    for(const airport of ['FRA','AMS','CDG','LGW']){
+      w.changeStaff(airport,'captains',20);
+      w.changeStaff(airport,'firstOfficers',20);
+      w.changeStaff(airport,'cabinCrew',40);
+      w.changeStaff(airport,'groundHandling',40);
+      w.changeStaff(airport,'operations',15);
+      w.changeStaff(airport,'customerService',15);
+      w.changeQualification(airport,'captains','Airbus A320 family',20);
+      w.changeQualification(airport,'firstOfficers','Airbus A320 family',20);
+    }
+
+    const completeWaits=()=>w.processOperationalWorkflows(Number.MAX_SAFE_INTEGER);
+
+    {
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'AMS');
+      const inbound=w.createFlightRecord({aircraftId:aircraft.id,from:'AMS',to:'FRA',departure:now-2*60*60_000,fare:{economy:120,business:300,first:0}});
+      inbound.manualDelayMin=120;
+      inbound.departureLogged=true;
+      const next=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'CDG',departure:now+75*60_000,fare:{economy:120,business:300,first:0}});
+      next.incidentChecks.operationalGeneration=true;
+      next.opsChecked=true;
+      w.recalculateOperations();
+      assert(w.processDerivedOperationalIncidents(now),'late inbound scanner did not report a change');
+      const incident=w.openIncidentsForFlight(next.id).find(item=>item.type==='aircraft_late_inbound');
+      assert(incident,'late inbound incident was not created from actual rotation state');
+      assert(incident.context.previousFlightId===inbound.id,'late inbound incident did not keep source flight context');
+      assert(incident.impacts.some(item=>item.type==='slot_miss_risk'),'late inbound case did not contain linked slot impact');
+      assert(!w.openIncidentsForFlight(next.id).some(item=>item.type==='slot_miss_risk'),'late inbound created a separate slot incident instead of grouping it');
+      assert(w.performOperationalTask(`${incident.id}:dispatch-inbound-strategy`,'wait_inbound'),'late inbound strategy was rejected');
+      assert(w.performOperationalTask(`${incident.id}:dispatch-wait-inbound`),'late inbound wait task was rejected');
+      assert(w.performOperationalTask(`${incident.id}:dispatch-release`),'late inbound release was rejected');
+      assert(incident.status==='resolved','late inbound workflow did not resolve');
+      assert(incident.impacts.every(item=>['handled','accepted','cleared'].includes(item.status)),'late inbound impacts were not closed with the parent recovery');
+      w.recalculateOperations();
+      w.processDerivedOperationalIncidents(now+60_000);
+      assert(!w.openIncidentsForFlight(next.id).some(item=>item.type==='aircraft_late_inbound'),'resolved late inbound case reopened while the same source risk remained active');
+    }
+
+    {
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'AMS',departure:now+50*60_000,fare:{economy:120,business:300,first:0}});
+      flight.handlingDelayMin=55;
+      flight.incidentChecks.operationalGeneration=true;
+      flight.opsChecked=true;
+      w.recalculateOperations();
+      assert(flight.slotMissed,'fixture flight did not miss its slot');
+      assert(w.processDerivedOperationalIncidents(now),'slot scanner did not report a change');
+      const incident=w.openIncidentsForFlight(flight.id).find(item=>item.type==='slot_miss_risk');
+      assert(incident,'slot miss incident was not created from recalculated slot state');
+      assert(w.performOperationalTask(`${incident.id}:dispatch-slot-strategy`,'priority'),'slot priority strategy was rejected');
+      assert(w.performOperationalTask(`${incident.id}:dispatch-slot-priority`),'slot priority coordination was rejected');
+      completeWaits();
+      assert(w.performOperationalTask(`${incident.id}:dispatch-release`),'slot release was rejected');
+      assert(incident.status==='resolved','slot miss workflow did not resolve');
+      assert(flight.slotPriorityMin>=15,'slot priority did not record recovered slot minutes');
+    }
+
+    {
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'AMS',departure:now-20*60_000,fare:{economy:120,business:300,first:0}});
+      flight.departureLogged=true;
+      w.recalculateOperations();
+      const incident=w.createIncident('onboard_medical',flight,{detectedAt:now,source:'test',sourceKey:`medical:${flight.id}`});
+      assert(incident,'airborne medical incident was not created');
+      assert(w.performOperationalTask(`${incident.id}:dispatch-medical-assess`),'medical assessment was rejected');
+      completeWaits();
+      assert(w.performOperationalTask(`${incident.id}:dispatch-medical-strategy`,'continue'),'medical continue strategy was rejected');
+      assert(w.performOperationalTask(`${incident.id}:dispatch-medical-continue`),'medical continuation coordination was rejected');
+      completeWaits();
+      assert(w.performOperationalTask(`${incident.id}:dispatch-release`),'medical release was rejected');
+      assert(incident.status==='resolved','airborne medical workflow did not resolve');
+      assert(flight.enrouteDelayMin>=20,'medical continuation did not record en-route impact');
+    }
+
+    result.textContent='PASS derived incidents validated';
+  }catch(error){
+    result.textContent='FAIL '+(error.stack||error);
+  }
+})();
+</script>

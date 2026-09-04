@@ -20,7 +20,7 @@
     incidents:incidentTypes.map((type,index)=>({id:`INC${index+1}`,type,flightId:`AS${index+1}`,aircraftId:`AC${index+1}`,airport:type==='destination_closure'?'LHR':'FRA',detectedAt:now,deadline:now+30*MIN,status:'open',severity:['crew_sick','mel_defect','destination_closure'].includes(type)?'critical':'warning',blocking:true,training:true,selectedAction:'',resolvedAt:0,outcome:'',automaticResolution:false}))
       .concat({id:'INC6',type:'atc_restriction',flightId:'AS6',aircraftId:'AC6',airport:'FRA',detectedAt:now-40*MIN,deadline:now-10*MIN,status:'open',severity:'warning',blocking:true,training:true,selectedAction:'',resolvedAt:0,outcome:'',automaticResolution:false}),
     services:[],slotRights:[],transactions:[],personnelTransfers:[],
-    personnel:{assignments:{FRA:{captains:4,firstOfficers:4,cabinCrew:12,groundHandling:12,operations:4,customerService:4}},qualifications:{FRA:{captains:{'Airbus A320 family':4},firstOfficers:{'Airbus A320 family':4}}},lastPayrollAt:now},
+    personnel:{assignments:{FRA:{captains:4,firstOfficers:4,cabinCrew:12,groundHandling:12,operations:4,customerService:4},LGW:{groundHandling:8},AMS:{groundHandling:8},CDG:{groundHandling:8}},qualifications:{FRA:{captains:{'Airbus A320 family':4},firstOfficers:{'Airbus A320 family':4}}},lastPayrollAt:now},
     fuelMarket:{pricePerGallon:2.45,updatedAt:now},ops:{automaticDisruptions:true},
     stats:{revenue:0,costs:0,staffCosts:0,leaseCosts:0,transferCosts:0,cancellationCosts:0,scheduledMaintenanceCosts:0,cancelled:0,pax:0,completed:0}
   }));
@@ -41,30 +41,35 @@
       const flightIncidentVisible=pane.textContent.includes('Crew sick call')&&pane.textContent.includes('required operating crew member');
       const noDuplicateIncidentSummary=(pane.textContent.match(/required operating crew member/gi)||[]).length===1;
       const noInstantIncidentActions=!doc.querySelector('[data-resolve-incident]')&&!pane.querySelector('[data-operational-task]');
-      const taskLinksInCase=Boolean(pane.querySelector('[data-open-department-task="INC1:crew-allocate"]'));
+      const taskLinksInCase=Boolean(pane.querySelector('[data-open-department-task="INC1:crew-strategy"]'));
       const attentionOnlyAcknowledges=Boolean(doc.querySelector('#occAttentionList [data-acknowledge-flight="AS1"]'))&&!doc.querySelector('#occAttentionList [data-delay-flight],#occAttentionList [data-priority-fuel],#occAttentionList [data-cancel-flight],#occAttentionList [data-resolve-incident],#occAttentionList [data-operational-task]');
 
-      pane.querySelector('[data-open-department-task="INC1:crew-allocate"]')?.click();
-      const crewWidgetOpened=doc.querySelector('[data-widget="crew-control"] .widget-header')?.getAttribute('aria-expanded')==='true'&&doc.getElementById('crewTaskDetail').textContent.includes('Allocate replacement crew');
+      pane.querySelector('[data-open-department-task="INC1:crew-strategy"]')?.click();
+      const crewWidgetOpened=doc.querySelector('[data-widget="crew-control"] .widget-header')?.getAttribute('aria-expanded')==='true'&&doc.getElementById('crewTaskDetail').textContent.includes('Choose crew recovery');
       const taskProgressBars=Boolean(doc.querySelector('.case-progress .workflow-progress-bar'));
 
+      win.performOperationalTask('INC1:crew-strategy','replace');
       win.performOperationalTask('INC1:crew-allocate','',{optionId:'FRA:captains'});
       win.processOperationalWorkflows(Number.MAX_SAFE_INTEGER);
       win.performOperationalTask('INC1:dispatch-release');
 
       win.performOperationalTask('INC2:mx-inspect');
       win.processOperationalWorkflows(Number.MAX_SAFE_INTEGER);
-      win.performOperationalTask('INC2:mx-disposition','defer');
+      win.performOperationalTask('INC2:mx-strategy','defer');
+      win.performOperationalTask('INC2:mx-defer','defer');
       win.performOperationalTask('INC2:dispatch-release');
 
-      win.performOperationalTask('INC3:dispatch-flow','priority');
+      win.performOperationalTask('INC3:dispatch-flow-strategy','priority');
+      win.performOperationalTask('INC3:dispatch-flow-priority');
       win.processOperationalWorkflows(Number.MAX_SAFE_INTEGER);
       win.performOperationalTask('INC3:dispatch-release');
 
-      win.performOperationalTask('INC4:station-stand','remote');
+      win.performOperationalTask('INC4:station-stand-strategy','remote');
+      win.performOperationalTask('INC4:station-remote');
       win.processOperationalWorkflows(Number.MAX_SAFE_INTEGER);
       win.performOperationalTask('INC4:station-coordinate');
 
+      win.performOperationalTask('INC5:dispatch-diversion-strategy','alternate');
       win.performOperationalTask('INC5:dispatch-alternate','',{airport:'LGW'});
       win.performOperationalTask('INC5:dispatch-flightdeck');
       win.processOperationalWorkflows(Number.MAX_SAFE_INTEGER);
@@ -82,7 +87,8 @@
             incidentsIntegrated,attentionIncidentTiles,departmentWidgets,caseFirst,flightIncidentVisible,
             noDuplicateIncidentSummary,noInstantIncidentActions,taskLinksInCase,attentionOnlyAcknowledges,
             crewWidgetOpened,taskProgressBars,
-            persistentTasks:saved.coordinationTasks.length===17&&saved.coordinationTasks.filter(task=>firstFive.some(incident=>incident.id===task.incidentId)).every(task=>task.status==='completed'),
+            persistentTasks:saved.coordinationTasks.filter(task=>firstFive.some(incident=>incident.id===task.incidentId)&&task.required!==false&&task.status!=='cancelled').every(task=>task.status==='completed')
+              && saved.coordinationTasks.filter(task=>firstFive.some(incident=>incident.id===task.incidentId)&&task.kind==='flight_cancellation').every(task=>task.status==='cancelled'),
             externalCoordination:saved.externalRequests.length>=4&&saved.externalRequests.every(request=>request.status==='responded'),
             resourceAllocation:Boolean(saved.resourceAssignments.find(item=>item.incidentId==='INC1'&&item.status==='committed')),
             incidentsResolved:firstFive.every(item=>item.status==='resolved'&&item.selectedAction==='workflow_complete'),
@@ -92,7 +98,7 @@
             atcResponse:flight('AS3')?.incidentDelayMin>=20,
             gateResponse:flight('AS4')?.incidentDelayMin>=20,
             closureResponse:flight('AS5')?.diversionAirport==='LGW',
-            completedCasesLeaveQueues:saved.coordinationTasks.filter(task=>firstFive.some(incident=>incident.id===task.incidentId)).every(task=>!doc.querySelector(`[data-department-task="${task.id}"]`))&&Boolean(doc.querySelector('[data-department-task="INC6:dispatch-flow"]')),
+            completedCasesLeaveQueues:saved.coordinationTasks.filter(task=>firstFive.some(incident=>incident.id===task.incidentId)).every(task=>!doc.querySelector(`[data-department-task="${task.id}"]`))&&Boolean(doc.querySelector('[data-department-task="INC6:dispatch-flow-strategy"]')),
             problemBadgesVisible:Boolean(doc.querySelector('#occUpcomingFlightList [data-occ-flight="AS1"] .problem-reason-badge')&&doc.querySelector('#aircraftList [data-aircraft-id="AC1"] .problem-reason-badge')),
             noPastIncidentHistory:!doc.querySelector('.incident-history')
           };

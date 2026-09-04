@@ -49,7 +49,8 @@
       doc.querySelector('[data-flight-id="AS1"]')?.click();
       frame.contentWindow.performOperationalTask('INC1:mx-inspect');
       frame.contentWindow.processOperationalWorkflows(Number.MAX_SAFE_INTEGER);
-      frame.contentWindow.performOperationalTask('INC1:mx-disposition','defer');
+      frame.contentWindow.performOperationalTask('INC1:mx-strategy','defer');
+      frame.contentWindow.performOperationalTask('INC1:mx-defer','defer');
       frame.contentWindow.performOperationalTask('INC1:dispatch-release');
       doc.querySelector('[data-aircraft-toggle="AC1"]')?.click();
       checks.aircraftMel=Boolean(doc.getElementById('aircraftDetailsPane').querySelector('.mel-section')&&doc.getElementById('aircraftDetailsPane').textContent.includes('Deferred defects'));

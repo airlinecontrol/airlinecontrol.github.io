@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>AeroSim — Operations</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
-  <link rel="stylesheet" href="aerosim-next.css?v=1.5.1" />
+  <link rel="stylesheet" href="aerosim-next.css?v=1.5.7" />
 </head>
 <body>
 <div id="app">
@@ -16,21 +16,30 @@
     <div class="top-stat"><span>Active</span><b id="headerActive">0</b></div>
     <div class="top-stat"><span>Upcoming</span><b id="headerUpcoming">0</b></div>
     <div class="sim-clock"><span id="simClock">—</span><select id="speed" aria-label="Simulation speed"><option value="1">1× real time</option><option value="10">10×</option><option value="60">60×</option><option value="300">300×</option></select></div>
+    <button id="resetTopbarBtn" class="topbar-icon-button reset-state-button" type="button" title="Reset local state" aria-label="Reset local state">&#128465;</button>
   </header>
 
   <main id="operationsView" class="operations-shell">
     <aside class="operations-rail" aria-label="Flights, aircraft, and selected details">
       <div id="contextPane" class="context-pane selection-pane" aria-live="polite" hidden></div>
-      <section class="rail-section flights-section">
-        <div class="rail-heading"><h2>Flights</h2><span id="flightListCount">0</span></div>
-        <div class="rail-subheading"><span>Active</span><b id="activeFlightCount">0</b></div>
+      <span id="flightListCount" hidden>0</span>
+      <section class="rail-section flights-section" data-rail-widget="activeFlights">
+        <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="activeFlights" aria-expanded="true" aria-controls="rail-body-activeFlights"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Active</h2></span><span class="occ-widget-state"><b id="activeFlightCount">0</b></span></button></header>
+        <div id="rail-body-activeFlights" class="rail-widget-body">
         <div id="activeFlightList" class="plain-list"></div>
-        <div class="rail-subheading upcoming-subheading"><span>Upcoming · 24 hours</span><b id="upcomingFlightCount">0</b></div>
-        <div id="upcomingFlightList" class="plain-list"></div>
+        </div>
       </section>
-      <section class="rail-section aircraft-section">
-        <div class="rail-heading"><h2>Aircraft</h2><span id="aircraftListCount">0</span></div>
+      <section class="rail-section flights-section" data-rail-widget="upcomingFlights">
+        <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="upcomingFlights" aria-expanded="true" aria-controls="rail-body-upcomingFlights"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Upcoming · 24 hours</h2></span><span class="occ-widget-state"><b id="upcomingFlightCount">0</b></span></button></header>
+        <div id="rail-body-upcomingFlights" class="rail-widget-body">
+        <div id="upcomingFlightList" class="plain-list"></div>
+        </div>
+      </section>
+      <section class="rail-section aircraft-section" data-rail-widget="aircraft">
+        <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="aircraft" aria-expanded="true" aria-controls="rail-body-aircraft"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Aircraft</h2></span><span class="occ-widget-state"><b id="aircraftListCount">0</b></span></button></header>
+        <div id="rail-body-aircraft" class="rail-widget-body">
         <div id="aircraftList" class="plain-list"></div>
+        </div>
       </section>
     </aside>
 
@@ -41,6 +50,7 @@
         <div id="toast" class="toast" role="status" aria-live="polite"></div>
       </div>
       <div id="workspace-splitter" role="separator" aria-orientation="horizontal" aria-label="Resize map and schedule" tabindex="0"></div>
+      <section id="weatherStrip" class="weather-strip" aria-label="Airport weather"></section>
       <div id="schedule-pane">
         <div class="schedule-toolbar">
           <div><b>Schedule</b><span id="schedule-window-label"></span></div>
@@ -151,12 +161,12 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="js/management.js?v=14.0.0"></script>
-<script src="js/core.js?v=14.0.0"></script>
+<script src="js/core.js?v=14.1.0"></script>
 <script src="js/ground-operations.js?v=14.0.0"></script>
 <script src="js/operational-intelligence.js?v=14.0.0"></script>
-<script src="js/operational-workflows.js?v=14.0.0"></script>
-<script src="js/simulation.js?v=14.0.0"></script>
-<script src="js/ui-next.js?v=1.5.1"></script>
+<script src="js/operational-workflows.js?v=14.1.0"></script>
+<script src="js/simulation.js?v=14.1.0"></script>
+<script src="js/ui-next.js?v=1.6.1"></script>
 <script src="js/map.js?v=14.0.0"></script>
 </body>
 </html>
