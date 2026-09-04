@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AeroSim — Operations</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="stylesheet" href="aerosim-next.css?v=1.4.0" />
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">A</span><span>AeroSim</span></div>
+    <div class="topbar-spacer"></div>
+    <div class="top-stat"><span>On time</span><b id="headerOnTime">—</b></div>
+    <div class="top-stat"><span>Active</span><b id="headerActive">0</b></div>
+    <div class="top-stat"><span>Upcoming</span><b id="headerUpcoming">0</b></div>
+    <div class="sim-clock"><span id="simClock">—</span><select id="speed" aria-label="Simulation speed"><option value="1">1× real time</option><option value="10">10×</option><option value="60">60×</option><option value="300">300×</option></select></div>
+  </header>
+
+  <main id="operationsView" class="operations-shell">
+    <aside class="operations-rail" aria-label="Flights, aircraft, and selected details">
+      <div id="contextPane" class="context-pane selection-pane" aria-live="polite" hidden></div>
+      <section class="rail-section flights-section">
+        <div class="rail-heading"><h2>Active flights</h2><span id="activeFlightCount">0</span></div>
+        <div id="activeFlightList" class="plain-list"></div>
+      </section>
+      <section class="rail-section flights-section upcoming-section">
+        <div class="rail-heading"><h2>Upcoming</h2><span id="upcomingFlightCount">0</span></div>
+        <div id="upcomingFlightList" class="plain-list"></div>
+      </section>
+      <section class="rail-section aircraft-section">
+        <div class="rail-heading"><h2>Aircraft</h2><span id="aircraftListCount">0</span></div>
+        <div id="aircraftList" class="plain-list"></div>
+      </section>
+    </aside>
+
+    <section id="center-workspace">
+      <div id="map-pane">
+        <div id="map"></div>
+        <div class="map-hud"><button id="fitBtn" class="small-button" type="button">Fit network</button></div>
+        <div id="toast" class="toast" role="status" aria-live="polite"></div>
+      </div>
+      <div id="workspace-splitter" role="separator" aria-orientation="horizontal" aria-label="Resize map and schedule" tabindex="0"></div>
+      <div id="schedule-pane">
+        <div class="schedule-toolbar">
+          <div><b>Schedule</b><span id="schedule-window-label"></span></div>
+          <div class="schedule-legend"><span><i></i>slot</span><span><i class="missed"></i>missed</span><span><i class="new"></i>new</span></div>
+          <div class="toolbar-spacer"></div>
+          <button id="schedulePrevBtn" class="small-button" type="button">← 12h</button>
+          <button id="scheduleNowBtn" class="small-button" type="button">Now</button>
+          <button id="scheduleNextBtn" class="small-button" type="button">12h →</button>
+          <select id="scheduleRange" aria-label="Schedule range"><option value="24">24 hours</option><option value="48">48 hours</option></select>
+        </div>
+        <div id="schedule-scroll"><div id="schedule-board"></div></div>
+      </div>
+    </section>
+
+    <aside class="context-rail" aria-label="Operations control desks">
+      <div id="deskStack" class="desk-stack" aria-label="Operations desks"></div>
+    </aside>
+  </main>
+
+  <main id="managementView" class="management-shell" hidden>
+    <aside class="management-nav">
+      <div class="management-title"><span>Workspace</span><b>Planning &amp; resources</b></div>
+      <button class="management-nav-item active" type="button" data-management-page="planning">Flight planning</button>
+      <button class="management-nav-item" type="button" data-management-page="aircraft">Aircraft</button>
+      <button class="management-nav-item" type="button" data-management-page="personnel">Personnel</button>
+      <button class="management-nav-item" type="button" data-management-page="slots">Slots</button>
+      <button class="management-nav-item" type="button" data-management-page="relocation">Relocation</button>
+      <button class="management-nav-item" type="button" data-management-page="maintenance">Maintenance</button>
+      <button class="management-nav-item" type="button" data-management-page="settings">Local data</button>
+    </aside>
+
+    <section class="management-content">
+      <section class="management-page active" data-management-content="planning">
+        <header class="page-heading"><span>Planning</span><h1>Plan or position a flight</h1><p>Create a one-time flight, recurring round trip, or ferry movement.</p></header>
+        <div class="form-grid compact-form">
+          <label>Operation<select id="scheduleType"><option value="once">One-time passenger flight</option><option value="recurring">Recurring round trip</option><option value="ferry">Ferry / positioning flight</option></select></label>
+          <label>Aircraft<select id="aircraft"></select></label>
+          <label>Origin<select id="origin"></select></label>
+          <label>Destination<select id="destination"></select></label>
+          <label>First departure<input id="departureTime" type="time" step="300" /></label>
+          <label id="repeatRuleWrap">Repeat<select id="repeatRule"><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="every2">Every two days</option><option value="weekly">Weekly</option></select></label>
+          <label id="turnaroundWrap">Turnaround<input id="turnaround" type="number" min="35" max="360" value="90" /></label>
+        </div>
+        <div id="recurringOptions" hidden></div><div id="operatingCalendar" hidden></div><div id="operatingCalendarSummary" hidden></div>
+        <div id="routeDemandPanel" hidden></div>
+        <div id="schedulePreview" class="form-feedback"></div>
+        <div class="form-actions"><button id="requestSlotsBtn" class="secondary-button" type="button" hidden>Request missing slots</button><button id="scheduleBtn" class="primary-button" type="button">Schedule flight</button></div>
+      </section>
+
+      <section class="management-page" data-management-content="aircraft" hidden>
+        <header class="page-heading"><span>Resources</span><h1>Aircraft</h1><p>Request an aircraft from the operations pool and configure its cabin.</p></header>
+        <div class="form-grid compact-form">
+          <label>Aircraft type<select id="managementAircraftModel"></select></label>
+          <label>First-class seats<input id="managementCabinFirst" type="number" min="0" value="0" /></label>
+          <label>Business seats<input id="managementCabinBusiness" type="number" min="0" value="0" /></label>
+        </div>
+        <div id="aircraftRequestPreview" class="form-feedback"></div>
+        <div class="form-actions"><button id="requestAircraftButton" class="primary-button" type="button">Request aircraft</button></div>
+        <div class="data-section"><h2>Current fleet</h2><div id="managementAircraftList" class="data-list"></div></div>
+      </section>
+
+      <section class="management-page" data-management-content="personnel" hidden>
+        <header class="page-heading"><span>Resources</span><h1>Personnel</h1><p>Request qualified personnel at an airport base.</p></header>
+        <div class="form-grid compact-form">
+          <label>Role<select id="personnelRole"></select></label>
+          <label>Airport<select id="personnelAirport"></select></label>
+          <label id="personnelQualificationWrap">Qualification<select id="personnelQualification"></select></label>
+          <label>Amount<input id="personnelAmount" type="number" min="1" max="50" value="1" /></label>
+        </div>
+        <div id="personnelRequestPreview" class="form-feedback"></div>
+        <div class="form-actions"><button id="requestPersonnelBtn" class="primary-button" type="button">Request personnel</button></div>
+        <div class="data-section"><h2>Airport rosters</h2><div id="managementPersonnelList" class="data-list"></div></div>
+      </section>
+
+      <section class="management-page" data-management-content="slots" hidden>
+        <header class="page-heading"><span>Resources</span><h1>Departure slot series</h1><p>Request recurring departure opportunities for schedule planning.</p></header>
+        <div class="form-grid compact-form"><label>Airport<select id="slotAirport"></select></label><label>Departure time<input id="slotTime" type="time" step="300" value="08:00" /></label></div>
+        <div id="slotBuyPreview" class="form-feedback"></div>
+        <div class="form-actions"><button id="requestSlotBtn" class="primary-button" type="button">Request slot series</button></div>
+        <div class="data-section"><h2>Slot portfolio</h2><div id="managementSlotList" class="data-list"></div></div>
+      </section>
+
+      <section class="management-page" data-management-content="relocation" hidden>
+        <header class="page-heading"><span>Network</span><h1>Relocate personnel</h1><p>Move employees on your own services or an external positioning service.</p></header>
+        <div class="form-grid compact-form">
+          <label>Role<select id="transferPersonnelRole"></select></label><label>Amount<input id="transferPersonnelAmount" type="number" min="1" max="50" value="1" /></label>
+          <label>From<select id="transferPersonnelFrom"></select></label><label>To<select id="transferPersonnelTo"></select></label>
+          <label>Travel<select id="transferPersonnelMethod"><option value="own">Own scheduled flight</option><option value="external">External positioning service</option></select></label>
+          <label id="transferOwnFlightWrap">Own flight<select id="transferPersonnelFlight"></select></label>
+        </div>
+        <div id="personnelTransferPreview" class="form-feedback"></div>
+        <div class="form-actions"><button id="transferPersonnelBtn" class="primary-button" type="button">Move personnel</button></div>
+        <div class="data-section"><h2>Transfers</h2><div id="personnelTransferList" class="data-list"></div></div>
+      </section>
+
+      <section class="management-page" data-management-content="maintenance" hidden>
+        <header class="page-heading"><span>Programme</span><h1>Maintenance</h1><p>Review condition and schedule outsourced checks.</p></header>
+        <div id="managementMaintenanceList" class="data-list"></div>
+      </section>
+
+      <section class="management-page" data-management-content="settings" hidden>
+        <header class="page-heading"><span>Browser</span><h1>Local data</h1><p>The legacy and new interfaces use the same local airline save.</p></header>
+        <button id="resetBtn" class="danger-button" type="button">Reset local airline</button><div id="resetStatus" class="form-feedback"></div>
+      </section>
+    </section>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="js/management.js?v=14.0.0"></script>
+<script src="js/core.js?v=14.0.0"></script>
+<script src="js/ground-operations.js?v=14.0.0"></script>
+<script src="js/operational-intelligence.js?v=14.0.0"></script>
+<script src="js/operational-workflows.js?v=14.0.0"></script>
+<script src="js/simulation.js?v=14.0.0"></script>
+<script src="js/ui-next.js?v=1.4.0"></script>
+<script src="js/map.js?v=14.0.0"></script>
+</body>
+</html>
