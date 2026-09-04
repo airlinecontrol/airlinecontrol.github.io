@@ -118,42 +118,42 @@ evaluated.
 
 The new interface reuses `management.js`, `core.js`, the operations modules, `simulation.js`, and
 `map.js`; only its HTML shell, CSS, and UI adapter are separate. Its Operations workspace has an
-informational left rail containing the selected flight or aircraft followed by Active flights,
-Upcoming flights, and Aircraft. The existing live map and operations timeline remain in the
-center. The right rail is reserved for one continuous OCC control board containing all six
-department widgets and their inline workflows. There is no separate Attention list. Open problems are indicated by
-one compact, plain-language reason on the affected flight or aircraft row, without turning the
-whole row red.
+informational left rail containing the selected flight or aircraft followed by one Flights widget
+(Active and Upcoming sections) and one Aircraft widget. The flight rows are the single flight-watch
+surface and include compact crew, fuel, slot, and issue readiness; aircraft rows are the single
+fleet/rotation surface. The existing live map and operations timeline remain in the center. There
+is no separate Attention list and no duplicate Dispatch flight board or Fleet rotation board. Open
+problems are indicated by one compact, plain-language badge on the affected operational object,
+without turning the whole row red.
 
-Persistent department subtasks and external-response timings remain simulation state. Current and
-queued workflow steps appear directly in their owning department widget with their required input,
-decision, prerequisite, or timestamp-derived progress. Selecting Handle task in the left-side
-flight or aircraft information scrolls to and highlights that inline control instead of opening a
-separate task page.
+Persistent department subtasks and external-response timings remain simulation state, but
+departments are ownership labels rather than separate UI destinations. Every unresolved incident
+appears once in Open Incidents with its current owner, complete case progress, current required
+input/decision, and next handoffs. Selecting Handle task in the left-side flight or aircraft
+information scrolls to and highlights that case control instead of opening a separate task page.
 
-The current next-UI iteration exposes six permanently expanded department widgets in one 470-pixel,
-vertically scrolling OCC board: Dispatch & Flight Planning, Crew Control, Fleet & Rotations,
-Maintenance Control, Network & Stations, and Weather. There are no desk-open buttons, tabs, or
-alternate workbench. Each widget shows its complete current operating horizon and inline controls.
-Dispatch uses one row per flight for release, crew, fuel, slot, route/alternate, and issue state so
-the same flight is not repeated across separate watch/release/route lists. Crew shows duties,
-personnel requests, airport rosters, and positioning; Fleet shows full 24-hour rotations, recovery,
-and aircraft requests, while ferry remains an operation type in the shared Dispatch planner; Maintenance shows technical state
-and check controls; Network groups station staffing, movements, weather capacity, and slots by
-airport; Weather shows every airport used by the current 24-hour programme.
+The current next-UI iteration exposes three permanently expanded parent widgets in one vertically
+scrolling OCC Actions rail: Open Incidents, Planning and Resources, and Network and Weather. There
+are no desk-open buttons, tabs, or alternate workbench. Planning and Resources mounts the flight
+planner, crew request/relocation, aircraft request, slot request, maintenance, and contextual
+aircraft-recovery controls. It deliberately hides the embedded current-fleet, personnel-roster, and
+slot-portfolio inventories because those facts already appear in the Aircraft list or airport
+operating picture. Ferry remains an operation type in the shared flight planner. Network and
+Weather uses one row per operational airport and combines movements, slot-series count, staffing,
+weather, delay, and capacity in that row.
 
 The next UI no longer shows `Tasks` or `Planning & resources` launchers in its top bar. Tasks are
-handled directly in their owning OCC widget, and all routine planning/resource entry points live in
-those widgets. The legacy management DOM remains available as the shared source for mounted forms but
-is not a second top-level navigation destination in this interface. The Dispatch widget owns the
-training-scenario control. In full flight or aircraft details, a ground phase initially shows only
+handled directly in Open Incidents, and all routine planning/resource entry points live in the
+Planning and Resources widget. The legacy management DOM remains available as the shared source for
+mounted forms but is not a second top-level navigation destination in this interface. Open Incidents
+owns the training-scenario control. In full flight or aircraft details, a ground phase initially shows only
 its overall progress bar; individual ground tasks sit behind an explicit Show ground tasks
 disclosure and remain visible after the user expands it.
 
 The hidden management shell remains only as the stable DOM home for the shared forms. During normal
-operation those pages are mounted simultaneously into their owning OCC widgets; do not duplicate
+operation those pages are mounted simultaneously into Planning and Resources; do not duplicate
 their business logic. The browser fixture `tests/next-ui-browser-fixture.html` covers the new shell,
-selection context, inline tasks, always-visible department content, shared map/timeline, and shared
+selection context, inline incident tasks, consolidated operational objects, shared map/timeline, and shared
 management state.
 
 ## Why Leaflet instead of MapLibre right now
@@ -1478,7 +1478,7 @@ Verify at minimum:
 16. reload preserves state
 17. all five incident types expose valid decisions and persist their outcomes
 18. aircraft and personnel requests are assigned immediately
-19. all unified OCC panels are visible and initially expanded on a fresh UI preference key
+19. all three consolidated OCC Actions panels are visible and initially expanded
 
 ## Important regression test
 

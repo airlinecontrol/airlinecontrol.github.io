@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>AeroSim — Operations</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
-  <link rel="stylesheet" href="aerosim-next.css?v=1.4.0" />
+  <link rel="stylesheet" href="aerosim-next.css?v=1.5.1" />
 </head>
 <body>
 <div id="app">
@@ -22,11 +22,10 @@
     <aside class="operations-rail" aria-label="Flights, aircraft, and selected details">
       <div id="contextPane" class="context-pane selection-pane" aria-live="polite" hidden></div>
       <section class="rail-section flights-section">
-        <div class="rail-heading"><h2>Active flights</h2><span id="activeFlightCount">0</span></div>
+        <div class="rail-heading"><h2>Flights</h2><span id="flightListCount">0</span></div>
+        <div class="rail-subheading"><span>Active</span><b id="activeFlightCount">0</b></div>
         <div id="activeFlightList" class="plain-list"></div>
-      </section>
-      <section class="rail-section flights-section upcoming-section">
-        <div class="rail-heading"><h2>Upcoming</h2><span id="upcomingFlightCount">0</span></div>
+        <div class="rail-subheading upcoming-subheading"><span>Upcoming · 24 hours</span><b id="upcomingFlightCount">0</b></div>
         <div id="upcomingFlightList" class="plain-list"></div>
       </section>
       <section class="rail-section aircraft-section">
@@ -56,8 +55,8 @@
       </div>
     </section>
 
-    <aside class="context-rail" aria-label="Operations control desks">
-      <div id="deskStack" class="desk-stack" aria-label="Operations desks"></div>
+    <aside class="context-rail" aria-label="OCC actions and resources">
+      <div id="deskStack" class="desk-stack" aria-label="OCC actions and resources"></div>
     </aside>
   </main>
 
@@ -157,7 +156,7 @@
 <script src="js/operational-intelligence.js?v=14.0.0"></script>
 <script src="js/operational-workflows.js?v=14.0.0"></script>
 <script src="js/simulation.js?v=14.0.0"></script>
-<script src="js/ui-next.js?v=1.4.0"></script>
+<script src="js/ui-next.js?v=1.5.1"></script>
 <script src="js/map.js?v=14.0.0"></script>
 </body>
 </html>
