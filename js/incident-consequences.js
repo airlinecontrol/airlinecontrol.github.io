@@ -40,20 +40,23 @@
   }
 
   function passengerOvernightExposure(flight,extraDelayMin=0){
-    if(!flight||flight.flightType==='ferry'||!(flight.pax>0)) return {pax:0,cost:0,reason:''};
+    if(!flight||flight.flightType==='ferry'||!(flight.pax>0)) return {pax:0,cost:0,reason:'',overnight:false};
     const delayMin=Math.max(flightTotalDepartureDelayMin(flight),Number(extraDelayMin)||0);
     const actualArrival=flightActualArrival(flight)+Math.max(0,(Number(extraDelayMin)||0)-flightTotalDepartureDelayMin(flight))*MIN;
-    const localHour=new Date(actualArrival).getHours();
-    const severeDelay=delayMin>=240;
+    const destination=typeof flightOperationalDestination==='function'?flightOperationalDestination(flight):(flight.diversionAirport||flight.to);
+    const nightRules=typeof AIRPORT_NIGHT_RULES==='object'?AIRPORT_NIGHT_RULES:{};
+    const rule=nightRules[destination];
+    const local=rule&&typeof localTimeParts==='function'?localTimeParts(rule.timeZone,actualArrival):{hour:new Date(actualArrival).getHours()};
+    const localHour=local.hour||0;
+    const inHardCurfew=typeof airportNightStatus==='function'&&airportNightStatus(destination,actualArrival).status==='closed';
     const lateArrival=delayMin>=120&&(localHour>=23||localHour<5);
-    const cancelled=Boolean(flight.cancelled);
     const diverted=Boolean(flight.diversionAirport&&flight.diversionAirport!==flight.to);
-    if(!severeDelay&&!lateArrival&&!cancelled&&!diverted) return {pax:0,cost:0,reason:''};
-    const fraction=cancelled?0.75:diverted?0.45:severeDelay?0.35:0.22;
+    if(!lateArrival&&!inHardCurfew) return {pax:0,cost:0,reason:'',overnight:false};
+    const fraction=diverted?0.45:0.22;
     const pax=Math.ceil((Number(flight.pax)||0)*fraction);
-    const unit=cancelled?165:diverted?145:125;
-    const reason=cancelled?'cancelled flight':diverted?'diversion':severeDelay?'long delay':'late-night arrival';
-    return {pax,cost:roundCost(pax*unit),reason};
+    const unit=diverted?145:125;
+    const reason=diverted?'diversion overnight':'late-night arrival';
+    return {pax,cost:roundCost(pax*unit),reason,overnight:true};
   }
 
   function crewComplementForFlight(flight){

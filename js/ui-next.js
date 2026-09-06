@@ -1580,7 +1580,7 @@ function passengerRecoveryDeskMarkup(exposures=passengerRecoveryExposures()){
     </div>`;
   }).join('');
   const arranged=exposures.filter(item=>item.arranged).length;
-  return `<section class="desk-section"><h2>Customer coordination</h2>${rows||'<div class="empty-state">No passenger impact needs coordination.</div>'}${arranged?`<p class="panel-note">${arranged} confirmed passenger coordination item${arranged===1?'':'s'} tracked in recovery costs.</p>`:''}</section>`;
+  return `<section class="desk-section"><h2>Customer coordination</h2>${rows||'<div class="empty-state">No diversion passenger coordination needed.</div>'}${arranged?`<p class="panel-note">${arranged} confirmed passenger coordination item${arranged===1?'':'s'} tracked in recovery costs.</p>`:''}</section>`;
 }
 
 function crewAccommodationMarkup(exposures=crewAccommodationExposures()){
@@ -1603,7 +1603,7 @@ function crewAccommodationMarkup(exposures=crewAccommodationExposures()){
     </div>`;
   }).join('');
   const arranged=exposures.filter(item=>item.arranged).length;
-  return `<section class="desk-section"><h2>Crew rest & positioning</h2>${rows||'<div class="empty-state">No disrupted crew rest or positioning exposure.</div>'}${arranged?`<p class="panel-note">${arranged} confirmed crew coordination item${arranged===1?'':'s'} tracked in recovery costs.</p>`:''}</section>`;
+  return `<section class="desk-section"><h2>Crew rest & positioning</h2>${rows||'<div class="empty-state">No diversion crew rest or positioning exposure.</div>'}${arranged?`<p class="panel-note">${arranged} confirmed crew coordination item${arranged===1?'':'s'} tracked in recovery costs.</p>`:''}</section>`;
 }
 
 function renderDeskStack(force=false){
