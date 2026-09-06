@@ -582,9 +582,13 @@ function aircraftInlineDetailsMarkup(aircraft){
   const maintenance=Management.maintenanceStatus(aircraft,simNow());
   const ground=aircraftGroundOperation(aircraft);
   const fuel=aircraftFuelPerformance(MODELS[aircraft.model]);
+  const turnStation=active?flightOperationalDestination(active):(upcoming?upcoming.from:aircraft.location);
+  const baseTurn=Number(MODELS[aircraft.model]?.minimumTurnMin)||minimumTurnMinutes(aircraft,turnStation);
+  const stationTurn=minimumTurnMinutes(aircraft,turnStation);
+  const turnLabel=stationTurn===baseTurn?`${stationTurn} min`:`${stationTurn} min at ${turnStation}`;
   return `<article class="left-inline-details" data-left-aircraft-details="${esc(aircraft.id)}">
     ${incident?`<section class="attention-summary critical"><b>${esc(incidentCopy(incident).title)}</b><span>${esc(incidentCopy(incident).summary)}</span></section>`:''}
-    <div class="fact-grid">${fact('Location',active?`${active.from} → ${flightOperationalDestination(active)}`:aircraft.location)}${fact('Condition',`${Math.round(aircraft.condition??100)}%`)}${fact('Utilisation',`${Math.round(aircraft.flightHours||0)} h · ${aircraft.cycles||0} cycles`)}${fact('Fuel',`${Math.round(aircraft.fuelGallons||0)} / ${Math.round(fuel.fuelCapacityGal)} gal`)}</div>
+    <div class="fact-grid">${fact('Location',active?`${active.from} → ${flightOperationalDestination(active)}`:aircraft.location)}${fact('Condition',`${Math.round(aircraft.condition??100)}%`)}${fact('Utilisation',`${Math.round(aircraft.flightHours||0)} h · ${aircraft.cycles||0} cycles`)}${fact('Fuel',`${Math.round(aircraft.fuelGallons||0)} / ${Math.round(fuel.fuelCapacityGal)} gal`)}${fact('Min turn',turnLabel)}</div>
     <section class="context-section"><h2>Current ground work</h2>${phaseMarkup(ground)}</section>
     <section class="context-section"><h2>Maintenance</h2><div class="simple-row"><span>Status</span><b>${esc(maintenance.label)}</b></div><div class="simple-row"><span>Next limit</span><b>${Math.max(0,Math.round(maintenance.remainingHours||0))} h / ${Math.max(0,Math.round(maintenance.remainingCycles||0))} cycles</b></div></section>
     <section class="context-section"><h2>Flying programme</h2>${active?`<button class="object-link" type="button" data-context-flight="${esc(active.id)}"><span>Active</span><b>${esc(active.id)} · ${esc(active.from)} → ${esc(flightOperationalDestination(active))}</b></button>`:''}${upcoming?`<button class="object-link" type="button" data-context-flight="${esc(upcoming.id)}"><span>Next</span><b>${esc(upcoming.id)} · ${shortClock(flightActualDeparture(upcoming))}</b></button>`:''}${!active&&!upcoming?'<div class="simple-row"><span>Assignment</span><b>Available</b></div>':''}</section>
@@ -2132,15 +2136,31 @@ function refreshScheduleTimeline(force=false){
         ].filter(Boolean).join('\n');
         if(clippedEnd>clippedStart) html+=`<div class="flight-block ${st} ${shifted?'shifted':''} ${lateInbound?'late-inbound-risk':''} ${night?'has-night-marker':''} ${focusClass} ${selected?'selected':''}" data-flight-id="${esc(f.id)}" title="${esc(flightTitle)}" style="left:${left}px;width:${width}px"><div class="flight-code">${esc(f.id)}${delay?` <span class="delay-text">+${delay}</span>`:''}</div>${lateInbound?`<span class="flight-late-inbound" title="${esc(lateInbound.title)}">IN</span>`:''}${night?`<span class="flight-night-marker" title="${esc(night.title)}">${esc(night.label)}</span>`:''}<div class="flight-route">${esc(f.from)} → ${esc(destination)}</div><div class="flight-times">${shifted?`<span class="sched">S ${shortClock(f.departure)}</span> · <span class="actual">A ${shortClock(actualDep)}</span>`:`${shortClock(actualDep)}–${shortClock(actualArr)}`}</div></div>`;
         const next=flights[i+1];
-        if(next&&flightActualDeparture(next)>actualArr){
-          const gapStart=Math.max(start,actualArr),gapEnd=Math.min(end,flightActualDeparture(next));
-          if(gapEnd>gapStart){
-            const connLeft=(gapStart-start)/HOUR*pxPerHour,connWidth=Math.max(3,(gapEnd-gapStart)/HOUR*pxPerHour),same=destination===next.from;
-            const connectionFocused=focusIds.has(f.id)&&focusIds.has(next.id);
-            const gapMs=flightActualDeparture(next)-actualArr;
+        if(next){
+          const nextDep=flightActualDeparture(next),gapMs=nextDep-actualArr,turn=turnaroundGapInfo(f,next,ac);
+          const connectorShortTurn=Boolean(turn?.belowMinimum),drawPositiveGap=nextDep>actualArr;
+          if(drawPositiveGap||connectorShortTurn){
+            const same=destination===next.from,connectionFocused=focusIds.has(f.id)&&focusIds.has(next.id);
             const connectorLateInbound=Boolean(lateInboundById.get(next.id));
-            html+=`<span class="connection-label ${connectorLateInbound?'late-inbound':''} ${connectionFocused?'focus':''}" title="${esc(`${f.id} to ${next.id} ground time${connectorLateInbound?' · late inbound':''}`)}" style="left:${connLeft+connWidth/2}px">${esc(formatDuration(gapMs))}</span>`;
-            html+=`<span class="connection-line ${same?'':'mismatch'} ${connectorLateInbound?'late-inbound':''} ${connectionFocused?'focus':''}" style="left:${connLeft}px;width:${connWidth}px"></span>`;
+            const gapStart=drawPositiveGap?Math.max(start,actualArr):Math.max(start,Math.min(end,actualArr));
+            const gapEnd=drawPositiveGap?Math.min(end,nextDep):gapStart;
+            const warningWidth=Math.max(8,Math.min(28,pxPerHour*.16));
+            const connLeft=drawPositiveGap
+              ? (gapStart-start)/HOUR*pxPerHour
+              : Math.max(0,Math.min(timeWidth-warningWidth,(gapStart-start)/HOUR*pxPerHour-warningWidth/2));
+            const connWidth=drawPositiveGap?Math.max(3,(gapEnd-gapStart)/HOUR*pxPerHour):warningWidth;
+            const visibleGap=!drawPositiveGap||gapEnd>gapStart;
+            if(visibleGap&&connWidth>0&&connLeft<timeWidth){
+              const titleParts=[
+                turn?.title||`${f.id} to ${next.id}: ground time ${formatDuration(Math.max(0,gapMs))}`,
+                connectorLateInbound?'late inbound rotation warning':null
+              ].filter(Boolean);
+              const label=connectorShortTurn&&turn
+                ? `${Math.max(0,turn.actualGapMin)}/${turn.minimumMin}m`
+                : formatDuration(gapMs);
+              html+=`<span class="connection-label ${connectorLateInbound?'late-inbound':''} ${connectorShortTurn?'short-turn':''} ${connectionFocused?'focus':''}" title="${esc(titleParts.join(' · '))}" style="left:${connLeft+connWidth/2}px">${esc(label)}</span>`;
+              html+=`<span class="connection-line ${same?'':'mismatch'} ${connectorLateInbound?'late-inbound':''} ${connectorShortTurn?'short-turn':''} ${connectionFocused?'focus':''}" title="${esc(titleParts.join(' · '))}" style="left:${connLeft}px;width:${connWidth}px"></span>`;
+            }
           }
         }
       }
@@ -2186,12 +2206,19 @@ function refreshSchedulePreview(){
   const ferry=scheduleTypeEl.value==='ferry',estimate=ferry?estimateFerryFlight(from,to,ac,departure):estimateFlight(from,to,ac,currentScheduleFares(),{departure});
   let message=`${Math.round(estimate.km)} km · ${formatDuration(estimate.duration)} block time · ${estimate.rangeOk?'within range':'outside aircraft range'}`;
   if(!ferry) message+=` · projected ${estimate.pax||0} passengers`;
+  const routeMinimumTurn=minimumTurnMinutes(ac,to);
+  message+=` · min turn at ${to} ${routeMinimumTurn} min`;
   const night=flightNightRestriction({from,to,departure,arrival:departure+estimate.duration,operationalDurationMs:estimate.duration,enrouteDelayMin:0},departure);
   if(night.delayMin) message+=` · ${night.reason} +${night.delayMin} min`;
   if(scheduleTypeEl.value==='recurring'){
-    const plan=requiredSlotPlan(from,to,ac,currentScheduleFares(),departure,Number(turnaroundEl.value)||90),missing=[];
+    const requestedTurnaround=Number(turnaroundEl.value)||90;
+    const effectiveTurnaround=effectiveTurnaroundMinutes(ac,to,requestedTurnaround);
+    const plan=requiredSlotPlan(from,to,ac,currentScheduleFares(),departure,effectiveTurnaround),missing=[];
     if(!plan.originRight) missing.push(`${from} ${shortClock(plan.outboundDeparture)}`);
     if(!plan.destinationRight) missing.push(`${to} ${shortClock(plan.returnDeparture)}`);
+    message+=effectiveTurnaround>requestedTurnaround
+      ? ` · requested turn raised to ${effectiveTurnaround} min`
+      : ` · requested turn ${effectiveTurnaround} min`;
     message+=missing.length?` · slot series will be requested: ${missing.join(', ')}`:' · both slot series owned';
   }
   document.getElementById('schedulePreview').innerHTML=`<b>${esc(ac.tail)} · ${esc(from)} → ${esc(to)}</b><br>${esc(message)}`;
@@ -2238,7 +2265,8 @@ function aircraftRequest(){
 function refreshAircraftRequestPreview(){
   const request=aircraftRequest(); if(!request) return;
   const supply=resourceAvailability('aircraft',request.modelName,request.deliveryAirport);
-  document.getElementById('aircraftRequestPreview').innerHTML=`<b>${esc(request.modelName)} · ${request.model.seats} passenger seats · ${esc(request.deliveryAirport)}</b><br>${request.model.maxRangeKm.toLocaleString()} km range · ${supply.available?'available now':`allocation lead about ${supply.leadMin} min`}`;
+  const minimumTurn=minimumTurnMinutes({model:request.modelName},request.deliveryAirport);
+  document.getElementById('aircraftRequestPreview').innerHTML=`<b>${esc(request.modelName)} · ${request.model.seats} passenger seats · ${esc(request.deliveryAirport)}</b><br>${request.model.maxRangeKm.toLocaleString()} km range · min turn ${minimumTurn} min at ${esc(request.deliveryAirport)} · ${supply.available?'available now':`allocation lead about ${supply.leadMin} min`}`;
 }
 function renderManagementAircraft(){
   const list=document.getElementById('managementAircraftList');

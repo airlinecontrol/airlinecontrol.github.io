@@ -114,6 +114,7 @@
     assert(w.lateInboundStatusForFlight(lateOutbound).active,'controlled rotation did not derive a late inbound warning');
     assert(d.querySelector('#schedule-board .connection-line.late-inbound'),'late-inbound connector is not highlighted');
     assert(d.querySelector('#schedule-board .connection-label.late-inbound'),'late-inbound connector label is not highlighted');
+    assert(d.querySelector('#schedule-board .connection-line.short-turn'),'under-minimum turnaround connector is not highlighted');
     w.eval('state.ops.automaticDisruptions=false');
     const weatherAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'DXB');
     const weatherFlight=w.createFlightRecord({aircraftId:weatherAc.id,from:'DXB',to:'DOH',departure:w.simNow()-30*60_000,fare:{economy:140,business:360,first:700}});

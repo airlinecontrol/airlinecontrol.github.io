@@ -503,6 +503,10 @@ body,
   background:#e1bd5a!important;
   box-shadow:0 0 8px rgba(225,189,90,.42);
 }
+.connection-line.short-turn{
+  background:#df5e72!important;
+  box-shadow:0 0 9px rgba(223,94,114,.5);
+}
 .connection-label{
   top:22px!important;
   max-width:74px;
@@ -523,8 +527,14 @@ body,
   color:#efd184;
   box-shadow:0 0 0 1px rgba(239,209,132,.25);
 }
+.connection-label.short-turn{
+  background:#3a1d25;
+  color:#ffc1ca;
+  box-shadow:0 0 0 1px rgba(255,125,145,.3);
+}
 .connection-label.focus{color:#d9f5ff;background:rgba(20,50,62,.9)}
 .connection-label.late-inbound.focus{color:#fff3be;background:#3d3218}
+.connection-label.short-turn.focus{color:#ffe2e6;background:#48222d}
 .crew-duty-bar{
   position:absolute;
   top:var(--crew-duty-top,53px);

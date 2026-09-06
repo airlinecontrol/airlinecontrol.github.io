@@ -174,12 +174,26 @@ function validateAircraftItinerary(ac,proposedLegs=[]){
     .map(f=>({from:f.from,to:flightOperationalDestination(f),departure:flightActualDeparture(f),arrival:flightActualArrival(f),label:f.id,existing:true,departureLogged:Boolean(f.departureLogged)}))
     .concat(proposedLegs)
     .sort((a,b)=>a.departure-b.departure||a.arrival-b.arrival);
-  let location=ac.location,availableAt=now;
+  let location=ac.location,availableAt=now,previousLeg=null;
   for(const leg of legs){
-    if(leg.existing&&leg.departureLogged&&leg.departure<=now&&now<leg.arrival){ location=leg.to; availableAt=leg.arrival; continue; }
-    if(leg.departure<availableAt) return {ok:false,reason:`overlaps ${leg.label||'another planned leg'}`};
+    if(leg.existing&&leg.departureLogged&&leg.departure<=now&&now<leg.arrival){
+      location=leg.to;
+      availableAt=leg.arrival+minimumTurnMinutes(ac,leg.to)*MIN;
+      previousLeg=leg;
+      continue;
+    }
+    if(leg.departure<availableAt){
+      if(previousLeg&&leg.from===previousLeg.to&&leg.departure>=previousLeg.arrival){
+        const actualTurn=Math.round((leg.departure-previousLeg.arrival)/MIN);
+        const minimumTurn=minimumTurnMinutes(ac,leg.from);
+        return {ok:false,reason:`turnaround before ${leg.label||'this leg'} is ${actualTurn} min; ${ac.model} requires ${minimumTurn} min at ${leg.from}`};
+      }
+      return {ok:false,reason:`overlaps ${leg.label||'another planned leg'}`};
+    }
     if(leg.from!==location) return {ok:false,reason:`aircraft will be at ${location}, not ${leg.from}, before ${leg.label||'this leg'}`};
-    location=leg.to; availableAt=leg.arrival;
+    location=leg.to;
+    availableAt=leg.arrival+minimumTurnMinutes(ac,leg.to)*MIN;
+    previousLeg=leg;
   }
   return {ok:true};
 }
@@ -304,11 +318,39 @@ function currentAircraftPosition(ac,t=simNow(),index=null){
 }
 function minimumTurnMinutes(ac,airportCode){
   const model=MODELS[ac.model];
-  const base=model.segment.includes('turboprop')?30:
-    model.segment.includes('Regional jet')?35:
-      model.segment.includes('widebody')?60:40;
+  const segment=String(model?.segment||'');
+  const base=Number(model?.minimumTurnMin)||(
+    segment.includes('turboprop')?30:
+      segment.includes('Regional jet')?35:
+        segment.includes('widebody')?60:40
+  );
   const congested=['LHR','JFK','AMS','CDG','HND'].includes(airportCode)?10:0;
   return base+congested;
+}
+
+function effectiveTurnaroundMinutes(ac,airportCode,requestedMin=0){
+  return Math.max(Number(requestedMin)||0,minimumTurnMinutes(ac,airportCode));
+}
+
+function turnaroundGapInfo(previous,next,aircraft=null){
+  if(!previous||!next) return null;
+  const ac=aircraft||state.aircraft.find(item=>item.id===next.aircraftId||item.id===previous.aircraftId);
+  if(!ac) return null;
+  const previousDestination=flightOperationalDestination(previous);
+  const sameStation=previousDestination===next.from;
+  const minimumMin=minimumTurnMinutes(ac,next.from);
+  const actualGapMin=Math.round((flightActualDeparture(next)-flightActualArrival(previous))/MIN);
+  const plannedGapMin=Math.round((next.departure-previous.arrival)/MIN);
+  const limitingGapMin=Math.min(actualGapMin,plannedGapMin);
+  const belowMinimum=sameStation&&limitingGapMin<minimumMin;
+  const shortageMin=Math.max(0,minimumMin-limitingGapMin);
+  const limitingGapLabel=limitingGapMin<0?'overlap':`${limitingGapMin} min`;
+  return {
+    sameStation,minimumMin,actualGapMin,plannedGapMin,belowMinimum,shortageMin,
+    title:belowMinimum
+      ? `${previous.id} to ${next.id}: turnaround ${limitingGapLabel}, minimum ${minimumMin} min for ${ac.model} · planned ${plannedGapMin} min · actual ${actualGapMin} min`
+      : `${previous.id} to ${next.id}: ground time ${actualGapMin} min, minimum ${minimumMin} min for ${ac.model}`
+  };
 }
 
 function previousAircraftFlight(flight){
@@ -3892,6 +3934,9 @@ function ensureRecurringFlights(){
 
   for(const svc of state.services){
     if(!svc.active) continue;
+    const ac=state.aircraft.find(a=>a.id===svc.aircraftId);
+    if(!ac){ svc.active=false; changed=true; continue; }
+    const turnMin=effectiveTurnaroundMinutes(ac,svc.to,svc.turnaroundMin);
     const serviceFlights=state.flights.filter(f=>f.serviceId===svc.id).sort((a,b)=>a.departure-b.departure);
     const outboundFlights=serviceFlights.filter(f=>f.serviceLeg==='outbound');
     const returnFlights=serviceFlights.filter(f=>f.serviceLeg==='return');
@@ -3903,7 +3948,7 @@ function ensureRecurringFlights(){
       );
       if(alreadyPaired) continue;
       const destinationRight=slotRightById(svc.destinationSlotRightId);
-      const earliestReturn=outbound.arrival+svc.turnaroundMin*MIN;
+      const earliestReturn=outbound.arrival+turnMin*MIN;
       const isFirst=outbound.departure===svc.firstDeparture;
       const returnDeparture=isFirst && Number.isFinite(svc.firstReturnDeparture)
         ? svc.firstReturnDeparture
@@ -3911,8 +3956,8 @@ function ensureRecurringFlights(){
           ? timestampAtMinuteAfter(earliestReturn,destinationRight.minuteOfDay)
           : alignTimestampToAirportSlot(earliestReturn,svc.to);
       if(returnDeparture<simNow() || (nextOutbound && returnDeparture>=nextOutbound.departure)) continue;
-      const returnEstimate=estimateFlight(svc.to,svc.from,state.aircraft.find(a=>a.id===svc.aircraftId),svc.fares||svc.fare,{departure:returnDeparture});
-      if(!validateAircraftItinerary(state.aircraft.find(a=>a.id===svc.aircraftId),[{
+      const returnEstimate=estimateFlight(svc.to,svc.from,ac,svc.fares||svc.fare,{departure:returnDeparture});
+      if(!validateAircraftItinerary(ac,[{
         from:svc.to,to:svc.from,departure:returnDeparture,arrival:returnDeparture+returnEstimate.duration,label:`${svc.id} return`
       }]).ok) continue;
       createFlightRecord({
@@ -3923,12 +3968,9 @@ function ensureRecurringFlights(){
     }
     let guard=0;
     while(svc.nextDeparture<=horizon && guard<600){
-      const ac=state.aircraft.find(a=>a.id===svc.aircraftId);
-      if(!ac){ svc.active=false; changed=true; break; }
-
       const outboundEstimate=estimateFlight(svc.from,svc.to,ac,svc.fares||svc.fare,{departure:svc.nextDeparture});
       const destinationRight=slotRightById(svc.destinationSlotRightId);
-      const earliestReturn=svc.nextDeparture+outboundEstimate.duration+svc.turnaroundMin*MIN;
+      const earliestReturn=svc.nextDeparture+outboundEstimate.duration+turnMin*MIN;
       const firstRotation=svc.lastGeneratedDeparture===null && svc.nextDeparture===svc.firstDeparture;
       const returnDeparture=firstRotation && Number.isFinite(svc.firstReturnDeparture)
         ? svc.firstReturnDeparture
@@ -4286,7 +4328,8 @@ function scheduleFlight(){
   const rule=repeatRuleEl.value;
   if(rule==='custom' && (!operatingCalendar.days.length||!operatingCalendar.months.length))
     return toast('Select at least one operating weekday and one operating month.');
-  const turnaroundMin=Number(turnaroundEl.value)||90;
+  const requestedTurnaroundMin=Number(turnaroundEl.value)||90;
+  const turnaroundMin=effectiveTurnaroundMinutes(ac,to,requestedTurnaroundMin);
   let slotPlan=requiredSlotPlan(from,to,ac,fares,departure,turnaroundMin);
   const inbound=estimateFlight(to,from,ac,fares,{departure:slotPlan.returnDeparture});
   const alignedDeparture=slotPlan.outboundDeparture;
@@ -4330,7 +4373,7 @@ function scheduleFlight(){
   ];
   const svc={
     id:'SCH'+state.nextService++,
-    aircraftId:ac.id,from,to,fare:fares.economy,fares,rule,turnaroundMin,
+    aircraftId:ac.id,from,to,fare:fares.economy,fares,rule,turnaroundMin,requestedTurnaroundMin,
     operatingDays:rule==='custom'?operatingCalendar.days:null,
     operatingMonths:rule==='custom'?operatingCalendar.months:null,
     firstDeparture:alignedDeparture,firstReturnDeparture:slotPlan.returnDeparture,
@@ -4345,7 +4388,7 @@ function scheduleFlight(){
   selectedAircraftId=ac.id;
   AeroServices.commit();
   closeFlightPlanningWidget();
-  toast(`${svc.id} is active. Future round trips will be generated automatically.${personnelRequestToastSuffix(personnelRequests)}`);
+  toast(`${svc.id} is active. Future round trips will be generated automatically.${turnaroundMin>requestedTurnaroundMin?` Turn raised to ${turnaroundMin} min minimum.`:''}${personnelRequestToastSuffix(personnelRequests)}`);
 }
 
 

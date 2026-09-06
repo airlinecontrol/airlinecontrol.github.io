@@ -506,6 +506,44 @@ const MODELS = {
   '777-200LR':{manufacturer:'Boeing',segment:'Ultra-long-range widebody · used market',seats:317,speedKmh:905,maxRangeKm:15843,price:72_000_000,costPerKm:20.6},
   '777-300ER':{manufacturer:'Boeing',segment:'Large widebody · used market',seats:396,speedKmh:905,maxRangeKm:13650,price:82_000_000,costPerKm:23.2}
 };
+const AIRCRAFT_MODEL_MIN_TURNS = {
+  'ATR 42-600':25,
+  'ATR 72-600':30,
+  'E170':35,
+  'E175':35,
+  'E190':40,
+  'E195':40,
+  'E190-E2':40,
+  'E195-E2':40,
+  'CRJ200':30,
+  'CRJ700':35,
+  'CRJ900':35,
+  'CRJ1000':35,
+  'A220-100':40,
+  'A220-300':40,
+  'A319neo':40,
+  'A320neo':45,
+  'A321neo':50,
+  'A321XLR':55,
+  'A330-800':90,
+  'A330-900':90,
+  'A350-900':105,
+  'A350-1000':110,
+  'A380-800':120,
+  '737-7':40,
+  '737-8':45,
+  '737-9':50,
+  '737-10':50,
+  '787-8':95,
+  '787-9':100,
+  '787-10':105,
+  '777-200ER':105,
+  '777-200LR':110,
+  '777-300ER':115
+};
+for(const [modelName,minimumTurnMin] of Object.entries(AIRCRAFT_MODEL_MIN_TURNS)){
+  if(MODELS[modelName]) MODELS[modelName].minimumTurnMin=minimumTurnMin;
+}
 const CABIN_CLASSES = {
   economy:{label:'Economy',space:1,baseFareMultiplier:1,demandScale:1,elasticity:.9},
   business:{label:'Business',space:2,baseFareMultiplier:2.6,demandScale:.72,elasticity:.55},
@@ -641,7 +679,12 @@ function requestSlotRight(airportCode,ts,{silent=false,source='operations reques
 function requiredSlotPlan(from,to,ac,fare,departure,turnaroundMin){
   const out=estimateFlight(from,to,ac,fare);
   const outboundDeparture=alignTimestampToAirportSlot(departure,from);
-  const earliestReturn=outboundDeparture+out.duration+turnaroundMin*MIN;
+  const requestedTurnaroundMin=Number(turnaroundMin)||0;
+  const fallbackMinimum=Number(MODELS[ac?.model]?.minimumTurnMin)||0;
+  const effectiveTurnaroundMin=typeof effectiveTurnaroundMinutes==='function'
+    ? effectiveTurnaroundMinutes(ac,to,requestedTurnaroundMin)
+    : Math.max(requestedTurnaroundMin,fallbackMinimum);
+  const earliestReturn=outboundDeparture+out.duration+effectiveTurnaroundMin*MIN;
   const returnDeparture=alignTimestampToAirportSlot(earliestReturn,to);
   return {
     outboundDeparture,
