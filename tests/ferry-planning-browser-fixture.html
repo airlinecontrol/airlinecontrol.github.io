@@ -1,0 +1,56 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AeroSim ferry planning fixture</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result');
+  const frame=document.getElementById('game');
+  const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+  try{
+    localStorage.removeItem('aerosim_mvp_v6');
+    localStorage.removeItem('aerosim_occ_ui_v1');
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../aerosim-next.html?fixture=ferry-planning&cache='+Date.now();
+    await loaded;
+    const w=frame.contentWindow,d=frame.contentDocument;
+    w.resetLocalSave();
+    await wait(150);
+
+    const now=w.simNow();
+    const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    w.refreshAircraftSelect(true);
+
+    const cancelled=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'AMS',departure:now+30*60_000,fare:{economy:120,business:300,first:600}});
+    cancelled.cancelled=true;
+    w.recalculateOperations();
+    assert(w.aircraftProjectedLocation(ac,now+3*60*60_000).location==='FRA','cancelled flight changed projected aircraft location');
+
+    cancelled.cancelled=false;
+    const futureLocation=w.aircraftProjectedLocation(ac,now+3*60*60_000);
+    assert(futureLocation.location==='AMS','valid future flight did not project aircraft to destination');
+    d.getElementById('scheduleType').value='ferry';
+    d.getElementById('aircraft').value=ac.id;
+    d.getElementById('departureTime').value=w.hhmm(now+3*60*60_000);
+    d.getElementById('destination').value='CDG';
+    w.refreshScheduleMode();
+    assert(d.getElementById('origin').value==='AMS','ferry planner did not default to projected aircraft location');
+
+    const stale=w.createFlightRecord({aircraftId:ac.id,from:'AMS',to:'LHR',departure:now-30*60_000,fare:{economy:120,business:300,first:600}});
+    stale.departureLogged=false;
+    stale.actualDeparture=now-20*60_000;
+    stale.actualArrival=now+50*60_000;
+    stale.slotMissed=true;
+    const invalid=w.validateAircraftItinerary(ac,[{from:'LHR',to:'CDG',departure:now+70*60_000,arrival:now+140*60_000,label:'test ferry'}]);
+    assert(!invalid.ok,'stale unflown missed flight was allowed to position the aircraft at its destination');
+    assert(!invalid.reason.includes('aircraft will be at LHR'),'stale unflown missed flight teleported the aircraft to LHR');
+
+    result.textContent='PASS ferry planning location validated';
+  }catch(error){
+    console.error(error);
+    result.textContent='FAIL\n'+(error?.stack||error);
+  }
+})();
+</script>

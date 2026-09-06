@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>AeroSim — Operations</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
-  <link rel="stylesheet" href="aerosim-next.css?v=1.5.7" />
+  <link rel="stylesheet" href="aerosim-next.css?v=1.8.14" />
 </head>
 <body>
 <div id="app">
@@ -22,17 +22,10 @@
   <main id="operationsView" class="operations-shell">
     <aside class="operations-rail" aria-label="Flights, aircraft, and selected details">
       <div id="contextPane" class="context-pane selection-pane" aria-live="polite" hidden></div>
-      <span id="flightListCount" hidden>0</span>
       <section class="rail-section flights-section" data-rail-widget="activeFlights">
         <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="activeFlights" aria-expanded="true" aria-controls="rail-body-activeFlights"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Active</h2></span><span class="occ-widget-state"><b id="activeFlightCount">0</b></span></button></header>
         <div id="rail-body-activeFlights" class="rail-widget-body">
         <div id="activeFlightList" class="plain-list"></div>
-        </div>
-      </section>
-      <section class="rail-section flights-section" data-rail-widget="upcomingFlights">
-        <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="upcomingFlights" aria-expanded="true" aria-controls="rail-body-upcomingFlights"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Upcoming · 24 hours</h2></span><span class="occ-widget-state"><b id="upcomingFlightCount">0</b></span></button></header>
-        <div id="rail-body-upcomingFlights" class="rail-widget-body">
-        <div id="upcomingFlightList" class="plain-list"></div>
         </div>
       </section>
       <section class="rail-section aircraft-section" data-rail-widget="aircraft">
@@ -50,11 +43,13 @@
         <div id="toast" class="toast" role="status" aria-live="polite"></div>
       </div>
       <div id="workspace-splitter" role="separator" aria-orientation="horizontal" aria-label="Resize map and schedule" tabindex="0"></div>
+      <section id="operationFilterBar" class="operation-filter-bar" aria-label="Operations filters"></section>
       <section id="weatherStrip" class="weather-strip" aria-label="Airport weather"></section>
       <div id="schedule-pane">
         <div class="schedule-toolbar">
           <div><b>Schedule</b><span id="schedule-window-label"></span></div>
-          <div class="schedule-legend"><span><i></i>slot</span><span><i class="missed"></i>missed</span><span><i class="new"></i>new</span></div>
+          <div class="schedule-legend"><span><i></i>slot</span><span><i class="risk"></i>risk</span><span><i class="missed"></i>missed</span><span><i class="new"></i>new</span></div>
+          <div id="scheduleAlerts" class="schedule-alerts" aria-live="polite"></div>
           <div class="toolbar-spacer"></div>
           <button id="schedulePrevBtn" class="small-button" type="button">← 12h</button>
           <button id="scheduleNowBtn" class="small-button" type="button">Now</button>
@@ -76,7 +71,6 @@
       <button class="management-nav-item active" type="button" data-management-page="planning">Flight planning</button>
       <button class="management-nav-item" type="button" data-management-page="aircraft">Aircraft</button>
       <button class="management-nav-item" type="button" data-management-page="personnel">Personnel</button>
-      <button class="management-nav-item" type="button" data-management-page="slots">Slots</button>
       <button class="management-nav-item" type="button" data-management-page="relocation">Relocation</button>
       <button class="management-nav-item" type="button" data-management-page="maintenance">Maintenance</button>
       <button class="management-nav-item" type="button" data-management-page="settings">Local data</button>
@@ -97,7 +91,7 @@
         <div id="recurringOptions" hidden></div><div id="operatingCalendar" hidden></div><div id="operatingCalendarSummary" hidden></div>
         <div id="routeDemandPanel" hidden></div>
         <div id="schedulePreview" class="form-feedback"></div>
-        <div class="form-actions"><button id="requestSlotsBtn" class="secondary-button" type="button" hidden>Request missing slots</button><button id="scheduleBtn" class="primary-button" type="button">Schedule flight</button></div>
+        <div class="form-actions"><button id="scheduleBtn" class="primary-button" type="button">Schedule flight</button></div>
       </section>
 
       <section class="management-page" data-management-content="aircraft" hidden>
@@ -125,14 +119,6 @@
         <div class="data-section"><h2>Airport rosters</h2><div id="managementPersonnelList" class="data-list"></div></div>
       </section>
 
-      <section class="management-page" data-management-content="slots" hidden>
-        <header class="page-heading"><span>Resources</span><h1>Departure slot series</h1><p>Request recurring departure opportunities for schedule planning.</p></header>
-        <div class="form-grid compact-form"><label>Airport<select id="slotAirport"></select></label><label>Departure time<input id="slotTime" type="time" step="300" value="08:00" /></label></div>
-        <div id="slotBuyPreview" class="form-feedback"></div>
-        <div class="form-actions"><button id="requestSlotBtn" class="primary-button" type="button">Request slot series</button></div>
-        <div class="data-section"><h2>Slot portfolio</h2><div id="managementSlotList" class="data-list"></div></div>
-      </section>
-
       <section class="management-page" data-management-content="relocation" hidden>
         <header class="page-heading"><span>Network</span><h1>Relocate personnel</h1><p>Move employees on your own services or an external positioning service.</p></header>
         <div class="form-grid compact-form">
@@ -152,7 +138,7 @@
       </section>
 
       <section class="management-page" data-management-content="settings" hidden>
-        <header class="page-heading"><span>Browser</span><h1>Local data</h1><p>The legacy and new interfaces use the same local airline save.</p></header>
+        <header class="page-heading"><span>Browser</span><h1>Local data</h1><p>The current operations interface uses this local airline save.</p></header>
         <button id="resetBtn" class="danger-button" type="button">Reset local airline</button><div id="resetStatus" class="form-feedback"></div>
       </section>
     </section>
@@ -160,13 +146,17 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script src="js/management.js?v=14.0.0"></script>
-<script src="js/core.js?v=14.1.0"></script>
+<script src="js/management.js?v=14.3.3"></script>
+<script src="js/core.js?v=14.4.5"></script>
+<script src="js/app-services.js?v=14.2.1"></script>
+<script src="js/weather-engine.js?v=14.3.3"></script>
 <script src="js/ground-operations.js?v=14.0.0"></script>
-<script src="js/operational-intelligence.js?v=14.0.0"></script>
-<script src="js/operational-workflows.js?v=14.1.0"></script>
-<script src="js/simulation.js?v=14.1.0"></script>
-<script src="js/ui-next.js?v=1.6.1"></script>
-<script src="js/map.js?v=14.0.0"></script>
+<script src="js/operational-intelligence.js?v=14.0.2"></script>
+<script src="js/operational-workflows.js?v=14.1.12"></script>
+<script src="js/simulation.js?v=14.6.11"></script>
+<script src="js/incident-resources.js?v=14.2.10"></script>
+<script src="js/incident-consequences.js?v=14.2.8"></script>
+<script src="js/ui-next.js?v=1.10.26"></script>
+<script src="js/map.js?v=14.3.7"></script>
 </body>
 </html>

@@ -8,17 +8,18 @@ Treat this file as the primary project-context document before changing code. Re
 
 The current prototype source is split into:
 
-- `airline-manager-mvp-v9.2.html`
-- `aerosim.css`
 - `aerosim-next.html`
 - `aerosim-next.css`
+- `js/app-services.js`
 - `js/management.js`
 - `js/core.js`
 - `js/ground-operations.js`
+- `js/weather-engine.js`
 - `js/operational-intelligence.js`
 - `js/operational-workflows.js`
+- `js/incident-resources.js`
+- `js/incident-consequences.js`
 - `js/simulation.js`
-- `js/ui.js`
 - `js/ui-next.js`
 - `js/map.js`
 
@@ -92,13 +93,13 @@ These are primarily useful for testing long-running scheduling and disruption be
 
 The current prototype uses browser-native HTML, CSS, and classic JavaScript files:
 
-- `airline-manager-mvp-v9.2.html` for the HTML UI
-- `aerosim.css` for styling
+- `aerosim-next.html` for the HTML UI
+- `aerosim-next.css` for styling
 - `js/management.js` for pure management-domain calculations
 - `js/core.js` for catalog data, utilities, state, migration, and persistence
 - `js/ground-operations.js` for pure timestamp-derived pre-flight, turnaround, and post-flight task models
 - `js/simulation.js` for schedules, flights, demand, costs, staffing, and operations
-- `js/ui.js` for DOM references, rendering, controls, and layout behavior
+- `js/ui-next.js` for DOM references, rendering, controls, and layout behavior
 - `js/map.js` for Leaflet, aircraft markers, map overlays, and application bootstrap
 - Leaflet map integration
 
@@ -109,12 +110,11 @@ External browser dependencies:
 
 The map therefore needs internet access, but game state and simulation logic are local.
 
-## Parallel quieter interface
+## Current operations interface
 
-`aerosim-next.html` is a second, intentionally parallel presentation over the same simulation and
-the same `aerosim_mvp_v6` local save. It does not replace or redirect the legacy
-`airline-manager-mvp-v9.2.html` page. Keep both runnable while the new information architecture is
-evaluated.
+`aerosim-next.html` is the supported presentation over the simulation and the
+`aerosim_mvp_v6` local save. The previous `airline-manager-mvp-v9.2.html` legacy interface has
+been removed.
 
 The new interface reuses `management.js`, `core.js`, the operations modules, `simulation.js`, and
 `map.js`; only its HTML shell, CSS, and UI adapter are separate. Its Operations workspace has an
@@ -1130,7 +1130,6 @@ Current structural UI uses signatures:
 ```js
 aircraftSelectSignature
 servicesUiSignature
-slotPortfolioSignature
 ```
 
 Functions such as:
@@ -1138,7 +1137,6 @@ Functions such as:
 ```js
 refreshAircraftSelect(force=false)
 refreshServices(force=false)
-refreshSlotPortfolio(force=false)
 refreshSelectedPanel(force=false)
 ```
 
@@ -1205,7 +1203,6 @@ frequent:
 only when data changes:
   select option lists
   recurring service cards
-  slot portfolio
   replacement-aircraft controls
 ```
 
@@ -1469,12 +1466,11 @@ Verify at minimum:
 7. scheduler select values remain stable and do not flicker
 8. departure and destination do not rewrite each other
 9. recurring schedule can be created when slot series are assigned
-10. missing slot series can be requested
-11. slot portfolio updates
-12. delay can shift actual flight time without modifying planned time
-13. missed slot creates NEW operational slot marker
-14. substitute-aircraft flow works when a suitable spare exists
-15. split-pane resize keeps map valid
+10. missing slot series can be requested during schedule creation
+11. delay can shift actual flight time without modifying planned time
+12. missed slot creates NEW operational slot marker
+13. substitute-aircraft flow works when a suitable spare exists
+14. split-pane resize keeps map valid
 16. reload preserves state
 17. all five incident types expose valid decisions and persist their outcomes
 18. aircraft and personnel requests are assigned immediately
@@ -1562,7 +1558,7 @@ The current prototype has evolved iteratively from direct user testing. Preserve
 Before editing anything, Codex should:
 
 1. read this `AGENTS.md`
-2. read `airline-manager-mvp-v9.2.html` completely
+2. read `aerosim-next.html` and `js/ui-next.js` for the current UI surface
 3. identify simulation/state/UI boundaries
 4. run a JavaScript syntax check
 5. open/run the app if practical

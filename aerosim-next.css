@@ -23,7 +23,7 @@ button,input,select{font:inherit}button{cursor:pointer}button:disabled{cursor:de
 #map-pane{position:relative;min-height:180px;flex:0 0 50%;overflow:hidden}#map{position:absolute;inset:0}
 #workspace-splitter{flex:0 0 7px;position:relative;z-index:1000;cursor:row-resize;background:var(--bg);touch-action:none}#workspace-splitter::after{content:"";position:absolute;left:50%;top:50%;width:46px;height:2px;transform:translate(-50%,-50%);background:#405763;opacity:.35}#workspace-splitter:hover::after,#workspace-splitter.dragging::after{background:var(--accent);opacity:1}
 #schedule-pane{min-height:150px;flex:1;display:flex;flex-direction:column;overflow:hidden;background:#09141b}.schedule-toolbar{flex:none;display:flex;align-items:center;gap:8px;min-height:42px;padding:5px 8px;border-bottom:1px solid var(--line);background:#0b171f}.schedule-toolbar>div:first-child b,.schedule-toolbar>div:first-child span{display:block}.schedule-toolbar>div:first-child b{font-size:11px}.schedule-toolbar>div:first-child span{color:var(--muted);font-size:8px}.toolbar-spacer{flex:1}.small-button{min-height:28px;padding:4px 8px;border:1px solid #2d4653;border-radius:5px;background:#11232d;color:#cbd9df;font-size:9px}.small-button:hover{background:#18313e}.schedule-toolbar select{width:auto;min-height:28px;padding:4px 6px;border:1px solid #2d4653;border-radius:5px;background:#11232d;color:var(--text);font-size:9px}
-.schedule-legend{display:flex;align-items:center;gap:8px;margin-left:5px}.schedule-legend span{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:8px}.schedule-legend i{width:2px;height:12px;background:#7f9aaa}.schedule-legend i.missed{background:#c75d70}.schedule-legend i.new{background:#e7bd5b}
+.schedule-legend{display:flex;align-items:center;gap:8px;margin-left:5px}.schedule-legend span{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:8px}.schedule-legend i{width:2px;height:12px;background:#7f9aaa}.schedule-legend i.risk{background:#b5963e}.schedule-legend i.missed{background:#c75d70}.schedule-legend i.new{background:#e7bd5b}
 #schedule-scroll{position:relative;flex:1;min-height:0;overflow:auto;background:#081219}#schedule-board{position:relative;min-width:100%;min-height:100%}
 .sched-header-row,.sched-aircraft-row{display:flex;position:relative}.sched-header-row{height:30px;position:sticky;top:0;z-index:40;background:#0b171f;border-bottom:1px solid var(--line)}.sched-aircraft-row{height:60px;border-bottom:1px solid #192a33}.sched-aircraft-row.selected-row{background:rgba(97,203,234,.06);box-shadow:inset 3px 0 var(--accent)}
 .sched-label{position:sticky;left:0;z-index:35;flex:0 0 122px;width:122px;padding:7px 8px;background:#0b171f;border-right:1px solid var(--line);overflow:hidden}.sched-header-row .sched-label{z-index:50}.sched-tail{font-size:10px;font-weight:850}.sched-model{overflow:hidden;color:var(--muted);font-size:8px;text-overflow:ellipsis;white-space:nowrap}.sched-timearea{position:relative;flex:none;height:100%}.sched-gridline{position:absolute;top:0;bottom:0;width:1px;background:#192a33;pointer-events:none}.sched-gridline.major{background:#2b414c}.sched-time-label{position:absolute;top:7px;transform:translateX(-50%);color:#879ba7;font-size:9px;white-space:nowrap}.sched-day-label{position:absolute;inset-block:0;border-left:1px solid #40535e;pointer-events:none}
@@ -32,7 +32,7 @@ button,input,select{font:inherit}button{cursor:pointer}button:disabled{cursor:de
 .now-line{position:absolute;inset-block:0;width:2px;z-index:30;background:var(--warn);pointer-events:none}.now-label{position:absolute;top:3px;z-index:55;transform:translateX(-50%);padding:1px 4px;border-radius:3px;background:var(--warn);color:#201900;font-size:8px;font-weight:900}.slot-marker{position:absolute;top:1px;width:2px;height:56px;z-index:18;background:#738d99}.slot-marker::before{content:"";position:absolute;left:-4px;top:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid #738d99}.slot-marker.planned.missed{background:#bd5f70}.slot-marker.planned.missed::before{border-top-color:#bd5f70}.slot-marker.reassigned{z-index:20;background:var(--warn)}.slot-marker.reassigned::before{border-top-color:var(--warn)}.slot-label{position:absolute;left:5px;top:0;color:#9eb4be;font-size:7px;font-weight:850;white-space:nowrap}.slot-marker.planned.missed .slot-label{color:#f0a8b3}.slot-marker.reassigned .slot-label{color:#ead58d}.schedule-empty{padding:20px;color:var(--muted)}
 
 .map-hud{position:absolute;left:10px;bottom:10px;z-index:1000}.toast{position:absolute;left:50%;top:12px;z-index:1050;max-width:min(500px,80%);transform:translateX(-50%);padding:8px 11px;border:1px solid #345464;border-radius:6px;background:#0d1c24;box-shadow:0 12px 28px rgba(0,0,0,.4);opacity:0;pointer-events:none;transition:.18s}.toast.show{opacity:1}
-.leaflet-control-attribution{background:rgba(7,16,24,.82)!important;color:#8197a2!important;font-size:9px!important}.leaflet-control-attribution a{color:#a9d3e2!important}.leaflet-bar a{border-bottom-color:#29404f!important;background:#0b171f!important;color:#e9f2f7!important}.leaflet-bar a:hover{background:#152b39!important}.airport-dot{width:8px;height:8px;border:2px solid #071018;border-radius:50%;background:#e4eef3;box-shadow:0 0 0 1px rgba(255,255,255,.3)}.airport-label{margin-left:-4px;margin-top:2px;color:#e8f1f5;font-size:9px;font-weight:800;text-shadow:0 1px 3px #000;white-space:nowrap}.plane-shell{position:relative;width:42px;height:42px}.plane-halo{position:absolute;left:7px;top:7px;width:28px;height:28px;border-radius:50%;background:rgba(97,203,234,.18)}.plane-shell.ground .plane-halo{background:rgba(135,155,167,.12)}.plane-shell.selected .plane-halo{box-shadow:0 0 0 2px var(--accent),0 0 13px rgba(97,203,234,.45)}.plane-glyph{position:absolute;left:9px;top:7px;width:24px;height:24px;display:grid;place-items:center;color:#f4fbff;font-size:22px;text-shadow:0 1px 3px #000;transform-origin:50% 50%}.plane-label-map{position:absolute;left:38px;top:12px;padding:1px 4px;border:1px solid rgba(80,107,124,.7);border-radius:3px;background:rgba(7,16,24,.78);color:#f2f8fb;font-size:9px;font-weight:700;white-space:nowrap}.leaflet-tooltip.airport-tip{border:1px solid #35566b;background:#0c1c27;color:#e9f2f7}
+.leaflet-control-attribution{background:rgba(7,16,24,.82)!important;color:#8197a2!important;font-size:9px!important}.leaflet-control-attribution a{color:#a9d3e2!important}.leaflet-bar a{border-bottom-color:#29404f!important;background:#0b171f!important;color:#e9f2f7!important}.leaflet-bar a:hover{background:#152b39!important}.airport-dot{width:8px;height:8px;border:2px solid #071018;border-radius:50%;background:#e4eef3;box-shadow:0 0 0 1px rgba(255,255,255,.3)}.airport-label{margin-left:-4px;margin-top:2px;color:#e8f1f5;font-size:9px;font-weight:800;text-shadow:0 1px 3px #000;white-space:nowrap}.airport-weather-halo{filter:drop-shadow(0 0 8px rgba(217,185,95,.2))}.airport-weather-severe{filter:drop-shadow(0 0 12px rgba(230,107,93,.45))}.weather-cell{mix-blend-mode:screen}.weather-cell-severe{filter:drop-shadow(0 0 12px rgba(230,107,93,.28))}.route-weather{stroke-linecap:round}.plane-shell{position:relative;width:42px;height:42px}.plane-halo{position:absolute;left:7px;top:7px;width:28px;height:28px;border-radius:50%;background:rgba(97,203,234,.18)}.plane-shell.ground .plane-halo{background:rgba(135,155,167,.12)}.plane-shell.selected .plane-halo{box-shadow:0 0 0 2px var(--accent),0 0 13px rgba(97,203,234,.45)}.plane-glyph{position:absolute;left:9px;top:7px;width:24px;height:24px;display:grid;place-items:center;color:#f4fbff;font-size:22px;text-shadow:0 1px 3px #000;transform-origin:50% 50%}.plane-label-map{position:absolute;left:38px;top:12px;padding:1px 4px;border:1px solid rgba(80,107,124,.7);border-radius:3px;background:rgba(7,16,24,.78);color:#f2f8fb;font-size:9px;font-weight:700;white-space:nowrap}.leaflet-tooltip.airport-tip{border:1px solid #35566b;background:#0c1c27;color:#e9f2f7}
 
 .context-pane{min-height:100%;padding:14px}.context-empty{display:grid;place-items:center;align-content:center;min-height:240px;color:var(--muted);text-align:center}.context-empty span{font-size:24px}.context-empty b{margin-top:8px;color:#bac9d0;font-size:12px}.context-empty p{max-width:220px;margin:4px 0;font-size:9px}
 .context-header{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding-bottom:11px;border-bottom:1px solid var(--line)}.context-eyebrow{color:var(--muted);font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}.context-header h1{margin:2px 0 0;font-size:20px;line-height:1.15}.context-header p{margin:3px 0 0;color:var(--muted);font-size:9px}.icon-button{width:27px;height:27px;padding:0;border:1px solid var(--line);border-radius:5px;background:transparent;color:var(--muted);font-size:17px}.icon-button:hover{color:var(--text);background:var(--surface-2)}
@@ -42,7 +42,7 @@ button,input,select{font:inherit}button{cursor:pointer}button:disabled{cursor:de
 .ground-overview{margin-top:3px}.ground-head{display:flex;justify-content:space-between;gap:8px;font-size:9px}.ground-head span{color:var(--muted)}.progress-track{height:5px;margin:7px 0 9px;background:#1b2d36;overflow:hidden}.progress-track>span{display:block;height:100%;background:var(--accent)}.task-progress-row{padding:6px 0;border-top:1px solid #1a2a33}.task-progress-row:first-of-type{border-top:0}.task-progress-row>div{display:flex;justify-content:space-between;gap:7px;font-size:8px}.task-progress-row em{color:var(--muted);font-style:normal}.task-progress-row .progress-track{height:3px;margin:4px 0 0}.task-progress-row.complete .progress-track>span{background:var(--good)}
 .ground-task-toggle{padding:3px 0;border:0;background:transparent;color:#9bb0ba;font-size:8px}.ground-task-toggle:hover{color:var(--accent)}.ground-task-toggle::after{content:" ↓"}.ground-task-toggle[aria-expanded="true"]::after{content:" ↑"}.ground-task-list{margin-top:4px;border-top:1px solid #1a2a33}
 .primary-button,.secondary-button,.danger-button{min-height:32px;padding:6px 10px;border-radius:5px;font-size:10px;font-weight:800}.primary-button{border:1px solid #4a8ba3;background:#1a5267;color:#effbff}.primary-button:hover{background:#226b83}.secondary-button{border:1px solid #385361;background:#152833;color:#d1dfe5}.secondary-button:hover{background:#1b3542}.danger-button{border:1px solid #713947;background:#351d24;color:#f1b5bf}.danger-button:hover{background:#49232d}
-.task-waiting{padding:8px 0}.task-waiting b,.task-waiting span{display:block}.task-waiting span{margin-top:3px;color:#aabac2;font-size:9px}.task-waiting em{color:#d9c279;font-style:normal}.task-form{padding-top:8px}.task-form label{display:block;margin-bottom:7px;color:#aabac2;font-size:8px}.task-form select{margin-top:4px}.choice-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}.choice-button{width:100%;padding:8px;border:1px solid #334b58;border-radius:4px;background:#162730;color:var(--text);text-align:left;font-size:9px}.choice-button:hover{border-color:#477184;background:#1a303a}
+.task-waiting{padding:8px 0}.task-waiting b,.task-waiting span{display:block}.task-waiting span{margin-top:3px;color:#aabac2;font-size:9px}.task-waiting em{color:#d9c279;font-style:normal}.task-form{padding-top:8px}.task-form label{display:block;margin-bottom:7px;color:#aabac2;font-size:8px}.task-form select{margin-top:4px}.choice-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}.choice-button{width:100%;padding:8px;border:1px solid #334b58;border-radius:4px;background:#162730;color:var(--text);text-align:left;font-size:9px}.choice-button:hover{border-color:#477184;background:#1a303a}.choice-button.danger{border-color:#6c3946;background:#2a1b22;color:#f0c2ca}.choice-button.danger:hover{border-color:#9a4e61;background:#3a2029}
 
 .context-pane.context-compact{min-height:0;padding:12px 14px}.context-pane.context-compact .context-header{padding-bottom:8px}.context-pane.context-compact .context-header h1{font-size:17px}.context-pane.context-compact .attention-summary{margin:9px 0;padding-top:7px;padding-bottom:8px}.context-pane.context-compact .fact-grid{margin:8px 0}.context-pane.context-compact .fact{padding:6px}.compact-status-lines{display:grid;border-top:1px solid var(--line)}.compact-status-line{display:grid;grid-template-columns:78px minmax(0,1fr) auto;align-items:center;gap:7px;padding:6px 0;border-bottom:1px solid #192a33;font-size:8px}.compact-status-line>span{color:var(--muted)}.compact-status-line>b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.compact-status-line .progress-track{width:52px;margin:0}.compact-details-action{width:100%;margin-top:8px}
 
@@ -186,6 +186,26 @@ button,input,select{font:inherit}button{cursor:pointer}button:disabled{cursor:de
   box-shadow:none!important;
   border:0!important;
 }
+.department-task-object-link{
+  display:block;
+  max-width:100%;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:#a9cfdd;
+  font:inherit;
+  font-size:10px;
+  font-weight:750;
+  text-align:left;
+  text-decoration:underline;
+  text-decoration-thickness:1px;
+  text-underline-offset:2px;
+  cursor:pointer;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.department-task-object-link:hover{color:#e9fbff}
 .list-row:hover{background:#10242d!important}
 .list-row.selected{background:#14313d!important}
 .inline-task,
@@ -194,6 +214,11 @@ button,input,select{font:inherit}button{cursor:pointer}button:disabled{cursor:de
 .desk-action-link{padding:0!important;background:transparent!important;color:#b7ddea!important}
 .desk-action-link:hover,
 .desk-action-link.active{background:transparent!important;color:#ffffff!important}
+.incident-filter{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;margin:0 0 10px}
+.incident-filter button{min-width:0;min-height:28px;display:flex;align-items:center;justify-content:center;gap:5px;border:0;border-radius:6px;background:#0b1a21;color:#91a4ad;font-size:10px;font-weight:800}
+.incident-filter button:hover,.incident-filter button.active{background:#142a34;color:#eef8fb}
+.incident-filter b{min-width:16px;padding:1px 5px;border-radius:999px;background:#243946;color:#cde0e7;font-size:10px}
+.incident-filter button.active b{background:#3f5968;color:#fff}
 
 @media(max-width:900px){
   .context-rail{padding:0!important;background:#13242d!important}
@@ -233,6 +258,244 @@ body,
 .airport-ops-row,
 .desk-action-panel,
 .left-inline-details{background:var(--row-bg)!important}
+
+/* Rich weather display. */
+.weather-chip{
+  max-width:235px;
+}
+.weather-chip.severe{
+  background:#25171a!important;
+  color:#f1b4aa!important;
+}
+.weather-chip span:not(.weather-icon){
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.weather-chip.severe em{
+  color:#e3a297!important;
+}
+
+/* Crew duty bars in schedule rows. */
+.sched-aircraft-row{min-height:90px!important}
+.sched-aircraft-row::after{
+  content:"";
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:0;
+  height:1px;
+  z-index:2;
+  background:rgba(126,153,166,.22);
+  pointer-events:none;
+}
+.sched-label{padding-top:13px!important}
+.flight-block{top:16px!important;height:34px!important}
+.planned-flight-block{
+  top:16px!important;
+  height:34px!important;
+  z-index:4!important;
+  display:flex;
+  align-items:flex-start;
+  overflow:hidden;
+  padding:2px 5px;
+  border:1px dashed rgba(158,181,190,.48)!important;
+  border-radius:5px!important;
+  background:rgba(142,164,174,.10)!important;
+  color:#91a8b2;
+  pointer-events:none;
+}
+.planned-flight-block::after{content:""!important}
+.planned-flight-label{
+  max-width:100%;
+  overflow:hidden;
+  font-size:8px;
+  font-weight:850;
+  line-height:10px;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.planned-flight-block.selected{border-color:#a1e7fb!important;background:rgba(161,231,251,.13)!important}
+.planned-flight-block.has-night-marker{padding-right:22px}
+.planned-flight-block .flight-night-marker{top:3px;right:3px}
+.schedule-alerts{display:flex;align-items:center;gap:6px;margin-left:2px}
+.schedule-alert{
+  display:inline-flex;
+  align-items:center;
+  min-height:18px;
+  padding:2px 7px;
+  border-radius:999px;
+  background:#2f2715;
+  color:#efd184;
+  font-size:10px;
+  font-weight:850;
+  white-space:nowrap;
+}
+.flight-block.late-inbound-risk{
+  animation:lateInboundPulse 1.25s ease-in-out infinite;
+  padding-right:30px;
+  box-shadow:0 0 0 1px rgba(233,198,109,.45),0 5px 12px rgba(0,0,0,.22)!important;
+}
+.flight-late-inbound{
+  position:absolute;
+  right:4px;
+  top:3px;
+  z-index:4;
+  min-width:17px;
+  height:14px;
+  padding:1px 4px 0;
+  border-radius:4px;
+  background:#2f2715;
+  color:#efd184;
+  font-size:8px;
+  font-weight:900;
+  line-height:13px;
+  text-align:center;
+  box-shadow:0 0 0 1px rgba(239,209,132,.38),0 2px 7px rgba(0,0,0,.28);
+}
+@keyframes lateInboundPulse{
+  0%,100%{box-shadow:0 0 0 1px rgba(233,198,109,.34),0 5px 12px rgba(0,0,0,.22)}
+  50%{box-shadow:0 0 0 2px rgba(233,198,109,.75),0 0 16px rgba(233,198,109,.28),0 5px 12px rgba(0,0,0,.22)}
+}
+.slot-marker{top:8px!important;width:2px!important;height:12px!important;opacity:.8}
+.slot-marker::before{left:-3px!important;border-left-width:4px!important;border-right-width:4px!important;border-top-width:5px!important}
+.slot-marker.planned.risk{background:#b5963e}
+.slot-marker.planned.risk::before{border-top-color:#b5963e}
+.slot-marker.planned.risk .slot-label{color:#ead58d}
+.slot-label{
+  display:block!important;
+  left:5px!important;
+  top:-1px!important;
+  max-width:70px;
+  overflow:hidden;
+  color:#91a8b2;
+  font-size:7px!important;
+  font-weight:850;
+  line-height:10px;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  pointer-events:none;
+}
+.slot-marker.planned.missed .slot-label{color:#f0a8b3}
+.slot-marker.reassigned .slot-label{color:#ead58d}
+.flight-block.has-night-marker{padding-right:22px}
+.flight-night-marker{
+  position:absolute;
+  right:4px;
+  top:4px;
+  z-index:2;
+  min-width:13px;
+  height:13px;
+  border-radius:3px;
+  background:#5d4713;
+  color:#f1d27d;
+  font-size:8px;
+  font-weight:900;
+  line-height:13px;
+  text-align:center;
+  box-shadow:0 0 0 1px rgba(241,210,125,.25);
+}
+.flight-block.late-inbound-risk.has-night-marker .flight-night-marker{right:27px}
+.flight-block.late-inbound-risk.has-night-marker{padding-right:49px}
+.connection-line{top:33px!important}
+.connection-line.late-inbound{
+  background:#e1bd5a!important;
+  box-shadow:0 0 8px rgba(225,189,90,.42);
+}
+.connection-label{
+  top:22px!important;
+  max-width:74px;
+  overflow:hidden;
+  padding:1px 4px;
+  border-radius:999px;
+  background:rgba(7,18,25,.82);
+  color:#8fa7b2;
+  font-size:8px!important;
+  font-weight:800;
+  line-height:10px;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  pointer-events:none;
+}
+.connection-label.late-inbound{
+  background:#2f2715;
+  color:#efd184;
+  box-shadow:0 0 0 1px rgba(239,209,132,.25);
+}
+.connection-label.focus{color:#d9f5ff;background:rgba(20,50,62,.9)}
+.connection-label.late-inbound.focus{color:#fff3be;background:#3d3218}
+.crew-duty-bar{
+  position:absolute;
+  top:var(--crew-duty-top,53px);
+  height:13px;
+  z-index:6;
+  overflow:hidden;
+  border-radius:999px;
+  background:#132832;
+  color:#bfd2da;
+  pointer-events:auto;
+  box-shadow:inset 0 0 0 1px rgba(122,151,165,.22);
+}
+.crew-duty-bar span{
+  position:absolute;
+  inset:0 auto 0 0;
+  min-width:2px;
+  background:rgba(119,190,212,.35);
+}
+.crew-duty-bar b{
+  position:relative;
+  z-index:1;
+  display:block;
+  overflow:hidden;
+  padding:1px 6px 0;
+  font-size:9px;
+  line-height:13px;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.crew-duty-bar em{
+  position:absolute;
+  right:4px;
+  top:2px;
+  z-index:2;
+  max-width:44%;
+  overflow:hidden;
+  padding:0 4px;
+  border-radius:999px;
+  background:rgba(255,255,255,.10);
+  color:#e8f4f8;
+  font-size:8px;
+  font-style:normal;
+  line-height:9px;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.crew-duty-bar.has-role-swap b{padding-right:54px}
+.crew-duty-bar.warning{background:#332911;color:#ead58d}
+.crew-duty-bar.warning span{background:rgba(233,198,109,.42)}
+.crew-duty-bar.illegal{background:#351b20;color:#f0a8b3}
+.crew-duty-bar.illegal span{background:rgba(207,85,105,.48)}
+.crew-duty-bar.selected{box-shadow:0 0 0 1px #a1e7fb,0 0 12px rgba(97,203,234,.28)}
+#schedule-board.has-selected-flight .flight-block:not(.focus),
+#schedule-board.has-selected-flight .planned-flight-block:not(.focus),
+#schedule-board.has-selected-flight .slot-marker:not(.focus),
+#schedule-board.has-selected-flight .crew-duty-bar:not(.focus),
+#schedule-board.has-selected-flight .connection-line:not(.focus),
+#schedule-board.has-selected-flight .connection-label{
+  opacity:.25;
+  filter:grayscale(.7);
+}
+#schedule-board.has-selected-flight .sched-aircraft-row:not(.selected-row) .sched-label{
+  opacity:.55;
+}
+#schedule-board.has-selected-flight .flight-block.selected{
+  outline:0!important;
+  z-index:26;
+  box-shadow:0 0 0 2px #a1e7fb,0 0 0 5px rgba(97,203,234,.18),0 8px 22px rgba(0,0,0,.36)!important;
+}
+#schedule-board.has-selected-flight .slot-marker.selected{
+  z-index:28;
+  opacity:1;
+}
 .left-list-card{
   border:0!important;
   border-radius:7px!important;
@@ -251,6 +514,21 @@ body,
 }
 .left-list-card.selected>.list-row.selected{
   background:transparent!important;
+}
+.active-progress{
+  display:block;
+  height:5px!important;
+  margin-top:7px!important;
+  overflow:hidden;
+  border-radius:999px;
+  background:#182c36!important;
+}
+.active-progress span{
+  display:block;
+  height:100%;
+  min-width:2px;
+  border-radius:inherit;
+  background:#75d7ee!important;
 }
 .context-pane.selection-pane{display:none!important}
 .left-inline-details{
@@ -284,6 +562,82 @@ body,
 }
 .left-inline-details .object-link{
   background:#10242d!important;
+}
+.fuel-progress .progress-track{
+  position:relative;
+  height:7px;
+  margin:8px 0 6px;
+  border-radius:999px;
+  background:#182c36;
+}
+.fuel-progress .progress-track span{
+  border-radius:inherit;
+  background:#7bd8bb;
+}
+.fuel-progress.warning .progress-track span{
+  background:#e5c86e;
+}
+.fuel-progress.critical .progress-track span{
+  background:#ff98a8;
+}
+.fuel-progress .progress-track i{
+  position:absolute;
+  top:-3px;
+  bottom:-3px;
+  width:2px;
+  border-radius:2px;
+  background:#effbff;
+  opacity:.8;
+}
+.crew-duty-progress .progress-track{
+  height:7px;
+  margin:8px 0 6px;
+  border-radius:999px;
+  background:#182c36;
+}
+.crew-duty-progress .progress-track span{
+  display:block;
+  height:100%;
+  min-width:2px;
+  border-radius:inherit;
+  background:#75d7ee;
+}
+.crew-duty-progress.warning .progress-track span{
+  background:#e5c86e;
+}
+.crew-duty-progress.critical .progress-track span{
+  background:#ff98a8;
+}
+.maintenance-condition .progress-track{
+  height:6px;
+  margin:7px 0 0;
+  border-radius:999px;
+  background:#172832;
+}
+.maintenance-condition .progress-track span{
+  display:block;
+  height:100%;
+  min-width:2px;
+  border-radius:inherit;
+  background:#7bd8bb;
+}
+.maintenance-condition.warning .progress-track span{
+  background:#e5c86e;
+}
+.maintenance-condition.critical .progress-track span{
+  background:#ff98a8;
+}
+.progress-caption{
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+  color:#91a6b0;
+  font-size:10px;
+}
+.progress-caption b{
+  color:#c8d8df;
+  font-size:10px;
+  text-align:right;
 }
 
 #center-workspace{
@@ -322,20 +676,26 @@ body,
 .case-console.expanded{
   background:#10242d!important;
 }
-.case-console.compact .case-open-link{
-  margin-top:8px;
+.case-context-strip{
+  margin:7px 0 8px;
+  padding:7px 9px;
+  border-radius:7px;
+  background:#0b1a21;
+  color:#d0dde2;
 }
-.case-open-link{
-  min-height:22px;
-  padding:0;
-  border:0;
-  background:transparent;
-  color:#b7ddea;
-  font-size:11px;
-  font-weight:850;
-  text-align:left;
-  text-decoration:underline;
-  text-underline-offset:3px;
+.case-context-strip b,
+.case-context-strip span{
+  display:block;
+}
+.case-context-strip b{
+  font-size:10px;
+  font-weight:900;
+}
+.case-context-strip span{
+  margin-top:2px;
+  color:#9fb3bc;
+  font-size:10px;
+  line-height:1.35;
 }
 .case-console-section{
   padding-top:11px;
@@ -349,14 +709,12 @@ body,
   text-transform:uppercase;
 }
 .case-gate-list,
-.case-step-list,
-.case-log-list{
+.case-step-list{
   display:grid;
   gap:6px;
 }
 .case-gate,
 .case-step,
-.case-log-row,
 .case-blocked-task{
   border-radius:7px;
   background:#0b1a21;
@@ -416,8 +774,6 @@ body,
 .case-step span,
 .case-step b,
 .case-step em,
-.case-log-row span,
-.case-log-row b,
 .case-blocked-task span,
 .case-blocked-task b{
   display:block;
@@ -443,22 +799,6 @@ body,
   font-style:normal;
   text-overflow:ellipsis;
   white-space:nowrap;
-}
-.case-log-row{
-  display:grid;
-  grid-template-columns:42px minmax(0,1fr);
-  gap:7px;
-  padding:7px 9px;
-}
-.case-log-row span{
-  color:#879ba7;
-  font-size:10px;
-}
-.case-log-row b{
-  color:#c7d6dc;
-  font-size:10px;
-  font-weight:650;
-  line-height:1.35;
 }
 .case-blocked-task{
   padding:8px 9px;
@@ -500,6 +840,98 @@ body,
 .occ-action-row b,
 .occ-action-row span{
   display:block;
+}
+.connection-flight-card{
+  margin-top:7px;
+  padding:10px;
+  border-radius:7px;
+  background:#0b1820;
+}
+.connection-flight-card:first-child{
+  margin-top:0;
+}
+.connection-flight-card.selected{
+  background:#10242d;
+}
+.connection-flight-card header{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:start;
+  gap:8px;
+}
+.connection-flight-open{
+  min-width:0;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:var(--text);
+  text-align:left;
+}
+.connection-flight-open:hover b{
+  color:#effbff;
+}
+.connection-flight-card b,
+.connection-flight-card span,
+.connection-link-row b,
+.connection-link-row span{
+  display:block;
+}
+.connection-flight-card header b{
+  color:#d5e4ea;
+  font-size:12px;
+}
+.connection-flight-card header span{
+  margin-top:2px;
+  color:#9fb2bb;
+  font-size:11px;
+}
+.connection-flight-card header em{
+  color:#8fa3ad;
+  font-size:10px;
+  font-style:normal;
+}
+.connection-link-list{
+  display:grid;
+  gap:5px;
+  margin-top:8px;
+}
+.connection-link-row{
+  width:100%;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:8px;
+  padding:6px 8px;
+  border:0;
+  border-radius:6px;
+  background:#071219;
+  color:var(--text);
+  text-align:left;
+}
+.connection-link-row:hover{
+  background:#10242d;
+}
+.connection-link-row b{
+  font-size:11px;
+}
+.connection-link-row span{
+  margin-top:2px;
+  color:#8fa3ad;
+  font-size:10px;
+}
+.connection-link-row em{
+  align-self:center;
+  color:#9fb2bb;
+  font-size:10px;
+  font-style:normal;
+}
+.connection-link-row.at-risk em{
+  color:#e5c86e;
+}
+.connection-link-row.critical em{
+  color:#ffb86b;
+}
+.connection-link-row.missed em{
+  color:#ff98a8;
 }
 .occ-action-context b,
 .occ-action-row b{
@@ -550,4 +982,171 @@ body,
 }
 .occ-action-controls select{
   width:190px;
+}
+.plane-shell.airborne .plane-halo{background:rgba(255,209,102,.18)}
+.plane-shell.airborne .plane-glyph{color:#ffd166;text-shadow:0 1px 3px #000,0 0 10px rgba(255,209,102,.35)}
+.plane-shell.ground .plane-halo{background:rgba(244,251,255,.10)}
+.plane-shell.ground .plane-glyph{color:#f4fbff}
+.plane-shell.critical .plane-halo{background:rgba(255,117,143,.22);box-shadow:0 0 0 2px rgba(255,117,143,.75),0 0 15px rgba(255,117,143,.55)}
+.plane-shell.critical .plane-glyph{color:#ff758f;text-shadow:0 1px 3px #000,0 0 12px rgba(255,117,143,.6)}
+.plane-shell.warning:not(.critical) .plane-halo{box-shadow:0 0 0 1px rgba(255,209,102,.55)}
+
+.operation-filter-bar{
+  flex:0 0 auto;
+  min-height:42px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:6px 10px;
+  overflow-x:auto;
+  background:#09131a;
+  scrollbar-width:none;
+}
+.operation-filter-bar::-webkit-scrollbar{
+  display:none;
+}
+.filter-title{
+  flex:0 0 auto;
+  display:grid;
+  gap:1px;
+  padding-right:4px;
+}
+.filter-title span{
+  color:#7d929d;
+  font-size:9px;
+  font-weight:800;
+  text-transform:uppercase;
+}
+.filter-title b{
+  color:#d1e1e8;
+  font-size:11px;
+  white-space:nowrap;
+}
+.filter-control{
+  flex:0 0 auto;
+  display:flex;
+  align-items:center;
+  gap:6px;
+  min-height:30px;
+  padding:3px 7px;
+  border-radius:7px;
+  background:var(--widget);
+  color:#9fb2bb;
+  font-size:10px;
+}
+.filter-control select{
+  min-height:24px;
+  max-width:230px;
+  border:0;
+  background:#0b1820;
+  color:#d9e8ee;
+  font-size:11px;
+}
+.filter-toggle,
+.filter-chip,
+.filter-clear{
+  flex:0 0 auto;
+  min-height:30px;
+  border:0;
+  border-radius:7px;
+  background:var(--widget);
+  color:#c4d3da;
+  font-size:11px;
+  font-weight:800;
+}
+.filter-toggle{
+  padding:5px 10px;
+}
+.filter-toggle.active{
+  background:#193443;
+  color:#effbff;
+}
+.filter-chip{
+  display:flex;
+  align-items:center;
+  gap:7px;
+  padding:5px 9px;
+}
+.filter-chip.airport{
+  background:#10232d;
+  color:#d8e9ef;
+}
+.filter-chip.airport b{
+  display:grid;
+  place-items:center;
+  min-width:16px;
+  height:16px;
+  border-radius:999px;
+  background:#1b3542;
+  color:#9fd4e5;
+  font-size:13px;
+  line-height:1;
+}
+.filter-chip.warning{
+  background:#241f11;
+  color:#eed48a;
+}
+.filter-chip.severe{
+  background:#2a1419;
+  color:#ffb8c4;
+}
+.filter-chip b{
+  color:#8da2ac;
+  font-size:10px;
+}
+.authority-task{
+  display:grid;
+  gap:7px;
+}
+.authority-task>div{
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px;
+}
+.authority-task span{
+  padding:3px 6px;
+  border-radius:999px;
+  background:#132832;
+  color:#9fb2bb;
+  font-size:9px;
+  font-weight:750;
+}
+.filter-clear{
+  padding:5px 0;
+  background:transparent;
+  color:#9fcfe0;
+  text-decoration:underline;
+  text-underline-offset:3px;
+}
+.flight-weather-forecast{
+  display:grid;
+  gap:6px;
+}
+.weather-forecast-row{
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr);
+  align-items:center;
+  gap:8px;
+  padding:7px 9px;
+  border-radius:7px;
+  background:#0d1b23;
+}
+.weather-forecast-row span{
+  color:#8fa5af;
+  font-size:10px;
+  font-weight:850;
+  white-space:nowrap;
+}
+.weather-forecast-row b{
+  overflow:hidden;
+  color:#d3e2e8;
+  font-size:11px;
+  text-align:right;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.weather-forecast-row.warning b{color:#efd184}
+.weather-forecast-row.critical b{color:#ffb5c1}
+.weather-cell.selected{
+  filter:drop-shadow(0 0 14px rgba(161,231,251,.42));
 }

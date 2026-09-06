@@ -81,13 +81,17 @@ window.AeroManagement = (() => {
     }
     for(const flight of state.flights||[]){
       const defaults={
-        manualDelayMin:0,weatherDelayMin:0,weatherChecked:false,weatherCode:'',
+        manualDelayMin:0,weatherDelayMin:0,liveWeatherDelayMin:0,weatherChecked:false,weatherCode:'',
         cancelled:false,cancelledAt:0,cancellationCost:0,flightType:'passenger',
+        connectionCriticalPax:0,
         issueAcknowledgedAt:0
       };
       for(const [key,value] of Object.entries(defaults)){
         if(flight[key]===undefined){ flight[key]=value; changed=true; }
       }
+      if(!flight.weatherLiveChecks || typeof flight.weatherLiveChecks!=='object') flight.weatherLiveChecks={};
+      if(flight.weatherRouteHazard===undefined) flight.weatherRouteHazard='';
+      if(flight.weatherCause===undefined) flight.weatherCause=null;
     }
     const statDefaults={cancellationCosts:0,scheduledMaintenanceCosts:0,cancelled:0};
     for(const [key,value] of Object.entries(statDefaults)){
@@ -97,6 +101,7 @@ window.AeroManagement = (() => {
   }
 
   function weatherAt(airportCode,timestamp){
+    if(window.AeroWeatherEngine?.weatherAt) return window.AeroWeatherEngine.weatherAt(airportCode,timestamp);
     const profile=AIRPORT_WEATHER[airportCode]||{wind:16,risk:.2,climate:'temperate'};
     const period=Math.floor(timestamp/(6*HOUR));
     const date=new Date(timestamp);

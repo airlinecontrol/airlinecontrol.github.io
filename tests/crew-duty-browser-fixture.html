@@ -1,0 +1,95 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AeroSim crew duty browser fixture</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result');
+  const frame=document.getElementById('game');
+  const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+  try{
+    localStorage.removeItem('aerosim_mvp_v6');
+    localStorage.removeItem('aerosim_occ_ui_v1');
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../aerosim-next.html?fixture=crew-duty&cache='+Date.now();
+    await loaded;
+    const w=frame.contentWindow,d=frame.contentDocument;
+    w.resetLocalSave();
+    await wait(150);
+
+    const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const family='Airbus A320 family';
+    w.changeStaff('FRA','captains',3);
+    w.changeStaff('FRA','firstOfficers',3);
+    w.changeStaff('FRA','cabinCrew',12);
+    w.changeStaff('FRA','groundHandling',20);
+    w.changeStaff('FRA','operations',8);
+    w.changeStaff('FRA','customerService',8);
+    w.changeQualification('FRA','captains',family,3);
+    w.changeQualification('FRA','firstOfficers',family,3);
+    w.changeStaff('LHR','captains',2);
+    w.changeStaff('LHR','firstOfficers',2);
+    w.changeStaff('LHR','cabinCrew',8);
+    w.changeQualification('LHR','captains',family,2);
+    w.changeQualification('LHR','firstOfficers',family,2);
+
+    const departure=w.simNow()+60*60_000;
+    const outbound=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'LHR',departure,fare:{economy:150,business:390,first:750},serviceId:'SCD1',serviceLeg:'outbound'});
+    const ret=w.createFlightRecord({aircraftId:ac.id,from:'LHR',to:'FRA',departure:outbound.arrival+75*60_000,fare:{economy:150,business:390,first:750},serviceId:'SCD1',serviceLeg:'return'});
+    w.recalculateOperations();
+    w.refreshAll();
+    await wait(250);
+
+    assert(outbound.crewDutyId&&outbound.crewDutyId===ret.crewDutyId,'round trip did not create one through crew duty');
+    const through=w.crewDutyForFlight(outbound);
+    assert(through.sectors===2&&through.legal,'through duty should be legal with two sectors');
+    assert(d.querySelectorAll('.crew-duty-bar').length>=1,'schedule crew duty bar is missing');
+    assert(d.querySelector('.crew-duty-bar')?.getAttribute('title')?.includes(outbound.id),'crew duty bar title does not reference flights');
+    assert(d.querySelector('.crew-duty-bar')?.textContent.includes('Crew duty'),'crew duty bar should use a simple label');
+    assert(!/\d+\.\d\/\d+\.\d/.test(d.querySelector('.crew-duty-bar')?.textContent||''),'crew duty bar exposes detailed duty math in the schedule');
+
+    const next=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'LHR',departure:ret.arrival+20*60_000,fare:{economy:150,business:390,first:750},serviceId:'SCD2',serviceLeg:'outbound'});
+    w.recalculateOperations();
+    w.refreshAll();
+    await wait(250);
+    const dutyBars=Array.from(d.querySelectorAll('.crew-duty-bar'));
+    const dutyTops=new Set(dutyBars.map(element=>Math.round(element.getBoundingClientRect().top)));
+    assert(dutyBars.length>=2,'overlap fixture did not draw multiple crew duty bars');
+    assert(dutyTops.size>=2,'overlapping crew duties were rendered in the same schedule lane');
+    assert(d.querySelector('[data-slot-flight="'+next.id+'"].slot-marker.planned.risk')?.getAttribute('title')?.includes('risk'),'future slot impact should be shown as risk, not missed');
+    assert(d.querySelector('[data-slot-flight="'+next.id+'"].slot-marker.planned.risk')?.textContent.includes(next.id),'future slot impact marker should identify the planned item');
+    assert(!/RISK|MISSED|NEW/.test(d.querySelector('[data-slot-flight="'+next.id+'"].slot-marker.planned.risk')?.textContent||''),'future slot impact marker should not show loud status text');
+    assert(!d.querySelector('[data-slot-flight="'+next.id+'"].slot-marker.planned.missed'),'future slot impact was shown as already missed');
+
+    const roleIncident=w.createIncident('crew_sick',outbound,{training:true,detectedAt:w.simNow()});
+    roleIncident.affectedRole='captains';
+    assert(w.performOperationalTask(`${roleIncident.id}:crew-strategy`,'replace'),'role-specific replacement strategy failed');
+    assert(w.performOperationalTask(`${roleIncident.id}:crew-allocate`,'',{optionId:'FRA:captains'}),'role-specific crew allocation failed');
+    w.recalculateOperations();
+    w.refreshAll();
+    await wait(180);
+    assert(outbound.crewRoleSwaps?.captains,'captain replacement was not tracked on the flight');
+    assert(w.crewDutyForFlight(outbound).roleSwaps.some(item=>item.role==='captains'),'captain replacement was not reflected in the duty record');
+    assert(d.querySelector('.crew-duty-bar.has-role-swap'),'crew duty bar does not show a role-swap marker');
+    assert(d.querySelector('.crew-duty-bar.has-role-swap')?.getAttribute('title')?.includes('role replacement'),'crew duty bar title does not explain role replacement');
+
+    w.settleSelectedFlight(ret.id);
+    await wait(120);
+    d.querySelector('[data-desk-panel="personnel:crew-swap"]').click();
+    await wait(120);
+    assert(d.querySelector('[data-crew-swap-flight="'+ret.id+'"]'),'personnel widget does not expose full crew swap for selected flight');
+    assert(d.querySelector('[data-crew-swap-flight="'+ret.id+'"]')?.textContent.includes('full'),'personnel crew swap action is not clearly marked as full crew');
+    assert(!d.querySelector('[data-crew-swap-flight="'+ret.id+'"]').disabled,'crew swap should be available with local LHR reserve crew');
+    d.querySelector('[data-crew-swap-flight="'+ret.id+'"]').click();
+    await wait(220);
+
+    assert(ret.crewDutySplit===true,'crew swap did not mark the return flight as split');
+    assert(outbound.crewDutyId&&ret.crewDutyId&&outbound.crewDutyId!==ret.crewDutyId,'crew swap did not split the stored duty ids');
+    assert(w.crewDutyForFlight(ret).sectors===1,'return flight should have its own one-sector duty after swap');
+    assert(d.querySelectorAll('.crew-duty-bar').length>=2,'schedule did not redraw split crew duty bars');
+    result.textContent='PASS\ncrew-duty=through+bar+swap';
+  }catch(error){result.textContent='FAIL\n'+(error.stack||error);}
+})();
+</script>

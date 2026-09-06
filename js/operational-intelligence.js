@@ -93,11 +93,28 @@ window.AeroOperationalIntelligence = (() => {
     };
   }
 
-  function connectionManifest({flight,onwardFlights=[],actualArrival}){
+  const MAJOR_CONNECTION_AIRPORTS=new Set(['LHR','JFK','CDG','AMS','HND','DXB','SIN']);
+  function minimumConnectionMinutes(airport){
+    return MAJOR_CONNECTION_AIRPORTS.has(airport)?60:45;
+  }
+  function maximumConnectionMinutes(airport){
+    return MAJOR_CONNECTION_AIRPORTS.has(airport)?210:180;
+  }
+
+  function connectionManifest({flight,onwardFlights=[],actualArrival,now=actualArrival}){
+    const connectionAirport=flight.diversionAirport||flight.to;
+    const isOwnNetworkConnection=next=>{
+      if(!next||next.id===flight.id||next.cancelled||next.flightType==='ferry'||flight.flightType==='ferry') return false;
+      if(next.from!==connectionAirport) return false;
+      if(flight.aircraftId&&next.aircraftId===flight.aircraftId) return false;
+      if(next.to===flight.from) return false;
+      const scheduledConnectionMin=(next.departure-flight.arrival)/MINUTE;
+      return scheduledConnectionMin>=minimumConnectionMinutes(connectionAirport)&&scheduledConnectionMin<=maximumConnectionMinutes(connectionAirport);
+    };
     const candidates=onwardFlights
-      .filter(next=>next.id!==flight.id&&next.from===(flight.diversionAirport||flight.to)&&next.departure>flight.arrival+35*MINUTE&&next.departure<flight.arrival+5*HOUR)
+      .filter(isOwnNetworkConnection)
       .sort((a,b)=>a.departure-b.departure).slice(0,2);
-    if(!candidates.length||!flight.pax||flight.flightType==='ferry') return {total:0,atRisk:0,missed:0,connections:[]};
+    if(!candidates.length||!flight.pax||flight.flightType==='ferry') return {total:0,critical:0,atRisk:0,missed:0,connections:[]};
     const share=.10+stableUnit(`${flight.id}:connections`)*.20;
     const total=Math.min(Math.round(flight.pax*share),Math.max(0,flight.pax-1));
     const weights=candidates.map(next=>.7+stableUnit(`${flight.id}:${next.id}`)*.6);
@@ -106,35 +123,37 @@ window.AeroOperationalIntelligence = (() => {
     const connections=candidates.map((next,index)=>{
       const pax=index===candidates.length-1?total-assigned:Math.round(total*weights[index]/weightTotal);
       assigned+=pax;
-      const airport=flight.diversionAirport||flight.to;
-      const mctMin=['LHR','JFK','CDG','AMS','HND','DXB','SIN'].includes(airport)?60:45;
-      const correctedAvailable=((next.actualDeparture??next.departure)-actualArrival)/MINUTE;
-      const status=correctedAvailable<mctMin?'missed':correctedAvailable<mctMin+20?'at-risk':'protected';
-      return {flightId:next.id,to:next.diversionAirport||next.to,pax,mctMin,availableMin:correctedAvailable,status};
+      const airport=connectionAirport;
+      const mctMin=minimumConnectionMinutes(airport);
+      const departure=next.actualDeparture??next.departure;
+      const correctedAvailable=(departure-actualArrival)/MINUTE;
+      const departed=Boolean(next.departureLogged)||departure<=now;
+      const status=correctedAvailable<0||departed?'missed':correctedAvailable<mctMin?'critical':correctedAvailable<mctMin+20?'at-risk':'protected';
+      return {flightId:next.id,to:next.diversionAirport||next.to,pax,mctMin,availableMin:correctedAvailable,status,ownNetwork:true};
     });
     return {
       total,
+      critical:connections.filter(item=>item.status==='critical').reduce((sum,item)=>sum+item.pax,0),
       atRisk:connections.filter(item=>item.status==='at-risk').reduce((sum,item)=>sum+item.pax,0),
       missed:connections.filter(item=>item.status==='missed').reduce((sum,item)=>sum+item.pax,0),
       connections
     };
   }
 
-  function recoveryOptions({flight,downstreamFlights=[],connections={total:0,atRisk:0,missed:0},spareAvailable=false}){
+  function recoveryOptions({flight,downstreamFlights=[],connections={total:0,critical:0,atRisk:0,missed:0},spareAvailable=false}){
     const delayMin=Math.max(0,Math.round(((flight.actualDeparture??flight.departure)-flight.departure)/MINUTE));
     const downstreamDelay=downstreamFlights.reduce((sum,item)=>sum+Math.max(0,Math.round(((item.actualDeparture??item.departure)-item.departure)/MINUTE)),0);
-    const baseImpact=delayMin+downstreamDelay+connections.atRisk+connections.missed*2;
+    const baseImpact=delayMin+downstreamDelay+(connections.atRisk||0)+(connections.critical||0)*2+(connections.missed||0)*3;
     const plans=[];
     if((flight.handlingDelayMin||0)>0) plans.push({id:'expedite',label:'Expedite turnaround',tone:'good',delayMin:Math.max(0,delayMin-15),downstreamDelay:Math.max(0,downstreamDelay-15*downstreamFlights.length),misconnectPax:Math.max(0,connections.missed-Math.ceil(connections.total*.25)),risk:Math.max(0,baseImpact-25),detail:'Prioritize ground resources and recover up to 15 minutes.'});
-    if(connections.atRisk||connections.missed) plans.push({id:'protect-connections',label:'Protect connections',tone:'good',delayMin,downstreamDelay:downstreamDelay+10,misconnectPax:0,risk:Math.max(0,baseImpact-connections.atRisk-connections.missed),detail:'Hold affected onward flights within a 30-minute protection limit.'});
     if(spareAvailable) plans.push({id:'use-spare',label:'Use spare aircraft',tone:'good',delayMin:Math.min(delayMin,10),downstreamDelay:Math.max(0,downstreamDelay-delayMin),misconnectPax:Math.floor(connections.missed*.25),risk:Math.max(0,baseImpact-35),detail:'Protect this rotation with the first eligible spare.'});
     if(!plans.length) return [];
-    const impactLabel=connections.atRisk||connections.missed
-      ? `Accept connection risk${connections.missed?` · ${connections.missed} missed`:''}`
+    const impactLabel=connections.atRisk||connections.critical||connections.missed
+      ? `Accept connection risk${connections.missed?` · ${connections.missed} missed`:connections.critical?` · ${connections.critical} critical`:''}`
       : `Accept current delay · +${delayMin} min`;
     plans.push({
       id:'accept-impact',label:impactLabel,tone:'',delayMin,downstreamDelay,misconnectPax:connections.missed,risk:baseImpact,
-      detail:connections.atRisk||connections.missed
+      detail:connections.atRisk||connections.critical||connections.missed
         ? 'Keep the current operation and accept the displayed passenger-connection impact.'
         : 'Keep the current operation and accept its displayed delay and downstream impact.'
     });

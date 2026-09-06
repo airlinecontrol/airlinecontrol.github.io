@@ -36,12 +36,12 @@
     w.changeQualification('FRA','firstOfficers','Airbus A320 family',30);
 
     let leg=0;
-    const makeCase=(type,to='LHR')=>{
+    const makeCase=(type,to='LHR',context=null)=>{
       const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
       const departure=now+(4*60+leg*12)*60_000;
       leg++;
       const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to,departure,fare:{economy:150,business:390,first:750}});
-      const incident=w.createIncident(type,flight,{training:true,detectedAt:now});
+      const incident=w.createIncident(type,flight,{training:true,detectedAt:now,context});
       assert(incident,`${type} incident was not created`);
       return {aircraft,flight,incident};
     };
@@ -54,7 +54,6 @@
       assert(w.performOperationalTask(`${incident.id}:crew-strategy`,'replace'),`${role} crew strategy was rejected`);
       assert(w.performOperationalTask(`${incident.id}:crew-allocate`,'',{optionId:`FRA:${role}`}),`${role} crew allocation was rejected`);
       completeWaits();
-      assert(w.performOperationalTask(`${incident.id}:dispatch-release`),'crew dispatch release was rejected');
       assert(incident.status==='resolved',`${role} sick-call incident did not resolve`);
       assert(flight.incidentDelayMin>=20,`${role} sick-call did not apply reporting delay`);
     };
@@ -79,10 +78,17 @@
       w.changeQualification('FRA','captains','Airbus A320 family',2);
       assert(w.performOperationalTask(`${incident.id}:crew-allocate`,'',{optionId:'FRA:captains'}),'moved sick-call crew could not be allocated locally');
       completeWaits();
-      assert(w.performOperationalTask(`${incident.id}:dispatch-release`),'moved sick-call crew release was rejected');
       assert(incident.status==='resolved','moved sick-call crew incident did not resolve');
       w.changeStaff('FRA','captains',fraCaptains-2);
       w.changeQualification('FRA','captains','Airbus A320 family',fraCaptainRatings-2);
+    }
+
+    {
+      const {incident}=makeCase('crew_duty_risk');
+      const strategy=w.incidentTasks(incident.id).find(task=>task.key==='crew-duty-strategy');
+      assert(w.operationalOptionConsequence(strategy,incident,'replace').includes('local replacement'),'crew duty replacement consequence is missing local reporting impact');
+      assert(strategy.strategyOptions.some(option=>option.id==='cancel'),'pre-departure cancellation should be available as an incident strategy option');
+      assert(w.branchStrategyOptionBlocker(strategy,incident,'cancel')==='','pre-departure cancellation should be eligible through strategy metadata');
     }
 
     for(const action of ['defer','repair']){
@@ -94,7 +100,6 @@
       assert(w.performOperationalTask(`${incident.id}:mx-strategy`,action),`MEL ${action} strategy was rejected`);
       assert(w.performOperationalTask(`${incident.id}:mx-${action}`,action),`MEL ${action} was rejected`);
       if(action==='repair') completeWaits();
-      assert(w.performOperationalTask(`${incident.id}:dispatch-release`),`MEL release was rejected for ${action}`);
       assert(incident.status==='resolved',`MEL ${action} incident did not resolve`);
       if(action==='defer') assert(aircraft.melItems.some(item=>item.status==='open'),'MEL defer did not create an open MEL item');
       if(action==='repair') assert(!aircraft.defectReason,'MEL repair did not clear the defect');
@@ -107,7 +112,6 @@
       completeWaits();
       assert(w.performOperationalTask(`${incident.id}:mx-strategy`,'substitute'),'MEL substitute strategy was rejected');
       assert(w.performOperationalTask(`${incident.id}:dispatch-substitute`,'',{optionId:`local:${spare.id}`}),`local substitute ${spare.id} was rejected`);
-      assert(w.performOperationalTask(`${incident.id}:dispatch-release`),'MEL local substitute release was rejected');
       assert(incident.status==='resolved','MEL local substitute incident did not resolve');
       assert(flight.aircraftId===spare.id,'MEL local substitute did not assign the replacement aircraft');
     }
@@ -119,7 +123,6 @@
       completeWaits();
       assert(w.performOperationalTask(`${incident.id}:mx-strategy`,'substitute'),'MEL positioned substitute strategy was rejected');
       assert(w.performOperationalTask(`${incident.id}:dispatch-substitute`,'',{optionId:`position:${spare.id}`}),`positioned substitute ${spare.id} was rejected`);
-      assert(w.performOperationalTask(`${incident.id}:dispatch-release`),'MEL positioned substitute release was rejected');
       assert(incident.status==='resolved','MEL positioned substitute incident did not resolve');
       assert(flight.aircraftId===spare.id,'MEL positioned substitute did not assign the replacement aircraft');
       assert(flight.positioningDelayMin>=0,'MEL positioned substitute did not record positioning timing');
@@ -137,7 +140,6 @@
       assert(/Borrow/.test(borrowedOption.detail),'borrowed replacement option is not labelled as a borrowed aircraft');
       assert(w.performOperationalTask(`${incident.id}:mx-strategy`,'substitute'),'MEL borrowed substitute strategy was rejected');
       assert(w.performOperationalTask(`${incident.id}:dispatch-substitute`,'',{optionId:borrowedOption.id}),'MEL borrowed substitute was rejected');
-      assert(w.performOperationalTask(`${incident.id}:dispatch-release`),'MEL borrowed substitute release was rejected');
       assert(incident.status==='resolved','MEL borrowed substitute incident did not resolve');
       assert(flight.aircraftId===borrowed.id,'borrowed substitute did not cover the disrupted flight');
       assert(later.aircraftId===borrowed.id&&!later.cancelled,'borrowed substitute broke the aircraft later schedule');
@@ -145,14 +147,16 @@
 
     {
       const {flight,incident}=makeCase('mel_defect');
-      assert(w.performOperationalTask(`${incident.id}:dispatch-cancel`),'MEL cancel task was rejected');
+      assert(w.performOperationalTask(`${incident.id}:mx-inspect`),'MEL inspection did not start before cancellation');
+      completeWaits();
+      assert(w.performOperationalTask(`${incident.id}:mx-strategy`,'cancel'),'MEL cancel option was rejected');
       assert(incident.status==='resolved','MEL cancel incident did not resolve');
       assert(flight.cancelled,'MEL cancel branch did not cancel the flight');
     }
 
     {
       const {flight,incident}=makeCase('atc_restriction');
-      assert(w.performOperationalTask(`${incident.id}:dispatch-cancel`),'generic incident cancellation was rejected');
+      assert(w.performOperationalTask(`${incident.id}:dispatch-flow-strategy`,'cancel'),'generic incident cancellation was rejected');
       assert(incident.status==='resolved','generic cancellation did not resolve the incident');
       assert(flight.cancelled,'generic cancellation did not cancel the affected flight');
     }
@@ -162,51 +166,43 @@
       const strategy=w.incidentTasks(incident.id).find(task=>task.key==='dispatch-flow-strategy');
       assert(w.operationalOptionConsequence(strategy,incident,action).includes('delay'),`ATC ${action} consequence is missing delay impact`);
       assert(w.performOperationalTask(`${incident.id}:dispatch-flow-strategy`,action),`ATC ${action} strategy was rejected`);
-      assert(w.performOperationalTask(`${incident.id}:dispatch-flow-${action}`),`ATC ${action} was rejected`);
       if(action==='priority') completeWaits();
-      assert(w.performOperationalTask(`${incident.id}:dispatch-release`),`ATC release was rejected for ${action}`);
       assert(incident.status==='resolved',`ATC ${action} incident did not resolve`);
       assert(flight.incidentDelayMin===(action==='priority'?20:45),`ATC ${action} applied the wrong delay`);
     }
 
     for(const action of ['remote','tow','wait_gate']){
       const {flight,incident}=makeCase('gate_conflict');
-      const key=action==='wait_gate'?'station-wait-gate':action==='tow'?'station-tow':'station-remote';
       assert(w.performOperationalTask(`${incident.id}:station-stand-strategy`,action),`Gate ${action} strategy was rejected`);
-      assert(w.performOperationalTask(`${incident.id}:${key}`),`Gate ${action} was rejected`);
       completeWaits();
-      assert(w.performOperationalTask(`${incident.id}:station-coordinate`),`Gate coordination was rejected for ${action}`);
       assert(incident.status==='resolved',`Gate ${action} incident did not resolve`);
       assert(flight.incidentDelayMin>0,`Gate ${action} did not apply a delay`);
     }
 
-    const {flight:closureFlight,incident:closure}=makeCase('destination_closure','LHR');
-    assert(w.performOperationalTask(`${closure.id}:dispatch-diversion-strategy`,'alternate'),'Destination closure alternate strategy was rejected');
+    const {flight:closureFlight,incident:closure}=makeCase('destination_closure','LHR',{authorityDecision:'alternate'});
+    assert(w.performOperationalTask(`${closure.id}:dispatch-diversion-assess`),'Destination closure assessment was rejected');
+    completeWaits();
+    const closureDecision=w.incidentTasks(closure.id).find(task=>task.key==='dispatch-flightdeck-decision');
+    assert(closureDecision.strategyOptions.find(option=>option.id==='alternate')?.label.startsWith('Record '),'Destination closure decision option is not framed as a recorded flight-deck plan');
+    assert(w.operationalOptionConsequence(closureDecision,closure,'alternate').includes('flight deck requested'),'Destination closure consequence is not framed as a flight-deck request');
+    assert(w.performOperationalTask(`${closure.id}:dispatch-flightdeck-decision`),'Destination closure flight-deck response was rejected');
+    completeWaits();
     const alternate=w.diversionOptionsForIncident(closure,{includeReturnOrigin:false})[0]?.code;
     assert(alternate,'Destination closure offered no suitable alternate');
     assert(w.performOperationalTask(`${closure.id}:dispatch-alternate`,'',{airport:alternate}),'Destination closure alternate selection was rejected');
-    assert(w.performOperationalTask(`${closure.id}:dispatch-flightdeck`),'Destination closure flight-deck recommendation was rejected');
-    completeWaits();
-    assert(w.performOperationalTask(`${closure.id}:dispatch-atc`),'Destination closure ATC request was rejected');
-    assert(w.performOperationalTask(`${closure.id}:station-alternate`),'Destination closure alternate handling was rejected');
-    completeWaits();
-    assert(w.performOperationalTask(`${closure.id}:dispatch-release`),'Destination closure release was rejected');
     assert(closure.status==='resolved','Destination closure incident did not resolve');
     assert(closureFlight.diversionAirport===alternate,'Destination closure did not apply the selected diversion');
 
-    const {flight:returnFlight,incident:returnClosure}=makeCase('destination_closure','LHR');
-    assert(w.performOperationalTask(`${returnClosure.id}:dispatch-diversion-strategy`,'return_origin'),'Destination closure return-to-origin strategy was rejected');
+    const {flight:returnFlight,incident:returnClosure}=makeCase('destination_closure','LHR',{authorityDecision:'return_origin'});
+    assert(w.performOperationalTask(`${returnClosure.id}:dispatch-diversion-assess`),'Destination closure return-to-origin assessment was rejected');
+    completeWaits();
+    assert(w.performOperationalTask(`${returnClosure.id}:dispatch-flightdeck-decision`),'Destination closure return-to-origin flight-deck response was rejected');
+    completeWaits();
     const returnOption=w.diversionOptionsForIncident(returnClosure,{onlyReturnOrigin:true})[0];
     assert(returnOption,'Destination closure did not offer return to origin');
     assert(returnOption.fuel&&returnOption.fuel.ok,'Destination closure return-to-origin did not include a valid fuel check');
     assert(w.performOperationalTask(`${returnClosure.id}:dispatch-return-origin`),'Destination closure return-to-origin selection was rejected');
     assert(returnClosure.diversionReturnOrigin,'Destination closure return-to-origin selection was not recorded');
-    assert(w.performOperationalTask(`${returnClosure.id}:dispatch-flightdeck`),'Destination closure return-to-origin flight-deck recommendation was rejected');
-    completeWaits();
-    assert(w.performOperationalTask(`${returnClosure.id}:dispatch-atc`),'Destination closure return-to-origin ATC request was rejected');
-    assert(w.performOperationalTask(`${returnClosure.id}:station-alternate`),'Destination closure return-to-origin handling was rejected');
-    completeWaits();
-    assert(w.performOperationalTask(`${returnClosure.id}:dispatch-release`),'Destination closure return-to-origin release was rejected');
     assert(returnClosure.status==='resolved','Destination closure return-to-origin incident did not resolve');
     assert(returnFlight.diversionAirport===returnFlight.from,'Destination closure did not apply return to origin');
 
