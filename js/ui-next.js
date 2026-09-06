@@ -1566,11 +1566,26 @@ function passengerRecoveryDeskMarkup(exposures=passengerRecoveryExposures()){
 }
 
 function crewAccommodationMarkup(exposures=crewAccommodationExposures()){
-  const rows=exposures.filter(item=>!item.arranged).slice(0,5).map(item=>`<div class="desk-list-row crew-accommodation-row">
-    <button class="row-main-button" type="button" data-connection-flight="${esc(item.flightId)}"><b>${esc(item.flightId)} · crew at ${esc(item.releaseAirport)}</b><span>${esc(item.reason)} · ${item.crew} crew · release ${shortClock(flightCrewRelease(item.flight))}</span></button>
-    <div class="occ-action-controls"><em>${money(item.cost)}</em><button class="secondary-button" type="button" data-crew-accommodation="${esc(item.flightId)}">Hotel/rest</button></div>
-  </div>`).join('');
-  return `<section class="desk-section"><h2>Crew accommodation</h2>${rows||'<div class="empty-state">No disrupted crew accommodation exposure.</div>'}</section>`;
+  const now=simNow();
+  const rows=exposures.filter(item=>!item.arranged).slice(0,5).map(item=>{
+    const actions=(item.actions||[]).map(action=>{
+      const record=(item.records||[]).find(entry=>entry.action===action.id);
+      if(record) return `<span class="recovery-status-pill"><b>${esc(action.label)}</b><em>${esc(crewRecoveryStatusLabel(record.status))} · ${esc(responseTimeLabel(record,now))}</em></span>`;
+      return `<button class="secondary-button" type="button" data-crew-recovery="${esc(item.flightId)}" data-crew-recovery-action="${esc(action.id)}">${esc(action.label)}</button>`;
+    }).join('');
+    const detail=[
+      item.reason,
+      item.releaseDelayMin?`+${item.releaseDelayMin} min release`:'',
+      item.plannedReleaseAirport&&item.plannedReleaseAirport!==item.releaseAirport?`planned ${item.plannedReleaseAirport}`:'',
+      `release ${shortClock(flightCrewRelease(item.flight))}`
+    ].filter(Boolean).join(' · ');
+    return `<div class="desk-list-row crew-accommodation-row">
+      <button class="row-main-button" type="button" data-connection-flight="${esc(item.flightId)}"><b>${esc(item.flightId)} · crew at ${esc(item.releaseAirport)}</b><span>${esc(detail)} · ${item.crew} crew</span></button>
+      <div class="occ-action-controls"><em>exposure ${money(item.cost)}</em>${actions}</div>
+    </div>`;
+  }).join('');
+  const arranged=exposures.filter(item=>item.arranged).length;
+  return `<section class="desk-section"><h2>Crew rest & positioning</h2>${rows||'<div class="empty-state">No disrupted crew rest or positioning exposure.</div>'}${arranged?`<p class="panel-note">${arranged} confirmed crew coordination item${arranged===1?'':'s'} tracked in recovery costs.</p>`:''}</section>`;
 }
 
 function renderDeskStack(force=false){
@@ -1612,7 +1627,8 @@ function renderDeskStack(force=false){
     connectionRows.map(row=>`${row.flight.id}:${flightActualArrival(row.flight)}:${row.manifest.critical||0}:${row.manifest.atRisk||0}:${row.manifest.total||0}`).join('|'),
     passengerExposures.map(item=>`${item.flightId}:${item.cost}:${item.arranged?1:0}:${item.reason}:${item.overnightPax}:${item.criticalConnections}:${item.atRiskConnections}:${(item.records||[]).map(record=>`${record.action}:${record.status}:${record.updatedAt}`).join(',')}`).join('|'),
     (state.passengerRecoveries||[]).map(item=>`${item.id}:${item.flightId}:${item.action}:${item.status}:${item.updatedAt}:${item.completedAt}`).join('|'),
-    crewExposures.map(item=>`${item.flightId}:${item.cost}:${item.arranged?1:0}:${item.releaseAirport}`).join('|'),
+    crewExposures.map(item=>`${item.flightId}:${item.cost}:${item.arranged?1:0}:${item.releaseAirport}:${item.reason}:${(item.records||[]).map(record=>`${record.action}:${record.status}:${record.updatedAt}`).join(',')}`).join('|'),
+    (state.crewRecoveries||[]).map(item=>`${item.id}:${item.flightId}:${item.action}:${item.status}:${item.updatedAt}:${item.completedAt}`).join('|'),
     state.aircraft.map(ac=>`${ac.id}:${ac.location}:${attentionForAircraft(ac)}:${Math.round(ac.condition??100)}`).join('|'),
     Math.floor(now/MIN),state.slotRights.length,
     JSON.stringify(state.personnel.assignments||{}),transferSignature,
@@ -1696,6 +1712,11 @@ function renderDeskStack(force=false){
   root.querySelectorAll('[data-crew-accommodation]').forEach(button=>button.addEventListener('click',event=>{
     event.stopPropagation();
     arrangeCrewAccommodation(button.dataset.crewAccommodation);
+    markUiDirty('all');
+  }));
+  root.querySelectorAll('[data-crew-recovery]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    authorizeCrewRecovery(button.dataset.crewRecovery,button.dataset.crewRecoveryAction||'hotel');
     markUiDirty('all');
   }));
   root.querySelectorAll('[data-crew-swap-flight]').forEach(button=>button.addEventListener('click',()=>{

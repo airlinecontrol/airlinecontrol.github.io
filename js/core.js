@@ -869,6 +869,7 @@ function newState(){
     nextResourceAssignment:1,
     nextRecoveryCostEvent:1,
     nextPassengerRecovery:1,
+    nextCrewRecovery:1,
     incidentExerciseIndex:0,
     slotRights:[],
     aircraft:[],
@@ -922,6 +923,7 @@ function migrateState(parsed){
   if(!Number.isFinite(parsed.nextResourceRequest)) parsed.nextResourceRequest=parsed.resourceRequests.length+1;
   if(!Number.isFinite(parsed.nextRecoveryCostEvent)) parsed.nextRecoveryCostEvent=parsed.recoveryCostEvents.length+1;
   if(!Number.isFinite(parsed.nextPassengerRecovery)) parsed.nextPassengerRecovery=parsed.passengerRecoveries.length+1;
+  if(!Number.isFinite(parsed.nextCrewRecovery)) parsed.nextCrewRecovery=parsed.crewRecoveries.length+1;
   if(!Number.isFinite(parsed.nextIncident)) parsed.nextIncident=parsed.incidents.length+1;
   if(!Number.isFinite(parsed.incidentExerciseIndex)) parsed.incidentExerciseIndex=0;
   for(const incident of parsed.incidents){
@@ -970,6 +972,20 @@ function migrateState(parsed){
     if(!Number.isFinite(recovery.completedAt)) recovery.completedAt=0;
     if(!Number.isFinite(recovery.amount)) recovery.amount=0;
     if(!Number.isFinite(recovery.passengers)) recovery.passengers=0;
+    if(recovery.reason===undefined) recovery.reason='';
+    if(recovery.costEventId===undefined) recovery.costEventId='';
+  }
+  for(const recovery of parsed.crewRecoveries){
+    if(!recovery.id) recovery.id=`CR${parsed.nextCrewRecovery++}`;
+    if(recovery.action===undefined) recovery.action='hotel';
+    if(recovery.status===undefined) recovery.status=recovery.completedAt?'confirmed':'requested';
+    if(!Number.isFinite(recovery.requestedAt)) recovery.requestedAt=parsed.clock?.simBase||Date.now();
+    if(!Number.isFinite(recovery.updatedAt)) recovery.updatedAt=recovery.requestedAt;
+    if(!Number.isFinite(recovery.confirmsAt)) recovery.confirmsAt=recovery.updatedAt;
+    if(!Number.isFinite(recovery.completedAt)) recovery.completedAt=0;
+    if(!Number.isFinite(recovery.amount)) recovery.amount=0;
+    if(!Number.isFinite(recovery.crew)) recovery.crew=0;
+    if(recovery.releaseAirport===undefined) recovery.releaseAirport='';
     if(recovery.reason===undefined) recovery.reason='';
     if(recovery.costEventId===undefined) recovery.costEventId='';
   }
@@ -1049,6 +1065,8 @@ function migrateState(parsed){
     if(!Number.isFinite(f.passengerRecoveryArrangedAt)) f.passengerRecoveryArrangedAt=0;
     if(!Number.isFinite(f.passengerReleasedAt)) f.passengerReleasedAt=0;
     if(!Number.isFinite(f.crewAccommodationArrangedAt)) f.crewAccommodationArrangedAt=0;
+    if(!Number.isFinite(f.crewTransportArrangedAt)) f.crewTransportArrangedAt=0;
+    if(!Number.isFinite(f.crewStoodDownAt)) f.crewStoodDownAt=0;
     if(!Number.isFinite(f.recoveryCostBooked)) f.recoveryCostBooked=0;
     if(f.cancellationCostBooked===undefined) f.cancellationCostBooked='';
     if(f.crewAugmented===undefined) f.crewAugmented=false;

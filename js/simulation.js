@@ -3167,29 +3167,162 @@ function processPassengerRecoveries(t=simNow()){
 }
 
 function crewAccommodationExposures(t=simNow()){
+  const crewIncidentTypes=new Set(['crew_duty_risk','crew_fatigue_report','crew_fatigue_mid_rotation','crew_misposition_after_diversion']);
   return state.flights
-    .filter(flight=>!flight.cancelled&&flight.flightType!=='ferry')
+    .filter(flight=>flight.flightType!=='ferry')
     .map(flight=>{
       const sortAt=flightCrewRelease(flight);
       if(sortAt<t-24*HOUR||sortAt>t+72*HOUR) return null;
       const releaseAirport=flightCrewReleaseAirport(flight);
-      const delayMin=flightTotalDepartureDelayMin(flight);
+      const plannedRelease=flightCrewPlannedRelease(flight);
+      const plannedReleaseAirport=flightCrewPlannedReleaseAirport(flight);
+      const releaseDelayMin=Math.max(0,Math.round((sortAt-plannedRelease)/MIN));
       const diverted=Boolean(flight.diversionAirport&&flight.diversionAirport!==flight.to);
-      const awayFromHome=releaseAirport&&releaseAirport!==state.home;
-      const lateRelease=delayMin>=180||new Date(sortAt).getHours()>=23||new Date(sortAt).getHours()<5;
-      if(!diverted&&!(awayFromHome&&lateRelease&&delayMin>=60)) return null;
+      const releaseAirportChanged=releaseAirport&&plannedReleaseAirport&&releaseAirport!==plannedReleaseAirport;
+      const plannedLate=crewRestNightHour(plannedRelease);
+      const actualLate=crewRestNightHour(sortAt);
+      const crossesNightRest=!plannedLate&&actualLate&&releaseDelayMin>=30;
+      const severeReleaseDelay=releaseDelayMin>=180;
+      const crewIncident=state.incidents.find(incident=>incident.status==='open'&&incident.flightId===flight.id&&crewIncidentTypes.has(incident.type));
+      if(!diverted&&!releaseAirportChanged&&!severeReleaseDelay&&!crossesNightRest&&!crewIncident) return null;
       const crew=typeof crewComplementForFlight==='function'?crewComplementForFlight(flight):3;
-      const cost=typeof crewRecoveryCost==='function'?crewRecoveryCost(flight,{hotel:true,position:diverted}):crew*140;
-      return {
-        flightId:flight.id,flight,releaseAirport,crew,cost,delayMin,
-        reason:diverted?`crew released at diversion airport ${releaseAirport}`:lateRelease?'late release / rest hotel exposure':'crew away from home base',
-        arranged:Boolean(flight.crewAccommodationArrangedAt),
-        sortAt
+      const reason=diverted
+        ? `diversion release at ${releaseAirport}`
+        : releaseAirportChanged
+          ? `release airport changed from ${plannedReleaseAirport} to ${releaseAirport}`
+          : severeReleaseDelay
+            ? `crew release delayed ${releaseDelayMin} min`
+            : crossesNightRest
+              ? `release moved into night rest window`
+              : `${INCIDENT_DEFINITIONS[crewIncident.type]?.title||'crew disruption'} requires crew-control coordination`;
+      const exposure={
+        flightId:flight.id,flight,releaseAirport,plannedReleaseAirport,crew,
+        cost:typeof crewRecoveryCost==='function'?crewRecoveryCost(flight,{hotel:true,position:diverted||releaseAirportChanged,standDown:severeReleaseDelay||crossesNightRest||Boolean(crewIncident)}):crew*140,
+        releaseDelayMin,diverted,releaseAirportChanged,severeReleaseDelay,crossesNightRest,
+        crewIncident:Boolean(crewIncident),reason,sortAt
       };
+      exposure.records=crewRecoveryRecordsForFlight(flight.id);
+      exposure.actions=crewRecoveryActionsForExposure(exposure);
+      const allActionsConfirmed=exposure.actions.length>0&&exposure.actions.every(action=>exposure.records.some(record=>record.action===action.id&&record.status==='confirmed'));
+      const legacyHandled=!exposure.records.length&&Boolean(flight.crewAccommodationArrangedAt);
+      exposure.arranged=allActionsConfirmed||legacyHandled;
+      return exposure;
     })
     .filter(Boolean)
     .sort((a,b)=>(a.arranged===b.arranged?0:a.arranged?1:-1)||b.cost-a.cost||a.sortAt-b.sortAt)
     .slice(0,20);
+}
+
+function crewRestNightHour(timestamp){
+  const hour=new Date(timestamp).getHours();
+  return hour>=23||hour<5;
+}
+
+function crewRecoveryRecordsForFlight(flightId){
+  return (state.crewRecoveries||[])
+    .filter(item=>item.flightId===flightId)
+    .sort((a,b)=>(a.completedAt||a.updatedAt||a.requestedAt)-(b.completedAt||b.updatedAt||b.requestedAt));
+}
+
+function crewRecoveryActionLabel(action){
+  return {
+    hotel:'Request crew hotel',
+    transport:'Arrange crew transport',
+    stand_down:'Stand down crew'
+  }[action]||'Coordinate crew';
+}
+
+function crewRecoveryActionRequestLabel(action){
+  return {
+    hotel:'crew hotel request',
+    transport:'crew transport arrangement',
+    stand_down:'crew stand-down coordination'
+  }[action]||'crew recovery coordination';
+}
+
+function crewRecoveryStatusLabel(status){ return passengerRecoveryStatusLabel(status); }
+
+function crewRecoveryActionEstimate(exposure,action){
+  const crew=Math.max(1,Number(exposure.crew)||3);
+  if(action==='hotel') return Math.max(500,crew*160);
+  if(action==='transport') return Math.max(350,crew*65);
+  if(action==='stand_down') return Math.max(300,crew*45);
+  return Math.max(0,Number(exposure.cost)||0);
+}
+
+function crewRecoveryActionsForExposure(exposure){
+  const actions=[];
+  const push=(id)=>{ if(!actions.some(item=>item.id===id)) actions.push({id,label:crewRecoveryActionLabel(id),amount:crewRecoveryActionEstimate(exposure,id)}); };
+  if(exposure.releaseAirportChanged||exposure.diverted) push('transport');
+  if(exposure.releaseAirportChanged||exposure.diverted||exposure.severeReleaseDelay||exposure.crossesNightRest) push('hotel');
+  if(exposure.severeReleaseDelay||exposure.crossesNightRest||exposure.crewIncident) push('stand_down');
+  return actions;
+}
+
+function crewRecoveryActionDuration(action){
+  return {hotel:25*MIN,transport:18*MIN,stand_down:12*MIN}[action]||20*MIN;
+}
+
+function processCrewRecoveries(t=simNow()){
+  let changed=false;
+  for(const recovery of state.crewRecoveries||[]){
+    if(recovery.status==='confirmed') continue;
+    if(recovery.status==='requested'&&t>=recovery.requestedAt+8*MIN){
+      recovery.status='in_progress';
+      recovery.updatedAt=t;
+      changed=true;
+    }
+    if(recovery.status==='in_progress'&&t>=recovery.confirmsAt){
+      recovery.status='confirmed';
+      recovery.completedAt=t;
+      recovery.updatedAt=t;
+      const flight=state.flights.find(item=>item.id===recovery.flightId);
+      if(flight){
+        if(recovery.action==='hotel') flight.crewAccommodationArrangedAt=t;
+        if(recovery.action==='transport') flight.crewTransportArrangedAt=t;
+        if(recovery.action==='stand_down') flight.crewStoodDownAt=t;
+      }
+      changed=true;
+    }
+  }
+  return changed;
+}
+
+function authorizeCrewRecovery(flightId,action='hotel'){
+  const exposure=crewAccommodationExposures().find(item=>item.flightId===flightId);
+  if(!exposure) return toast('No disrupted crew rest or positioning exposure is currently projected for that flight.');
+  const flight=exposure.flight;
+  const available=crewRecoveryActionsForExposure(exposure).find(item=>item.id===action);
+  if(!available) return toast(`${crewRecoveryActionLabel(action)} is not applicable to ${flight.id}.`);
+  const existing=crewRecoveryRecordsForFlight(flightId).find(item=>item.action===action);
+  if(existing) return toast(`${flight.id}: ${crewRecoveryActionRequestLabel(action)} already ${crewRecoveryStatusLabel(existing.status).toLowerCase()}.`);
+  const now=simNow();
+  const amount=available.amount;
+  const event=typeof recordRecoveryCostEvent==='function'?recordRecoveryCostEvent({
+    flight,category:'crew',kind:`crew_${action}`,
+    amount,crew:exposure.crew,airport:exposure.releaseAirport,
+    description:`${flight.id}: ${crewRecoveryActionRequestLabel(action)} at ${exposure.releaseAirport}`
+  }):null;
+  state.crewRecoveries??=[];
+  state.crewRecoveries.push({
+    id:`CR${state.nextCrewRecovery++}`,
+    flightId,
+    action,
+    status:'requested',
+    requestedAt:now,
+    updatedAt:now,
+    confirmsAt:now+crewRecoveryActionDuration(action),
+    completedAt:0,
+    amount,
+    crew:exposure.crew,
+    releaseAirport:exposure.releaseAirport,
+    reason:exposure.reason,
+    costEventId:event?.id||''
+  });
+  AeroServices.commit();
+  requestUiRefresh('desk','left','context');
+  toast(`${flight.id}: ${crewRecoveryActionRequestLabel(action)} requested${event?` (${money(event.amount)})`:''}.`);
+  return event;
 }
 
 function authorizePassengerRecovery(flightId,action='hotel'){
@@ -3234,19 +3367,7 @@ function arrangePassengerRecovery(flightId,mode='accommodation'){
 }
 
 function arrangeCrewAccommodation(flightId){
-  const exposure=crewAccommodationExposures().find(item=>item.flightId===flightId);
-  if(!exposure) return toast('No crew accommodation exposure is currently projected for that flight.');
-  const flight=exposure.flight;
-  const event=typeof recordRecoveryCostEvent==='function'?recordRecoveryCostEvent({
-    flight,category:'crew',kind:'crew_accommodation',
-    amount:exposure.cost,crew:exposure.crew,airport:exposure.releaseAirport,
-    description:`${flight.id}: crew hotel/rest accommodation at ${exposure.releaseAirport}`
-  }):null;
-  flight.crewAccommodationArrangedAt=simNow();
-  AeroServices.commit();
-  requestUiRefresh('desk','left','context');
-  toast(`${flight.id}: crew accommodation arranged${event?` (${money(event.amount)})`:''}.`);
-  return event;
+  return authorizeCrewRecovery(flightId,'hotel');
 }
 
 function processMelConstraints(t=simNow()){
@@ -3296,6 +3417,7 @@ function processEvents(){
   if(processPersonnelTransfers(t)){ changed=true; needsRecalc=true; }
   if(processResourceRequests(t)){ changed=true; needsRecalc=true; }
   if(processPassengerRecoveries(t)) changed=true;
+  if(processCrewRecoveries(t)) changed=true;
   if(processMelConstraints(t)){ changed=true; needsRecalc=true; }
 
   for(const f of state.flights){
@@ -3574,6 +3696,7 @@ function createFlightRecord({aircraftId,from,to,departure,fare,serviceId=null,se
       nightRestrictionDelayMin:0,nightRestrictionLabel:'',nightRestrictionConflictDelayMin:0,nightRestrictionConflictLabel:'',
     nightRecoveryDecision:'',nightRecoverySourceKey:'',nightRecoveryApprovedAt:0,
     crewDutyId:'',crewDutySplit:false,crewSwappedAt:0,crewRoleSwaps:{},
+    crewAccommodationArrangedAt:0,crewTransportArrangedAt:0,crewStoodDownAt:0,
     connectionPax:0,connectionCriticalPax:0,connectionAtRiskPax:0,connectionMissedPax:0,
     passengerAccommodationArrangedAt:0,passengerRecoveryArrangedAt:0,passengerReleasedAt:0,recoveryCostBooked:0,cancellationCostBooked:'',
     weatherLiveChecks:{},weatherRouteHazard:'',weatherCause:null,
@@ -3668,6 +3791,22 @@ function returnReusesOutboundCrew(f){
   return Boolean(outbound&&rotationUsesThroughCrew(f));
 }
 function flightUsesLocalCrew(f){ return !returnReusesOutboundCrew(f); }
+function plannedReturnForCrew(f){
+  if(!(f.serviceId&&f.serviceLeg==='outbound')) return null;
+  return state.flights
+    .filter(other=>other.serviceId===f.serviceId&&other.serviceLeg==='return'&&other.departure>f.departure)
+    .sort((a,b)=>a.departure-b.departure)[0]||null;
+}
+function flightCrewPlannedRelease(f){
+  const returnFlight=plannedReturnForCrew(f);
+  if(returnFlight&&returnReusesOutboundCrew(returnFlight)) return returnFlight.arrival;
+  return f.arrival;
+}
+function flightCrewPlannedReleaseAirport(f){
+  const returnFlight=plannedReturnForCrew(f);
+  if(returnFlight&&returnReusesOutboundCrew(returnFlight)) return returnFlight.to;
+  return f.to;
+}
 function flightCrewRelease(f){
   if(f.serviceId && f.serviceLeg==='outbound'){
     const returnFlight=state.flights

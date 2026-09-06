@@ -1070,7 +1070,8 @@ body,
 .crew-accommodation-row{
   align-items:center;
 }
-.passenger-recovery-row{
+.passenger-recovery-row,
+.crew-accommodation-row{
   grid-template-columns:1fr;
   gap:8px;
 }
@@ -1078,14 +1079,17 @@ body,
 .crew-accommodation-row .occ-action-controls{
   min-width:92px;
 }
-.passenger-recovery-row .occ-action-controls{
+.passenger-recovery-row .occ-action-controls,
+.crew-accommodation-row .occ-action-controls{
   justify-content:flex-start;
 }
-.passenger-recovery-row .occ-action-controls>em{
+.passenger-recovery-row .occ-action-controls>em,
+.crew-accommodation-row .occ-action-controls>em{
   flex-basis:100%;
   text-align:left;
 }
-.passenger-recovery-row .secondary-button{
+.passenger-recovery-row .secondary-button,
+.crew-accommodation-row .secondary-button{
   min-height:26px;
   padding:4px 7px;
   font-size:10px;
