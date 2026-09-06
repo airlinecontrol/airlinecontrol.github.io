@@ -9,7 +9,7 @@
   const frame=document.getElementById('game');
   const loadApp=async()=>{
     const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
-    frame.src='../aerosim-next.html?fixture=personnel-transfer&cache='+Date.now();
+    frame.src='../index.html?fixture=personnel-transfer&cache='+Date.now();
     await loaded;
   };
   await loadApp();

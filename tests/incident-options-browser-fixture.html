@@ -11,7 +11,7 @@
   const assert=(condition,message)=>{if(!condition)throw new Error(message);};
   const loadApp=async()=>{
     const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
-    frame.src='../aerosim-next.html?fixture=incident-options&cache='+Date.now();
+    frame.src='../index.html?fixture=incident-options&cache='+Date.now();
     await loaded;
   };
   try{

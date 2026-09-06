@@ -8,7 +8,7 @@ Treat this file as the primary project-context document before changing code. Re
 
 The current prototype source is split into:
 
-- `aerosim-next.html`
+- `index.html`
 - `aerosim-next.css`
 - `js/app-services.js`
 - `js/management.js`
@@ -93,7 +93,7 @@ These are primarily useful for testing long-running scheduling and disruption be
 
 The current prototype uses browser-native HTML, CSS, and classic JavaScript files:
 
-- `aerosim-next.html` for the HTML UI
+- `index.html` for the HTML UI
 - `aerosim-next.css` for styling
 - `js/management.js` for pure management-domain calculations
 - `js/core.js` for catalog data, utilities, state, migration, and persistence
@@ -112,7 +112,7 @@ The map therefore needs internet access, but game state and simulation logic are
 
 ## Current operations interface
 
-`aerosim-next.html` is the supported presentation over the simulation and the
+`index.html` is the supported presentation over the simulation and the
 `aerosim_mvp_v6` local save. The previous `airline-manager-mvp-v9.2.html` legacy interface has
 been removed.
 
@@ -1558,7 +1558,7 @@ The current prototype has evolved iteratively from direct user testing. Preserve
 Before editing anything, Codex should:
 
 1. read this `AGENTS.md`
-2. read `aerosim-next.html` and `js/ui-next.js` for the current UI surface
+2. read `index.html` and `js/ui-next.js` for the current UI surface
 3. identify simulation/state/UI boundaries
 4. run a JavaScript syntax check
 5. open/run the app if practical

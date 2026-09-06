@@ -18,7 +18,7 @@
     localStorage.removeItem('aerosim_mvp_v6');
     localStorage.removeItem('aerosim_occ_ui_v1');
     const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
-    frame.src='../aerosim-next.html?fixture=performance&cache='+Date.now();
+    frame.src='../index.html?fixture=performance&cache='+Date.now();
     await loaded;
     const w=frame.contentWindow,d=frame.contentDocument;
     w.resetLocalSave?.();
