@@ -49,7 +49,7 @@
       w.recalculateOperations();
       assert(w.statusOfFlight(flight,now)==='delayed','delayed ground flight was shown as airborne');
       assert(w.currentAircraftPosition(aircraft,now).status==='ground','delayed ground aircraft was positioned airborne');
-      const airborneTypes=['onboard_medical','inflight_technical_fault','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute','unruly_passenger','destination_weather_deterioration','destination_below_minima','alternate_unsuitable','diversion_airport_unavailable','lightning_strike','pressurization_issue'];
+      const airborneTypes=['onboard_medical','inflight_technical_fault','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute','unruly_passenger','destination_weather_deterioration','destination_below_minima','alternate_unsuitable','diversion_airport_unavailable','lightning_strike','pressurization_issue','crew_duty_extension'];
       for(const type of airborneTypes){
         assert(!w.createIncident(type,flight,{detectedAt:now,source:'test',sourceKey:`ground:${type}:${flight.id}`}),`${type} was allowed before actual departure`);
       }
@@ -208,6 +208,36 @@
       const incident=w.openIncidentsForFlight(flight.id).find(item=>item.type==='fuel_margin_low');
       assert(incident,'fuel margin incident was not created from projected fuel state');
       assert(incident.context.projectedLandingFuelGal<incident.context.reserveGal,'fuel margin context is not below reserve');
+    }
+
+    {
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const outbound=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'MAD',departure:now-2*60*60_000,fare:{economy:160,business:420,first:0},serviceId:'SVC-DUTY-EXT',serviceLeg:'outbound'});
+      outbound.departureLogged=true;
+      outbound.actualDeparture=outbound.departure+30*60_000;
+      outbound.manualDelayMin=45;
+      outbound.enrouteDelayMin=8*60;
+      outbound.operationalDurationMs=2*60*60_000;
+      outbound.actualArrival=outbound.actualDeparture+outbound.operationalDurationMs+outbound.enrouteDelayMin*60_000;
+      const ret=w.createFlightRecord({aircraftId:aircraft.id,from:'MAD',to:'FRA',departure:outbound.arrival+90*60_000,fare:{economy:160,business:420,first:0},serviceId:'SVC-DUTY-EXT',serviceLeg:'return'});
+      ret.operationalDurationMs=2*60*60_000;
+      ret.arrival=ret.departure+ret.operationalDurationMs;
+      ret.actualArrival=ret.arrival;
+      w.recalculateOperations();
+      assert(w.flightIsAirborne(outbound,now),'crew-duty extension fixture flight is not airborne');
+      assert(w.processDerivedOperationalIncidents(now),'crew duty extension scanner did not report a change');
+      const incident=w.openIncidentsForFlight(outbound.id).find(item=>item.type==='crew_duty_extension');
+      assert(incident,'crew duty extension incident was not created from airborne duty projection');
+      assert(incident.context.overrunMin>=10,'crew duty extension context is missing overrun minutes');
+      assert(incident.context.causeBreakdown.some(item=>item.label==='Enroute delay'||item.label==='Manual OCC hold'),'crew duty extension context did not explain the delay source');
+      assert(incident.context.nextFlightId===ret.id,'crew duty extension did not identify the downstream sector');
+      const strategy=w.incidentTasks(incident.id).find(item=>item.key==='crew-extension-strategy');
+      assert(!strategy.strategyOptions.some(option=>option.id==='cancel'),'airborne crew duty extension should not offer cancellation');
+      assert(w.operationalOptionConsequence(strategy,incident,'record_extension').includes('duty extension'),'crew extension consequence should explain the duty-extension record');
+      assert(w.performOperationalTask(strategy.id,'record_extension'),'crew extension record strategy was rejected');
+      completeWaits();
+      assert(incident.status==='resolved','crew duty extension record path did not resolve');
+      assert(outbound.crewDutyExtensionRecordedAt,'crew duty extension was not recorded on the flight');
     }
 
     {

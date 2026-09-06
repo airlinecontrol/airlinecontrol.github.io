@@ -714,7 +714,8 @@ function taskActions(task,incident){
   if(['in_progress','waiting_external'].includes(task.status)){
     const progress=OperationalWorkflows.progress(task,simNow());
     const remaining=Math.max(0,Math.ceil(((task.completesAt||simNow())-simNow())/MIN));
-    return `<div class="task-waiting"><b>${task.status==='waiting_external'?'Request sent':'Work underway'}</b><span>${esc(task.pendingOutcome||task.detail)} · <em data-inline-task-remaining>${remaining} min remaining</em></span><div class="progress-track"><span data-inline-task-progress style="width:${formatPct(progress)}"></span></div></div>`;
+    const label=task.kind==='crew_report'?'Crew response pending':task.kind==='crew_augmentation'?'Augmentation response pending':task.status==='waiting_external'?'Request sent':'Work underway';
+    return `<div class="task-waiting"><b>${esc(label)}</b><span>${esc(task.pendingOutcome||task.detail)} · <em data-inline-task-remaining>${remaining} min remaining</em></span><div class="progress-track"><span data-inline-task-progress style="width:${formatPct(progress)}"></span></div></div>`;
   }
   if(task.kind==='manual_crew_move_required'){
     const plan=crewRelocationPlanState(incident);
@@ -727,7 +728,7 @@ function taskActions(task,incident){
   if(blocker) return `<div class="attention-summary critical"><b>Resource unavailable</b><span>${esc(blocker)}</span></div>`;
   if(task.kind==='crew_allocation'){
     const options=crewPoolOptions(incident);
-    return options.length?`<div class="task-form"><label>Qualified personnel pool<select data-task-crew-pool>${options.map(option=>`<option value="${esc(option.id)}">${esc(option.label)}</option>`).join('')}</select></label><button class="primary-button" type="button" data-task-action="allocate">Allocate crew</button></div>`:'<div class="attention-summary critical"><b>No qualified crew available</b><span>Request or position qualified personnel in the Personnel desk.</span></div>';
+    return options.length?`<div class="task-form"><label>Qualified local reserve<select data-task-crew-pool>${options.map(option=>`<option value="${esc(option.id)}">${esc(option.label)}</option>`).join('')}</select></label><button class="primary-button" type="button" data-task-action="allocate">Activate selected crew</button></div>`:'<div class="attention-summary critical"><b>No qualified crew available</b><span>Request or position qualified personnel in the Personnel desk, then return to this task.</span></div>';
   }
   if(task.kind==='authority_decision'){
     const flight=state.flights.find(item=>item.id===incident?.flightId&&!item.cancelled);
@@ -757,7 +758,14 @@ function taskActions(task,incident){
   if(task.kind==='maintenance_defer') return `<button class="primary-button" type="button" data-task-action="defer">Confirm MEL deferral</button>`;
   if(task.kind==='maintenance_repair') return `<button class="primary-button" type="button" data-task-action="repair">Start repair</button>`;
   if(task.kind==='maintenance_clearance') return `<button class="primary-button" type="button" data-task-action="complete">Record engineering clearance</button>`;
-  if(task.kind==='crew_augmentation') return `<button class="primary-button" type="button" data-task-action="complete">Assign augmented crew</button>`;
+  if(task.kind==='crew_augmentation') return `<button class="primary-button" type="button" data-task-action="complete">Start augmentation callout</button>`;
+  if(task.kind==='crew_next_sector_replacement'){
+    const next=nextSectorForCrewExtensionIncident(incident);
+    const blocker=taskResourceBlocker(task,incident);
+    return next
+      ? `<div class="task-form"><div class="attention-summary ${blocker?'warning':''}"><b>${esc(next.id)} · ${esc(next.from)} → ${esc(flightOperationalDestination(next))}</b><span>${esc(blocker||'Local reserve crew is available for the next sector.')}</span></div><button class="primary-button" type="button" data-task-action="complete" ${blocker?'disabled':''}>Activate reserve crew</button></div>`
+      : '<div class="attention-summary warning"><b>No next sector</b><span>Use duty-extension record or priority handling instead.</span></div>';
+  }
   if(task.kind==='aircraft_substitution'){
     const options=incidentAircraftReplacementOptions(incident);
     return options.length?`<div class="task-form"><label>Replacement aircraft<select data-task-replacement-aircraft>${options.map(option=>`<option value="${esc(option.id)}">${esc(option.label)} · ${esc(option.detail)}</option>`).join('')}</select></label><button class="primary-button" type="button" data-task-action="substitute-aircraft">Assign replacement</button></div>`:'<div class="attention-summary critical"><b>No replacement aircraft available</b><span>Request an aircraft or reposition a spare in Dispatch & slots, then return to this task.</span></div>';
@@ -773,7 +781,7 @@ function taskActions(task,incident){
   if(task.kind==='stand_request') return `<button class="primary-button" type="button" data-task-action="complete">${esc(task.label)}</button>`;
   if([
     'inbound_wait','turnaround_expedite','station_recovery','fuel_recovery','security_coordination',
-    'medical_assessment','medical_coordination','flight_watch_assessment','flight_watch_coordination','fuel_monitoring','reroute_coordination',
+    'medical_assessment','medical_coordination','flight_watch_assessment','flight_watch_coordination','fuel_monitoring','reroute_coordination','crew_extension_record',
     'performance_coordination','cabin_security_coordination','arrival_maintenance_check','destination_handling','authority_decision'
   ].includes(task.kind)) return `<button class="primary-button" type="button" data-task-action="complete">${esc(task.label)}</button>`;
   if(task.kind==='alternate_selection'){
@@ -1086,6 +1094,12 @@ function incidentContextSummaryMarkup(incident){
   }else if(incident.type==='crew_fatigue_mid_rotation'){
     label='Duty margin';
     detail=context.label||`${(context.remainingHours||0).toFixed?.(1)||0} h remaining`;
+  }else if(incident.type==='crew_duty_extension'){
+    label='Duty extension';
+    const release=context.projectedRelease?shortClock(context.projectedRelease):'n/a';
+    const limit=context.dutyLimitAt?shortClock(context.dutyLimitAt):'n/a';
+    const next=context.nextFlightId?` · next ${context.nextFlightId} ${context.nextFlightOrigin||''} ${context.nextFlightDeparture?shortClock(context.nextFlightDeparture):''}`:'';
+    detail=`release ${release} / limit ${limit} · +${context.overrunMin||0}m · ${context.primaryCause||'operational delay'}${next}`;
   }else if(['deicing_required','deicing_capacity_collapse','holdover_expired','airport_capacity_reduction','atc_ground_stop','fuel_supplier_outage'].includes(incident.type)){
     label=['airport_capacity_reduction','atc_ground_stop'].includes(incident.type)?'Airport flow':'Station weather';
     if(incident.type==='fuel_supplier_outage') label='Fuel provider';
@@ -1884,9 +1898,10 @@ function scheduleCrewDutyMarkup(duty,start,end,pxPerHour,lane=0,focusIds=new Set
   const selected=duty.flightIds?.includes(selectedFlightId);
   const focused=(duty.flightIds||[]).some(id=>focusIds.has(id));
   const swaps=(duty.roleSwaps||[]).map(swap=>PERSONNEL[swap.role]?.label||swap.role);
+  const augmentation=duty.augmented?' · augmented crew planned':'';
   const label=`Crew duty · rel ${shortClock(duty.releaseAt)}`;
-  const title=`${duty.flightIds.join(' + ')} · report ${shortClock(duty.reportAt)} · release ${shortClock(duty.releaseAt)} · duty ${Number(duty.dutyHours||0).toFixed(1)} h of ${Number(duty.maxHours||0).toFixed(1)} h max · ${duty.sectors} sector${duty.sectors===1?'':'s'} · ${duty.label}${swaps.length?` · role replacement: ${swaps.join(', ')}`:''}`;
-  return `<div class="crew-duty-bar ${stateClass} ${focused?'focus':''} ${selected?'selected':''} ${swaps.length?'has-role-swap':''}" data-crew-duty="${esc(duty.id)}" title="${esc(title)}" style="left:${left}px;width:${width}px;--crew-duty-top:${64+lane*17}px"><span style="width:${formatPct(elapsed)}"></span><b>${esc(label)}</b>${swaps.length?`<em>${esc(swaps.length===1?swaps[0]:'roles')}</em>`:''}</div>`;
+  const title=`${duty.flightIds.join(' + ')} · report ${shortClock(duty.reportAt)} · release ${shortClock(duty.releaseAt)} · duty ${Number(duty.dutyHours||0).toFixed(1)} h of ${Number(duty.maxHours||0).toFixed(1)} h max · ${duty.sectors} sector${duty.sectors===1?'':'s'}${augmentation} · ${duty.label}${swaps.length?` · role replacement: ${swaps.join(', ')}`:''}`;
+  return `<div class="crew-duty-bar ${stateClass} ${duty.augmented?'augmented':''} ${focused?'focus':''} ${selected?'selected':''} ${swaps.length?'has-role-swap':''}" data-crew-duty="${esc(duty.id)}" title="${esc(title)}" style="left:${left}px;width:${width}px;--crew-duty-top:${64+lane*17}px"><span style="width:${formatPct(elapsed)}"></span><b>${esc(label)}</b>${swaps.length?`<em>${esc(swaps.length===1?swaps[0]:'roles')}</em>`:''}</div>`;
 }
 function scheduleNightMarkerInfo(flight){
   const delay=Number(flight.nightRestrictionDelayMin)||0;

@@ -45,6 +45,7 @@
     fuel_monitoring:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
     performance_coordination:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
     reroute_coordination:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
+    crew_extension_record:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
     cabin_security_coordination:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
     arrival_maintenance_check:{resources:[{type:'personnel',role:'groundHandling',location:'destination',amount:1}]},
     destination_handling:{resources:[{type:'personnel',role:'groundHandling',location:'destination',amount:1}]}
@@ -61,10 +62,10 @@
   const WORKFLOWS={
     crew_sick:{classification:'incident',steps:withCancellation([
       {key:'crew-strategy',department:'crew',kind:'recovery_strategy',label:'Choose crew recovery',detail:'Select the viable crew recovery path for this duty.',options:[
-        {id:'replace',label:'Use local replacement crew',detail:'Reserve a legal, qualified crew member already at the operating airport.'}
+        {id:'replace',label:'Activate local reserve crew',detail:'Use a legal qualified reserve already at the operating airport.'}
       ]},
-      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Allocate replacement crew',detail:'Select a legal, qualified personnel pool and reserve it for this duty.',dependsOn:['crew-strategy'],branch:'replace'},
-      {key:'crew-report',department:'crew',kind:'crew_report',label:'Replacement report and briefing',detail:'The assigned replacement must travel, report, and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
+      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Activate local reserve crew',detail:'Select a legal, qualified local pool. The reserve must still report and brief before the duty is protected.',dependsOn:['crew-strategy'],branch:'replace'},
+      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve response and briefing',detail:'Crew Control waits for the reserve to report, complete briefing, and become usable for the duty.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
     ])},
     mel_defect:{classification:'incident',steps:withCancellation([
       {key:'mx-inspect',department:'maintenance',kind:'maintenance_inspection',label:'Inspect reported defect',detail:'Assign an engineering inspection before choosing a technical disposition.'},
@@ -142,61 +143,73 @@
     crew_misconnect:{classification:'derived',steps:withCancellation([
       {key:'crew-misconnect-strategy',department:'crew',kind:'recovery_strategy',label:'Choose crew misconnect recovery',detail:'Select whether to wait for the positioned crew or use local replacement crew.',options:[
         {id:'wait_crew',label:'Wait for connecting crew',detail:'Accept the crew transfer ETA and publish the revised departure.'},
-        {id:'replace',label:'Use local replacement crew',detail:'Allocate a legal qualified crew member already at the departure station.'}
+        {id:'replace',label:'Activate local reserve crew',detail:'Use a legal qualified reserve already at the departure station.'}
       ]},
       {key:'crew-wait-connect',department:'crew',kind:'inbound_wait',label:'Accept crew connection ETA',detail:'Use the crew transfer arrival and reporting time as the operating plan.',dependsOn:['crew-misconnect-strategy'],branch:'wait_crew',action:'wait_crew'},
-      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Allocate replacement crew',detail:'Select a legal qualified local pool and reserve it for the duty.',dependsOn:['crew-misconnect-strategy'],branch:'replace'},
-      {key:'crew-report',department:'crew',kind:'crew_report',label:'Replacement report and briefing',detail:'The assigned replacement must report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
+      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Activate local reserve crew',detail:'Select a legal qualified local pool. The reserve must report before the flight can use that crew.',dependsOn:['crew-misconnect-strategy'],branch:'replace'},
+      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve response and briefing',detail:'Crew Control waits for the reserve to report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
     ])},
     crew_misposition_after_diversion:{classification:'derived',steps:withCancellation([
       {key:'crew-diversion-strategy',department:'crew',kind:'recovery_strategy',label:'Choose post-diversion crew recovery',detail:'Select how to recover the through crew after a diversion left them away from the next departure station.',options:[
         {id:'move_crew',label:'Move diverted crew to origin',detail:'Manually position the displaced crew to the next origin in the Personnel widget.'},
-        {id:'replace',label:'Use local replacement crew',detail:'Allocate a legal qualified crew member already at the departure station.'},
+        {id:'replace',label:'Activate local reserve crew',detail:'Use a legal qualified reserve already at the departure station.'},
         {id:'wait_crew',label:'Delay for displaced crew',detail:'Accept the crew positioning ETA and publish the revised departure.'}
       ]},
       {key:'crew-move-diverted',department:'crew',kind:'manual_crew_move_required',label:'Move displaced crew',detail:'Book the personnel move, then return here once the crew is projected at the departure station.',dependsOn:['crew-diversion-strategy'],branch:'move_crew',action:'check_crew_move'},
-      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Allocate replacement crew',detail:'Select a legal qualified local pool and reserve it for the duty.',dependsOn:['crew-diversion-strategy'],branch:'replace'},
-      {key:'crew-report',department:'crew',kind:'crew_report',label:'Replacement report and briefing',detail:'The assigned replacement must report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
+      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Activate local reserve crew',detail:'Select a legal qualified local pool. The reserve must report before the flight can use that crew.',dependsOn:['crew-diversion-strategy'],branch:'replace'},
+      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve response and briefing',detail:'Crew Control waits for the reserve to report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
       {key:'crew-wait-connect',department:'crew',kind:'inbound_wait',label:'Publish crew-positioning delay',detail:'Use the displaced crew movement time as the operating plan.',dependsOn:['crew-diversion-strategy'],branch:'wait_crew',action:'wait_crew'},
     ])},
     crew_report_delayed:{classification:'incident',steps:withCancellation([
       {key:'crew-report-delay-strategy',department:'crew',kind:'recovery_strategy',label:'Choose crew-report recovery',detail:'Select how Crew Control protects a departure when the assigned crew cannot complete report on time.',options:[
         {id:'wait_crew',label:'Wait for assigned crew',detail:'Accept the late report and publish the revised departure.'},
-        {id:'replace',label:'Use local reserve crew',detail:'Allocate a legal qualified replacement already at the departure station.'},
+        {id:'replace',label:'Activate local reserve crew',detail:'Use a legal qualified reserve already at the departure station.'},
         {id:'move_reserve',label:'Move reserve crew to origin',detail:'Manually position qualified reserve crew from another station, then confirm local availability.'}
       ]},
       {key:'crew-wait-report',department:'crew',kind:'inbound_wait',label:'Publish crew-report delay',detail:'Use the crew report ETA as the operating plan.',dependsOn:['crew-report-delay-strategy'],branch:'wait_crew',action:'wait_crew'},
-      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Allocate reserve crew',detail:'Select a legal qualified local pool and reserve it for the duty.',dependsOn:['crew-report-delay-strategy'],branch:'replace'},
-      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve report and briefing',detail:'The assigned reserve must report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
+      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Activate local reserve crew',detail:'Select a legal qualified local pool. The reserve must report before the flight can use that crew.',dependsOn:['crew-report-delay-strategy'],branch:'replace'},
+      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve response and briefing',detail:'Crew Control waits for the reserve to report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
       {key:'crew-move-reserve',department:'crew',kind:'manual_crew_move_required',label:'Move reserve crew',detail:'Book the personnel move, then return here once the reserve crew is projected at the departure station.',dependsOn:['crew-report-delay-strategy'],branch:'move_reserve',action:'check_crew_move'},
     ])},
     crew_duty_risk:{classification:'derived',steps:withCancellation([
       {key:'crew-duty-strategy',department:'crew',kind:'recovery_strategy',label:'Choose duty recovery',detail:'Select a legal crew recovery before the duty limit is exceeded.',options:[
-        {id:'augment',label:'Assign augmented crew',detail:'Add a relief crew set if local qualified personnel are available.'},
-        {id:'replace',label:'Use local replacement crew',detail:'Replace the duty with a legal qualified crew at the operating airport.'}
+        {id:'augment',label:'Activate augmented crew',detail:'Use additional qualified local crew if the augmented duty remains legal.'},
+        {id:'replace',label:'Activate local reserve crew',detail:'Replace the duty with legal qualified reserve crew at the operating airport.'}
       ]},
-      {key:'crew-augment',department:'crew',kind:'crew_augmentation',label:'Assign augmented crew',detail:'Reserve additional flight and cabin crew to extend the legal duty envelope.',dependsOn:['crew-duty-strategy'],branch:'augment'},
-      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Allocate replacement crew',detail:'Select a legal, qualified personnel pool and reserve it for this duty.',dependsOn:['crew-duty-strategy'],branch:'replace'},
-      {key:'crew-report',department:'crew',kind:'crew_report',label:'Replacement report and briefing',detail:'The assigned replacement must travel, report, and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
+      {key:'crew-augment',department:'crew',kind:'crew_augmentation',label:'Activate augmented crew',detail:'Crew Control calls the additional flight and cabin crew; they must report before the duty envelope is protected.',dependsOn:['crew-duty-strategy'],branch:'augment'},
+      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Activate local reserve crew',detail:'Select a legal, qualified local pool. The reserve must report before the duty is protected.',dependsOn:['crew-duty-strategy'],branch:'replace'},
+      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve response and briefing',detail:'Crew Control waits for the reserve to travel, report, and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
     ])},
     crew_fatigue_report:{classification:'incident',steps:withCancellation([
       {key:'crew-fatigue-strategy',department:'crew',kind:'recovery_strategy',label:'Choose fatigue recovery',detail:'Select a crew-control response to a fatigue report before departure.',options:[
-        {id:'replace',label:'Replace reporting crew member',detail:'Reserve a legal qualified crew member already at the operating airport.'},
-        {id:'augment',label:'Assign augmented crew',detail:'Add extra crew where the duty can remain legal with augmentation.'}
+        {id:'replace',label:'Activate local reserve crew',detail:'Use a legal qualified reserve already at the operating airport.'},
+        {id:'augment',label:'Activate augmented crew',detail:'Use additional crew where the duty can remain legal with augmentation.'}
       ]},
-      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Allocate replacement crew',detail:'Select a legal, qualified personnel pool and reserve it for this duty.',dependsOn:['crew-fatigue-strategy'],branch:'replace'},
-      {key:'crew-report',department:'crew',kind:'crew_report',label:'Replacement report and briefing',detail:'The assigned replacement must report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
-      {key:'crew-augment',department:'crew',kind:'crew_augmentation',label:'Assign augmented crew',detail:'Reserve additional flight and cabin crew for this sector.',dependsOn:['crew-fatigue-strategy'],branch:'augment'},
+      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Activate local reserve crew',detail:'Select a legal, qualified local pool. The reserve must report before the duty is protected.',dependsOn:['crew-fatigue-strategy'],branch:'replace'},
+      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve response and briefing',detail:'Crew Control waits for the reserve to report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
+      {key:'crew-augment',department:'crew',kind:'crew_augmentation',label:'Activate augmented crew',detail:'Crew Control calls additional flight and cabin crew for this sector.',dependsOn:['crew-fatigue-strategy'],branch:'augment'},
     ])},
     crew_fatigue_mid_rotation:{classification:'derived',steps:withCancellation([
       {key:'crew-fatigue-strategy',department:'crew',kind:'recovery_strategy',label:'Choose mid-rotation fatigue recovery',detail:'Select a crew-control response when the current duty margin is too thin for the remaining sector.',options:[
-        {id:'replace',label:'Swap crew for next sector',detail:'Replace the operating crew at the departure station before continuing the rotation.'},
-        {id:'augment',label:'Assign augmented crew',detail:'Add extra crew where the duty can remain legal with augmentation.'}
+        {id:'replace',label:'Activate local reserve crew',detail:'Replace the operating crew at the departure station before continuing the rotation.'},
+        {id:'augment',label:'Activate augmented crew',detail:'Use additional crew where the duty can remain legal with augmentation.'}
       ]},
-      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Allocate replacement crew',detail:'Select a legal, qualified personnel pool and reserve it for this duty.',dependsOn:['crew-fatigue-strategy'],branch:'replace'},
-      {key:'crew-report',department:'crew',kind:'crew_report',label:'Replacement report and briefing',detail:'The assigned replacement must report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
-      {key:'crew-augment',department:'crew',kind:'crew_augmentation',label:'Assign augmented crew',detail:'Reserve additional flight and cabin crew for this sector.',dependsOn:['crew-fatigue-strategy'],branch:'augment'},
+      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Activate local reserve crew',detail:'Select a legal, qualified local pool. The reserve must report before the duty is protected.',dependsOn:['crew-fatigue-strategy'],branch:'replace'},
+      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve response and briefing',detail:'Crew Control waits for the reserve to report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
+      {key:'crew-augment',department:'crew',kind:'crew_augmentation',label:'Activate augmented crew',detail:'Crew Control calls additional flight and cabin crew for this sector.',dependsOn:['crew-fatigue-strategy'],branch:'augment'},
     ])},
+    crew_duty_extension:{classification:'derived',steps:[
+      {key:'crew-extension-strategy',department:'crew',kind:'recovery_strategy',label:'Choose airborne duty response',detail:'The crew keeps operating to a safe landing; choose the OCC / Crew Control support plan for the duty overrun.',options:[
+        {id:'record_extension',label:'Record duty extension',detail:'Record commander discretion / unforeseen duty extension and plan post-arrival review.'},
+        {id:'priority',label:'Request priority handling',detail:'Ask Flight Watch / ATC coordination for a realistic shortcut or priority arrival opportunity.'},
+        {id:'protect_next',label:'Protect next sector crew',detail:'Stand down the current crew on arrival and activate reserve crew for the next unflown sector.'}
+      ]},
+      {key:'crew-extension-record',department:'crew',kind:'crew_extension_record',label:'Record duty-extension plan',detail:'Crew Control records the duty extension and post-arrival review. The flight continues to safe landing.',dependsOn:['crew-extension-strategy'],branch:'record_extension',action:'record_extension'},
+      {key:'dispatch-extension-priority',department:'dispatch',kind:'reroute_coordination',label:'Request priority handling',detail:'Coordinate a shorter routing or arrival-priority request via the flight deck / ATC.',dependsOn:['crew-extension-strategy'],branch:'priority',action:'direct'},
+      {key:'crew-extension-record-priority',department:'crew',kind:'crew_extension_record',label:'Record duty-extension plan',detail:'Record the extension after the priority-handling reply and keep post-arrival crew review active.',dependsOn:['dispatch-extension-priority'],branch:'priority',action:'record_priority'},
+      {key:'crew-next-sector-replacement',department:'crew',kind:'crew_next_sector_replacement',label:'Activate reserve for next sector',detail:'Use local reserve crew at the next departure station. If none is available, move/request crew manually first.',dependsOn:['crew-extension-strategy'],branch:'protect_next'},
+      {key:'crew-extension-standdown',department:'crew',kind:'crew_extension_record',label:'Stand down current crew on arrival',detail:'Crew Control records the current crew as removed from downstream flying and requiring post-arrival rest review.',dependsOn:['crew-next-sector-replacement'],branch:'protect_next',action:'stand_down'},
+    ]},
     no_legal_crew:{classification:'derived',steps:withCancellation([
       {key:'crew-legal-strategy',department:'crew',kind:'recovery_strategy',label:'Choose legal crew recovery',detail:'Select how to recover the flight when no complete legal qualified crew is locally available.',options:[
         {id:'confirm',label:'Confirm legal crew available',detail:'Use this after the required crew has been moved or requested into the departure station.'}

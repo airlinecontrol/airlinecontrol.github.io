@@ -391,6 +391,47 @@ function inferredCrewDutyForFlight(flight){
   });
 }
 
+function plannedCrewDutyAssessmentForFlight(flight,{augmented=false}={}){
+  if(!flight||flight.flightType==='ferry') return null;
+  const rotation=rotationForFlight(flight);
+  if(rotationUsesThroughCrew(flight)&&rotation.outbound&&rotation.returnFlight){
+    return {
+      target:rotation.outbound,
+      flights:[rotation.outbound,rotation.returnFlight],
+      assessment:OperationalIntelligence.crewDutyAssessment({
+        departure:rotation.outbound.departure,arrival:rotation.returnFlight.arrival,sectors:2,augmented
+      })
+    };
+  }
+  return {
+    target:flight,
+    flights:[flight],
+    assessment:OperationalIntelligence.crewDutyAssessment({
+      departure:flight.departure,arrival:flight.arrival,sectors:1,augmented
+    })
+  };
+}
+
+function ensurePlannedCrewAugmentation(){
+  let changed=false;
+  const processed=new Set();
+  for(const flight of state.flights){
+    if(flight.cancelled||flight.departureLogged||flight.flightType==='ferry'||processed.has(flight.id)) continue;
+    const normal=plannedCrewDutyAssessmentForFlight(flight,{augmented:false});
+    if(!normal?.target) continue;
+    normal.flights.forEach(item=>processed.add(item.id));
+    if(normal.target.crewAugmented) continue;
+    const augmented=plannedCrewDutyAssessmentForFlight(flight,{augmented:true});
+    if(!normal.assessment.legal&&augmented?.assessment?.legal){
+      normal.target.crewAugmented=true;
+      normal.target.crewAugmentationPlanned=true;
+      normal.target.crewAugmentationReason='Planned augmented crew required by scheduled duty length.';
+      changed=true;
+    }
+  }
+  return changed;
+}
+
 function crewDutyForFlight(flight){
   const stored=flight?.crewDutyId&&state.crewDuties?.find(item=>item.id===flight.crewDutyId);
   if(stored) return stored;
@@ -596,7 +637,7 @@ function logEvent(){ /* operations log intentionally disabled */ }
 const INCIDENT_TYPE_ORDER=[
   'crew_sick','mel_defect','atc_restriction','gate_conflict','destination_closure_ground','destination_closure',
   'aircraft_out_of_position','aircraft_misposition_after_diversion','postflight_technical_defect',
-  'crew_misconnect','crew_misposition_after_diversion','crew_report_delayed','no_legal_crew',
+  'crew_misconnect','crew_misposition_after_diversion','crew_report_delayed','no_legal_crew','crew_duty_extension',
   'airport_capacity_reduction','atc_ground_stop','night_curfew_conflict','performance_limited','destination_handling_unavailable',
   'fueling_issue','fuel_supplier_outage','deicing_required','deicing_capacity_collapse','security_screening','crew_fatigue_report','bird_strike'
 ];
@@ -613,6 +654,7 @@ const INCIDENT_DEFINITIONS={
   crew_duty_risk:{title:'Crew duty risk',severity:'critical',decisionMin:40,summary:'The planned duty is projected to exceed the crew duty envelope.'},
   crew_fatigue_report:{title:'Crew fatigue report',severity:'critical',decisionMin:30,summary:'A crew member reported fatigue or fitness concerns before departure.'},
   crew_fatigue_mid_rotation:{title:'Crew fatigue mid-rotation',severity:'critical',decisionMin:30,summary:'The active crew duty has too little margin for the remaining sector.'},
+  crew_duty_extension:{title:'Crew duty extension required',severity:'warning',decisionMin:25,summary:'The airborne duty is now projected beyond the crew duty limit; OCC must coordinate support and downstream crew recovery.',allowAirborne:true,airborneOnly:true},
   crew_misconnect:{title:'Crew misconnect',severity:'critical',decisionMin:30,summary:'Positioned crew is projected to miss the report time for this departure.'},
   crew_misposition_after_diversion:{title:'Crew misposition after diversion',severity:'critical',decisionMin:35,summary:'The through crew is away from the next departure station after a diversion.'},
   crew_report_delayed:{title:'Crew report delayed',severity:'warning',decisionMin:30,summary:'The assigned operating crew is not expected to complete report and briefing on time.'},
@@ -647,7 +689,7 @@ const INCIDENT_DEFINITIONS={
 const RETIRED_INCIDENT_TYPES=new Set(['slot_miss_risk','aircraft_late_inbound']);
 const DERIVED_INCIDENT_TYPES=new Set([
   'aircraft_out_of_position','aircraft_misposition_after_diversion','postflight_technical_defect','crew_duty_risk',
-  'crew_fatigue_mid_rotation','crew_misconnect','crew_misposition_after_diversion','no_legal_crew',
+  'crew_fatigue_mid_rotation','crew_misconnect','crew_misposition_after_diversion','no_legal_crew','crew_duty_extension',
   'deicing_required','deicing_capacity_collapse','holdover_expired','airport_capacity_reduction','atc_ground_stop','night_curfew_conflict','performance_limited',
   'destination_handling_unavailable','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute','destination_weather_deterioration',
   'destination_below_minima','alternate_unsuitable','diversion_airport_unavailable','lightning_strike'
@@ -677,7 +719,7 @@ function incidentAirport(type,flight){
   if(['destination_closure','destination_closure_ground'].includes(type)) return flight.to;
   if(['destination_handling_unavailable'].includes(type)) return flightOperationalDestination(flight);
   if(type==='night_curfew_conflict') return flightOperationalDestination(flight);
-  if(['onboard_medical','inflight_technical_fault','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute','unruly_passenger','destination_weather_deterioration','destination_below_minima','alternate_unsuitable','diversion_airport_unavailable','lightning_strike','pressurization_issue'].includes(type)) return flightOperationalDestination(flight);
+  if(['onboard_medical','inflight_technical_fault','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute','unruly_passenger','destination_weather_deterioration','destination_below_minima','alternate_unsuitable','diversion_airport_unavailable','lightning_strike','pressurization_issue','crew_duty_extension'].includes(type)) return flightOperationalDestination(flight);
   return flight.from;
 }
 
@@ -946,6 +988,7 @@ function impactSummary(type,context,status='open'){
     return `${prefix}${context?.slotDelayMin||0} minutes of slot delay projected.${cause}`;
   }
   if(type==='crew_duty_risk') return `${prefix}${context?.label||'Crew duty limit risk projected.'}`;
+  if(type==='crew_duty_extension') return `${prefix}+${context?.overrunMin||0} minutes beyond duty limit projected${context?.primaryCause?` · ${context.primaryCause}`:''}.`;
   return INCIDENT_DEFINITIONS[type]?.summary||'Operational impact projected.';
 }
 
@@ -1327,6 +1370,100 @@ function crewFatigueMidRotationContextForFlight(flight){
   };
 }
 
+function addCrewDutyDelayCause(causes,label,minutes,detail=''){
+  const value=Math.max(0,Math.round(Number(minutes)||0));
+  if(value>0) causes.push({label,minutes:value,detail});
+}
+
+function crewDutyExtensionDelayCauses(duty){
+  const causes=[];
+  for(const flightId of duty?.flightIds||[]){
+    const flight=state.flights.find(item=>item.id===flightId);
+    if(!flight||flight.cancelled) continue;
+    const prefix=flight.id;
+    addCrewDutyDelayCause(causes,'Manual OCC hold',flight.manualDelayMin,`${prefix}: dispatcher-entered hold`);
+    addCrewDutyDelayCause(causes,'Incident response',flight.incidentDelayMin,`${prefix}: incident coordination delay`);
+    addCrewDutyDelayCause(causes,'Weather delay',(flight.weatherDelayMin||0)+(flight.liveWeatherDelayMin||0),`${prefix}: ${weatherCauseText(flight.weatherCause)||flight.weatherCode||flight.weatherRouteHazard||'weather impact'}`);
+    addCrewDutyDelayCause(causes,'Enroute delay',flight.enrouteDelayMin,`${prefix}: airborne routing, holding, or flight-watch impact`);
+    addCrewDutyDelayCause(causes,'Airport flow restriction',flight.airportDelayMin,`${prefix}: ${flight.airportConstraintLabel||'airport flow restriction'}`);
+    addCrewDutyDelayCause(causes,'Airspace restriction',flight.airspaceDelayMin,`${prefix}: ${flight.airspaceConstraintLabel||'route or airspace flow restriction'}`);
+    addCrewDutyDelayCause(causes,'Taxi delay',(flight.taxiOutDelayMin||0)+(flight.taxiInDelayMin||0),`${prefix}: ${taxiCauseText(flight,'out')||taxiCauseText(flight,'in')||'surface movement delay'}`);
+    addCrewDutyDelayCause(causes,'Late inbound / turn readiness',flight.propagatedDelayMin,`${prefix}: aircraft or crew rotation delayed`);
+    addCrewDutyDelayCause(causes,'Slot delay',flight.slotDelayMin,`${prefix}: regulated departure slot moved`);
+    addCrewDutyDelayCause(causes,'Night operations',flight.nightRestrictionDelayMin,`${prefix}: ${flight.nightRestrictionLabel||'night restriction'}`);
+  }
+  return causes.sort((a,b)=>b.minutes-a.minutes).slice(0,8);
+}
+
+function nextCrewDutyFlightAfter(flight,duty){
+  const ordered=(duty?.flightIds||[])
+    .map(id=>state.flights.find(item=>item.id===id&&!item.cancelled))
+    .filter(Boolean)
+    .sort((a,b)=>flightActualDeparture(a)-flightActualDeparture(b)||a.id.localeCompare(b.id));
+  return ordered.find(item=>item.id!==flight.id&&flightActualDeparture(item)>flightActualDeparture(flight)&&!item.departureLogged)||null;
+}
+
+function crewDutyExtensionProjectionForFlight(flight){
+  const rotation=rotationForFlight(flight);
+  const pair=rotation.outbound&&rotation.returnFlight&&!rotation.outbound.crewDutySplit&&!rotation.returnFlight.crewDutySplit;
+  if(pair){
+    const augmented=Boolean(rotation.outbound.crewAugmented);
+    const planned=OperationalIntelligence.crewDutyAssessment({
+      departure:rotation.outbound.departure,arrival:rotation.returnFlight.arrival,sectors:2,augmented
+    });
+    const actual=OperationalIntelligence.crewDutyAssessment({
+      departure:flightActualDeparture(rotation.outbound),arrival:flightActualArrival(rotation.returnFlight),sectors:2,augmented
+    });
+    if(planned.legal){
+      return {
+        id:`CD-${rotation.outbound.id}-${rotation.returnFlight.id}`,
+        flightIds:[rotation.outbound.id,rotation.returnFlight.id],
+        dutyStart:actual.dutyStart,dutyEnd:actual.dutyEnd,releaseAt:actual.dutyEnd,
+        maxHours:actual.maxHours,dutyHours:actual.dutyHours,remainingHours:actual.remainingHours,
+        legal:actual.legal,label:actual.label,sectors:2,augmented
+      };
+    }
+  }
+  const actual=OperationalIntelligence.crewDutyAssessment({
+    departure:flightActualDeparture(flight),arrival:flightActualArrival(flight),sectors:1,augmented:Boolean(flight.crewAugmented)
+  });
+  return {
+    id:flight.crewDutyId||`CD-${flight.id}`,flightIds:[flight.id],
+    dutyStart:actual.dutyStart,dutyEnd:actual.dutyEnd,releaseAt:actual.dutyEnd,
+    maxHours:actual.maxHours,dutyHours:actual.dutyHours,remainingHours:actual.remainingHours,
+    legal:actual.legal,label:actual.label,sectors:1,augmented:Boolean(flight.crewAugmented)
+  };
+}
+
+function crewDutyExtensionContextForFlight(flight,t=simNow()){
+  if(!flightIsAirborne(flight,t)||flight.flightType==='ferry') return null;
+  const duty=crewDutyExtensionProjectionForFlight(flight);
+  if(!duty||duty.legal||!Number.isFinite(duty.dutyStart)||!Number.isFinite(duty.maxHours)) return null;
+  const dutyLimitAt=duty.dutyStart+duty.maxHours*HOUR;
+  const overrunMin=Math.ceil(((duty.releaseAt||duty.dutyEnd)-dutyLimitAt)/MIN);
+  if(overrunMin<10) return null;
+  const causes=crewDutyExtensionDelayCauses(duty);
+  if(!causes.length) return null;
+  const nextFlight=nextCrewDutyFlightAfter(flight,duty);
+  return {
+    ...airborneContextForFlight(flight,t),
+    sourceId:flight.id,
+    dutyId:duty.id,
+    dutyStart:duty.dutyStart,
+    projectedRelease:duty.releaseAt||duty.dutyEnd,
+    dutyLimitAt,
+    overrunMin,
+    dutyHours:Number(duty.dutyHours||0),
+    maxHours:Number(duty.maxHours||0),
+    primaryCause:causes[0]?.label||'Operational delay',
+    causeBreakdown:causes,
+    nextFlightId:nextFlight?.id||'',
+    nextFlightDeparture:nextFlight?flightActualDeparture(nextFlight):0,
+    nextFlightOrigin:nextFlight?.from||'',
+    active:true
+  };
+}
+
 function airportCapacityContextForFlight(flight,t=simNow()){
   const delayMin=Math.max(0,Number(flight.airportDelayMin)||0);
   if(delayMin<15) return null;
@@ -1703,6 +1840,8 @@ function processDerivedOperationalIncidents(t=simNow()){
         if(airborneHandlingContext&&updateOpenDerivedIncident('destination_handling_unavailable',flight,Boolean(airborneHandlingContext.active),airborneHandlingContext,t)) changed=true;
         const diversionUnavailableContext=diversionAirportUnavailableContextForFlight(flight,t);
         if(diversionUnavailableContext&&updateOpenDerivedIncident('diversion_airport_unavailable',flight,Boolean(diversionUnavailableContext.active),diversionUnavailableContext,t)) changed=true;
+        const dutyExtensionContext=crewDutyExtensionContextForFlight(flight,t);
+        if(updateOpenDerivedIncident('crew_duty_extension',flight,Boolean(dutyExtensionContext?.active),dutyExtensionContext,t)) changed=true;
       }
     }
   }
@@ -1916,6 +2055,12 @@ function createExternalWorkflowRequest(task,counterparty,durationMin,outcome){
   return request;
 }
 
+function nextSectorForCrewExtensionIncident(incident){
+  const nextId=incident?.context?.nextFlightId||'';
+  if(!nextId) return null;
+  return state.flights.find(item=>item.id===nextId&&!item.cancelled&&!item.departureLogged)||null;
+}
+
 /* Incident resource and consequence helpers live in incident-resources.js and incident-consequences.js. */
 
 function completeOperationalTask(task,outcome=''){
@@ -2048,6 +2193,26 @@ function finalizeOperationalCase(incident){
       const allocation=tasks.find(task=>task.kind==='crew_allocation');
       applyIncidentMinimumDelay(flight,allocation?.selection?.reportMin||25);
       incident.outcome=`Replacement ${PERSONNEL[allocation?.selection?.role]?.label?.toLowerCase()||'crew'} reported and the crew plan was updated.`;
+    }
+  }else if(incident.type==='crew_duty_extension'){
+    flight.crewDutyExtensionRecordedAt=simNow();
+    flight.crewDutyExtensionOverrunMin=incident.context?.overrunMin||0;
+    if(incident.selectedStrategy==='protect_next'){
+      const next=state.flights.find(item=>item.id===incident.context?.nextFlightId);
+      if(next){
+        next.recoveryAction=`Reserve crew protected after ${flight.id} duty extension`;
+        next.issueAcknowledgedAt=0;
+        next.issueAcknowledgedKey='';
+      }
+      flight.crewStandDownPlannedAt=simNow();
+      incident.outcome=next
+        ? `Crew duty extension recorded; current crew stands down on arrival and ${next.id} is protected with reserve crew.`
+        : 'Crew duty extension recorded; current crew stands down on arrival.';
+    }else if(incident.selectedStrategy==='priority'){
+      flight.crewDutyPriorityRequestedAt=simNow();
+      incident.outcome='Priority-handling reply recorded and the crew duty extension / post-arrival review plan was filed.';
+    }else{
+      incident.outcome='Commander discretion / unforeseen duty extension recorded; current crew continues to safe landing with post-arrival review.';
     }
   }else if(['baggage_loading_issue','fueling_issue','fuel_supplier_outage','security_screening','deicing_required','deicing_capacity_collapse','holdover_expired'].includes(incident.type)){
     applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||20);
@@ -2433,9 +2598,15 @@ function performOperationalTask(taskId,actionId='',payload={}){
   }else if(task.kind==='crew_augmentation'){
     const blocker=AeroIncidentResources.crewAugmentationBlocker(incident);
     if(blocker) return toast(blocker);
-    flight.crewAugmented=true;
-    task.selection={action:'augment'};
-    completeOperationalTask(task,'Augmented crew assigned and duty envelope restored.');
+    task.selection={action:'augment',reportMin:25};
+    startOperationalTask(task,25,'in_progress','Augmented crew reports and completes briefing.');
+  }else if(task.kind==='crew_next_sector_replacement'){
+    const next=nextSectorForCrewExtensionIncident(incident);
+    if(!next) return toast('No unflown downstream sector is available for crew replacement.');
+    const duty=swapCrewForFlight(next.id);
+    if(!duty) return false;
+    task.selection={flightId:next.id,dutyId:duty.id,airport:next.from};
+    completeOperationalTask(task,`${next.id} protected with local reserve crew at ${next.from}.`);
   }else if(task.kind==='maintenance_inspection'){
     startOperationalTask(task,25,'in_progress','Engineering inspection completed.');
   }else if(task.kind==='authority_decision'){
@@ -2639,6 +2810,13 @@ function performOperationalTask(taskId,actionId='',payload={}){
     incident.coordinatedDelayMin=delay;
     task.selection={action};
     createExternalWorkflowRequest(task,'Flight deck / ATC coordination',8,`${task.label} confirmed.`);
+  }else if(task.kind==='crew_extension_record'){
+    const action=actionId||task.action||'record_extension';
+    task.selection={action,overrunMin:incident.context?.overrunMin||0,projectedRelease:incident.context?.projectedRelease||0};
+    const message=action==='stand_down'
+      ? 'Crew Control confirmed stand-down on arrival and post-duty review.'
+      : 'Duty extension recorded with flight deck / Crew Control for post-arrival review.';
+    createExternalWorkflowRequest(task,'Flight deck / Crew Control',5,message);
   }else if(task.kind==='fuel_monitoring'){
     const action=actionId||task.action||'assess';
     if(action==='conserve') flight.fuelConservationApplied=true;
@@ -3167,7 +3345,7 @@ function processPassengerRecoveries(t=simNow()){
 }
 
 function crewAccommodationExposures(t=simNow()){
-  const crewIncidentTypes=new Set(['crew_duty_risk','crew_fatigue_report','crew_fatigue_mid_rotation','crew_misposition_after_diversion']);
+  const crewIncidentTypes=new Set(['crew_duty_risk','crew_fatigue_report','crew_fatigue_mid_rotation','crew_duty_extension','crew_misposition_after_diversion']);
   return state.flights
     .filter(flight=>flight.flightType!=='ferry')
     .map(flight=>{
@@ -3410,6 +3588,7 @@ function processEvents(){
     changed=true;
   }
   if(ensureRecurringFlights()){ changed=true; needsRecalc=true; }
+  if(ensurePlannedCrewAugmentation()){ changed=true; needsRecalc=true; }
   if(processOperationalWorkflows(t)){ changed=true; needsRecalc=true; }
   if(Management.processMaintenance(state,t,postTransaction)){ changed=true; needsRecalc=true; }
   if(Management.processWeeklyReviews(state,t)) changed=true;
@@ -3695,7 +3874,7 @@ function createFlightRecord({aircraftId,from,to,departure,fare,serviceId=null,se
       deicingCompletedAt:0,deicingHoldoverUntil:0,
       nightRestrictionDelayMin:0,nightRestrictionLabel:'',nightRestrictionConflictDelayMin:0,nightRestrictionConflictLabel:'',
     nightRecoveryDecision:'',nightRecoverySourceKey:'',nightRecoveryApprovedAt:0,
-    crewDutyId:'',crewDutySplit:false,crewSwappedAt:0,crewRoleSwaps:{},
+    crewDutyId:'',crewDutySplit:false,crewSwappedAt:0,crewRoleSwaps:{},crewAugmentationPlanned:false,crewAugmentationReason:'',
     crewAccommodationArrangedAt:0,crewTransportArrangedAt:0,crewStoodDownAt:0,
     connectionPax:0,connectionCriticalPax:0,connectionAtRiskPax:0,connectionMissedPax:0,
     passengerAccommodationArrangedAt:0,passengerRecoveryArrangedAt:0,passengerReleasedAt:0,recoveryCostBooked:0,cancellationCostBooked:'',
@@ -4532,15 +4711,21 @@ function recoveryPlansForFlight(flight){
   const duty=crewDutyForFlight(flight);
   if(!duty.legal){
     if(!flight.crewAugmented){
-      const augmented=OperationalIntelligence.crewDutyAssessment({
-        departure:flightActualDeparture(flight),arrival:flightActualArrival(flight),sectors:1,augmented:true
+      const planned=plannedCrewDutyAssessmentForFlight(flight,{augmented:true});
+      const rotation=rotationForFlight(flight);
+      const through=rotationUsesThroughCrew(flight)&&rotation.outbound&&rotation.returnFlight;
+      const liveAugmented=OperationalIntelligence.crewDutyAssessment({
+        departure:through?flightActualDeparture(rotation.outbound):flightActualDeparture(flight),
+        arrival:through?flightActualArrival(rotation.returnFlight):flightActualArrival(flight),
+        sectors:through?2:1,
+        augmented:true
       });
-      if(augmented.legal){
+      if(liveAugmented.legal){
         return [{
-          id:'augment-crew',label:'Assign augmented crew',tone:'good',delayMin:flightTotalDepartureDelayMin(flight),
+          id:'augment-crew',label:'Activate augmented crew',tone:'good',delayMin:flightTotalDepartureDelayMin(flight),
           downstreamDelay:downstreamFlights.reduce((sum,item)=>sum+flightTotalDepartureDelayMin(item),0),
           misconnectPax:connectionStatusForFlight(flight).missed,risk:0,
-          detail:'Add a relief cockpit pair and a second cabin complement so in-flight rest extends the legal duty limit.'
+          detail:`Crew Control calls relief crew for the ${through?'rotation':'sector'}; planned baseline ${planned?.assessment?.legal?'was legal with augmentation':'still needs disruption recovery'}.`
         }];
       }
     }

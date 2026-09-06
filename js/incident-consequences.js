@@ -102,8 +102,8 @@
       add('cancel/rebook exposure',cancellationRecoveryCost(flight));
     }else if(['crew-strategy','crew-duty-strategy','crew-fatigue-strategy','crew-misconnect-strategy','crew-diversion-strategy','crew-report-delay-strategy'].includes(task.key)){
       category='crew';
-      if(optionId==='replace') add('reserve crew callout',crewRecoveryCost(flight,{replace:true}));
-      if(optionId==='augment') add('augmented crew',crewRecoveryCost(flight,{augment:true}));
+      if(optionId==='replace') add('reserve activation',crewRecoveryCost(flight,{replace:true}));
+      if(optionId==='augment') add('augmentation callout',crewRecoveryCost(flight,{augment:true}));
       if(['wait_crew','move_crew','move_reserve'].includes(optionId)) delay(context.delayMin||currentDelay||35);
       if(['move_crew','move_reserve'].includes(optionId)) add('crew positioning',crewRecoveryCost(flight,{position:true}));
     }else if(['mx-strategy','mx-postflight-strategy','dispatch-tech-decision','dispatch-lightning-decision','dispatch-bird-decision','dispatch-pressure-decision'].includes(task.key)){
@@ -280,7 +280,7 @@
     if(optionId==='cancel') return 'flight removed before departure · aircraft and crew released';
 
     if(['crew-strategy','crew-duty-strategy','crew-fatigue-strategy','crew-misconnect-strategy','crew-diversion-strategy','crew-report-delay-strategy'].includes(task.key)&&optionId==='replace'){
-      if(crewPoolOptions(incident).length) return 'local replacement report about +20 min';
+      if(crewPoolOptions(incident).length) return 'reserve response and briefing about +20 min';
       if(remoteCrewPoolOptions(incident).length) return 'local pool unavailable · move remote personnel first';
       return 'requires qualified local or moved personnel';
     }
@@ -293,7 +293,14 @@
       if(optionId==='wait_crew') return `${consequenceDelayText(incident.context?.delayMin||25)} · assigned crew remains on duty`;
       if(optionId==='move_reserve') return 'requires manual personnel move · recovery depends on transfer ETA';
     }
-    if(['crew-duty-strategy','crew-fatigue-strategy'].includes(task.key)&&optionId==='augment') return 'no extra delay if crew is available · extra crew tied up';
+    if(['crew-duty-strategy','crew-fatigue-strategy'].includes(task.key)&&optionId==='augment') return 'augmentation callout about +25 min · extra crew tied up';
+    if(task.key==='crew-extension-strategy'){
+      if(optionId==='record_extension') return `records +${incident.context?.overrunMin||0} min duty extension · crew must be reviewed after landing`;
+      if(optionId==='priority') return 'possible enroute delay reduction · waits for ATC / flight deck reply';
+      if(optionId==='protect_next') return incident.context?.nextFlightId
+        ? `reserve crew protects ${incident.context.nextFlightId} · current crew stands down on arrival`
+        : 'no next sector to protect · use record or priority handling';
+    }
 
     if(['mx-strategy','mx-postflight-strategy'].includes(task.key)){
       if(optionId==='defer') return 'minimal delay after engineering sign-off · MEL restrictions may remain';

@@ -1070,6 +1070,8 @@ function migrateState(parsed){
     if(!Number.isFinite(f.recoveryCostBooked)) f.recoveryCostBooked=0;
     if(f.cancellationCostBooked===undefined) f.cancellationCostBooked='';
     if(f.crewAugmented===undefined) f.crewAugmented=false;
+    if(f.crewAugmentationPlanned===undefined) f.crewAugmentationPlanned=false;
+    if(f.crewAugmentationReason===undefined) f.crewAugmentationReason='';
     if(f.crewDutyId===undefined) f.crewDutyId='';
     if(f.crewDutySplit===undefined) f.crewDutySplit=false;
     if(!Number.isFinite(f.crewSwappedAt)) f.crewSwappedAt=0;

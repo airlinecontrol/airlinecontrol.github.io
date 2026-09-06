@@ -14,7 +14,7 @@ assert.deepEqual(Object.keys(workflows.DEPARTMENTS),['dispatch','crew','maintena
 assert.deepEqual(Object.keys(workflows.WORKFLOWS),[
   'crew_sick','mel_defect','atc_restriction','night_curfew_conflict','gate_conflict','destination_closure','destination_closure_ground',
   'aircraft_out_of_position','aircraft_misposition_after_diversion','postflight_technical_defect',
-  'crew_misconnect','crew_misposition_after_diversion','crew_report_delayed','crew_duty_risk','crew_fatigue_report','crew_fatigue_mid_rotation',
+  'crew_misconnect','crew_misposition_after_diversion','crew_report_delayed','crew_duty_risk','crew_fatigue_report','crew_fatigue_mid_rotation','crew_duty_extension',
   'no_legal_crew','baggage_loading_issue','fueling_issue','fuel_supplier_outage','deicing_required','deicing_capacity_collapse',
   'holdover_expired','airport_capacity_reduction','atc_ground_stop','performance_limited',
   'destination_handling_unavailable','security_screening','bird_strike','onboard_medical',
@@ -92,6 +92,12 @@ assert.equal(crewReportDelayTasks.find(task=>task.key==='crew-move-reserve').kin
 const dutyTasks=workflows.tasksForIncident({id:'INC15',type:'crew_duty_risk',flightId:'AS15',aircraftId:'AC15',detectedAt:1000});
 assert.deepEqual(dutyTasks.find(task=>task.key==='crew-duty-strategy').strategyOptions.map(option=>option.id),['augment','replace','cancel']);
 assert.equal(dutyTasks.find(task=>task.kind==='crew_augmentation').branch,'augment');
+
+const extensionTasks=workflows.tasksForIncident({id:'INC15A',type:'crew_duty_extension',flightId:'AS15A',aircraftId:'AC15A',detectedAt:1000});
+assert.deepEqual(extensionTasks.find(task=>task.key==='crew-extension-strategy').strategyOptions.map(option=>option.id),['record_extension','priority','protect_next']);
+assert.equal(extensionTasks.find(task=>task.key==='dispatch-extension-priority').kind,'reroute_coordination');
+assert.equal(extensionTasks.find(task=>task.key==='crew-next-sector-replacement').kind,'crew_next_sector_replacement');
+assert.equal(extensionTasks.some(task=>task.kind==='flight_cancellation'),false);
 
 const legalCrewTasks=workflows.tasksForIncident({id:'INC15B',type:'no_legal_crew',flightId:'AS15B',aircraftId:'AC15B',detectedAt:1000});
 assert.deepEqual(legalCrewTasks.find(task=>task.key==='crew-legal-strategy').strategyOptions.map(option=>option.id),['confirm','cancel']);

@@ -22,7 +22,7 @@
     const available=Math.max(0,roster-(reserved.get(airport)||0));
     if(!available) return [];
     return [{id:`${airport}:${role}`,airport,role,family,available,reportMin:20,
-      label:`${airport} ${PERSONNEL[role]?.label||role} pool · ${available} available · report 20 min`}];
+      label:`${airport} ${PERSONNEL[role]?.label||role} reserve · ${available} available · response 20 min`}];
   }
 
   function remoteCrewPoolOptions(incident){
@@ -31,7 +31,7 @@
     return Object.keys(AIRPORTS).filter(code=>code!==flight.from)
       .flatMap(code=>crewPoolOptionsAtAirport(incident,code).map(option=>({
         ...option,reportMin:Math.ceil(45+distanceKm(AIRPORTS[code],AIRPORTS[flight.from])/700*60),
-        label:`${code} ${PERSONNEL[option.role]?.label||option.role} pool · ${option.available} available · move to ${flight.from}`
+        label:`${code} ${PERSONNEL[option.role]?.label||option.role} reserve · ${option.available} available · move to ${flight.from}`
       })))
       .sort((a,b)=>a.reportMin-b.reportMin||b.available-a.available);
   }
@@ -76,8 +76,13 @@
     const flight=state.flights.find(item=>item.id===incident?.flightId&&!item.cancelled);
     const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
     if(!flight||!aircraft) return 'The affected flight is no longer available.';
+    const rotation=rotationForFlight(flight);
+    const through=rotationUsesThroughCrew(flight)&&rotation.outbound&&rotation.returnFlight;
     const augmented=OperationalIntelligence.crewDutyAssessment({
-      departure:flightActualDeparture(flight),arrival:flightActualArrival(flight),sectors:1,augmented:true
+      departure:through?flightActualDeparture(rotation.outbound):flightActualDeparture(flight),
+      arrival:through?flightActualArrival(rotation.returnFlight):flightActualArrival(flight),
+      sectors:through?2:1,
+      augmented:true
     });
     if(!augmented.legal) return 'Augmented crew would still exceed the duty envelope. Use replacement crew or cancel before departure.';
     const family=Management.aircraftFamily(aircraft.model);
@@ -119,6 +124,12 @@
     if(['crew-duty-strategy','crew-fatigue-strategy'].includes(task.key)&&optionId==='augment'){
       const message=crewAugmentationBlocker(incident);
       if(message) return message;
+    }
+    if(task.key==='crew-extension-strategy'&&optionId==='protect_next'){
+      const next=typeof nextSectorForCrewExtensionIncident==='function'?nextSectorForCrewExtensionIncident(incident):null;
+      if(!next) return 'No unflown next sector exists for this duty. Record the duty extension or request priority handling instead.';
+      const blocker=typeof crewSwapBlocker==='function'?crewSwapBlocker(next):'';
+      if(blocker) return `${next.id}: ${blocker}`;
     }
     const flight=state.flights.find(item=>item.id===incident.flightId);
     if(['dispatch-flow-strategy','dispatch-capacity-strategy','dispatch-groundstop-strategy','dispatch-night-curfew-strategy','dispatch-ground-destination-strategy'].includes(task.key)&&staffAt(flight?.from,'operations')<=0){
@@ -209,6 +220,12 @@
       const message=crewAugmentationBlocker(incident);
       if(message) return message;
     }
+    if(task.kind==='crew_next_sector_replacement'){
+      const next=typeof nextSectorForCrewExtensionIncident==='function'?nextSectorForCrewExtensionIncident(incident):null;
+      if(!next) return 'No unflown downstream sector is available for crew replacement.';
+      const blocker=typeof crewSwapBlocker==='function'?crewSwapBlocker(next):'';
+      if(blocker) return `${next.id}: ${blocker}`;
+    }
     if(task.kind==='aircraft_substitution'&&!incidentAircraftReplacementOptions(incident).length) return 'No suitable replacement aircraft is available. Request aircraft or position a spare in Dispatch & slots.';
     if(['stand_request','station_coordination'].includes(task.kind)&&staffAt(flight.from,'groundHandling')<=0) return `No ground handling team is available at ${flight.from}. Add personnel in the Personnel widget.`;
     if(['station_recovery','fuel_recovery','security_coordination','turnaround_expedite'].includes(task.kind)&&staffAt(flight.from,'groundHandling')<=0) return `No ground handling team is available at ${flight.from}. Add personnel in the Personnel widget.`;
@@ -218,7 +235,7 @@
     if(task.kind==='alternate_handling'&&(!incident.selectedAlternate||staffAt(incident.selectedAlternate,'groundHandling')<=0)) return `No handling team is available at ${incident.selectedAlternate||'the selected alternate'}. Add personnel before securing handling.`;
     if([
       'inbound_wait','medical_assessment','medical_coordination',
-      'flight_watch_assessment','flight_watch_coordination','fuel_monitoring','reroute_coordination','cabin_security_coordination'
+      'flight_watch_assessment','flight_watch_coordination','fuel_monitoring','reroute_coordination','crew_extension_record','cabin_security_coordination'
     ].includes(task.kind)&&staffAt(flight.from,'operations')<=0) return `No operations/dispatch personnel are available at ${flight.from}. Add personnel in the Personnel widget.`;
     return '';
   }
