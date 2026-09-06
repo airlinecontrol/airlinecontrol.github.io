@@ -685,11 +685,37 @@ function prefillPositioningFerryPlanner(incident){
   toast(`Ferry planner staged for ${plan.aircraft.tail}: ${plan.from} → ${plan.to}.`);
 }
 
+function prefillCrewRelocationPlanner(incident){
+  const plan=crewRelocationPlanState(incident);
+  if(!plan.flight) return toast(plan.reason||'No crew movement plan is available.');
+  setDeskOpen('personnel',true,{persist:false});
+  setDeskPanel('personnel','relocation',{toggle:false});
+  const roleEl=document.getElementById('transferPersonnelRole');
+  const fromEl=document.getElementById('transferPersonnelFrom');
+  const toEl=document.getElementById('transferPersonnelTo');
+  const amountEl=document.getElementById('transferPersonnelAmount');
+  if(roleEl) roleEl.value=plan.role;
+  if(fromEl&&plan.from) fromEl.value=plan.from;
+  if(toEl) toEl.value=plan.to;
+  if(amountEl) amountEl.value=1;
+  refreshPersonnelTransferOptions();
+  markUiDirty('desk','selects');
+  document.getElementById('occ-desk-personnel')?.scrollIntoView({behavior:'smooth',block:'start'});
+  toast(`Personnel move staged: ${PERSONNEL[plan.role]?.label||'Crew'}${plan.from?` ${plan.from}`:''} → ${plan.to}.`);
+}
+
 function taskActions(task,incident){
   if(['in_progress','waiting_external'].includes(task.status)){
     const progress=OperationalWorkflows.progress(task,simNow());
     const remaining=Math.max(0,Math.ceil(((task.completesAt||simNow())-simNow())/MIN));
     return `<div class="task-waiting"><b>${task.status==='waiting_external'?'Request sent':'Work underway'}</b><span>${esc(task.pendingOutcome||task.detail)} · <em data-inline-task-remaining>${remaining} min remaining</em></span><div class="progress-track"><span data-inline-task-progress style="width:${formatPct(progress)}"></span></div></div>`;
+  }
+  if(task.kind==='manual_crew_move_required'){
+    const plan=crewRelocationPlanState(incident);
+    return `<div class="task-form">
+      <div class="attention-summary ${plan.ready?'':'warning'}"><b>${plan.ready?'Crew move detected':'Manual crew move required'}</b><span>${esc(plan.reason)}</span></div>
+      <div class="form-actions"><button class="secondary-button" type="button" data-task-action="open-crew-relocation">Open Personnel move</button><button class="primary-button" type="button" data-task-action="check-crew-move" ${plan.ready?'':'disabled'}>Check crew move</button></div>
+    </div>`;
   }
   const blocker=['technical_strategy','recovery_strategy'].includes(task.kind)?'':taskResourceBlocker(task,incident);
   if(blocker) return `<div class="attention-summary critical"><b>Resource unavailable</b><span>${esc(blocker)}</span></div>`;
@@ -755,7 +781,7 @@ function taskActions(task,incident){
 }
 
 const TASK_KINDS_WITH_REQUIRED_INPUT=new Set([
-  'crew_allocation','aircraft_substitution','alternate_selection','maintenance_disposition','manual_ferry_required'
+  'crew_allocation','aircraft_substitution','alternate_selection','maintenance_disposition','manual_ferry_required','manual_crew_move_required'
 ]);
 
 function taskCanAutoRunAfterStrategy(task,incident){
@@ -1034,23 +1060,27 @@ function incidentContextSummaryMarkup(incident){
   }else if(incident.type==='alternate_unsuitable'){
     label='Alternate picture';
     detail=`${context.conditions||'destination weather'} · ${context.availableAlternates||0} suitable alternate${context.availableAlternates===1?'':'s'} · capacity ${context.capacityPct||0}%`;
-  }else if(incident.type==='aircraft_out_of_position'){
+  }else if(['aircraft_out_of_position','aircraft_misposition_after_diversion'].includes(incident.type)){
     label='Aircraft positioning';
-    detail=`${context.tail||'Aircraft'} expected ${context.expectedLocation||'elsewhere'} · required ${context.requiredLocation||''} · +${context.delayMin||0}m`;
+    detail=`${context.tail||'Aircraft'} expected ${context.expectedLocation||context.diversionAirport||'elsewhere'} · required ${context.requiredLocation||''} · +${context.delayMin||0}m`;
   }else if(incident.type==='postflight_technical_defect'){
     label='Inbound technical state';
     detail=`${context.previousFlightId||'Inbound'} arrived ${context.arrivedAt?shortClock(context.arrivedAt):''} · ${context.reason||'inspection required'} · condition ${context.condition??'n/a'}`;
   }else if(incident.type==='no_legal_crew'){
     label='Crew availability';
     detail=context.shortage||'Required crew pool unavailable at origin';
-  }else if(incident.type==='crew_misconnect'){
+  }else if(['crew_misconnect','crew_misposition_after_diversion'].includes(incident.type)){
     label='Crew transfer';
-    detail=`${context.transferId||'Transfer'} ${context.from||''} -> ${context.to||''} · ready ${context.readyAt?shortClock(context.readyAt):''} · +${context.delayMin||0}m`;
+    detail=`${context.transferId||context.reason||'Crew movement'} ${context.from||''} -> ${context.to||''} · ready ${context.readyAt?shortClock(context.readyAt):''} · +${context.delayMin||0}m`;
+  }else if(incident.type==='crew_report_delayed'){
+    label='Crew report';
+    detail=`${PERSONNEL[context.role]?.label||'Crew'} · ${context.reason||'report delayed'} · ready ${context.reportReadyAt?shortClock(context.reportReadyAt):''} · +${context.delayMin||0}m`;
   }else if(incident.type==='crew_fatigue_mid_rotation'){
     label='Duty margin';
     detail=context.label||`${(context.remainingHours||0).toFixed?.(1)||0} h remaining`;
-  }else if(['deicing_required','holdover_expired','airport_capacity_reduction','atc_ground_stop'].includes(incident.type)){
+  }else if(['deicing_required','deicing_capacity_collapse','holdover_expired','airport_capacity_reduction','atc_ground_stop','fuel_supplier_outage'].includes(incident.type)){
     label=['airport_capacity_reduction','atc_ground_stop'].includes(incident.type)?'Airport flow':'Station weather';
+    if(incident.type==='fuel_supplier_outage') label='Fuel provider';
     detail=context.reason||`${context.airport||''} ${context.conditions||''}${context.delayMin?` · +${context.delayMin}m`:''}`;
   }else if(incident.type==='performance_limited'){
     label='Dispatch performance';
@@ -1229,6 +1259,12 @@ function bindInlineTaskActions(root){
       return;
     }
     if(action==='check-ferry') actionId='';
+    if(action==='open-crew-relocation'){
+      const incident=state.incidents.find(item=>item.id===task.incidentId);
+      if(incident) prefillCrewRelocationPlanner(incident);
+      return;
+    }
+    if(action==='check-crew-move') actionId='';
     if(action==='complete') actionId='';
     focusedTaskId=task.id;
     const performed=performOperationalTask(task.id,actionId,payload);

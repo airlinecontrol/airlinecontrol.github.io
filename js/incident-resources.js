@@ -114,6 +114,7 @@
       return '';
     }
     if(['mx-strategy','mx-postflight-strategy','dispatch-position-strategy','dispatch-performance-strategy'].includes(task.key)&&optionId==='substitute'&&!incidentAircraftReplacementOptions(incident).length) return 'No suitable replacement aircraft is available. Add or position aircraft in Dispatch & slots, then try again.';
+    if(task.key==='station-fuel-outage-strategy'&&optionId==='substitute'&&!incidentAircraftReplacementOptions(incident).length) return 'No suitable fueled replacement aircraft is available. Add or position aircraft in Dispatch & slots, then try again.';
     if(task.key==='crew-legal-strategy'&&optionId==='confirm') return legalCrewConfirmationBlocker(incident);
     if(['crew-duty-strategy','crew-fatigue-strategy'].includes(task.key)&&optionId==='augment'){
       const message=crewAugmentationBlocker(incident);
@@ -132,6 +133,12 @@
     }
     if(task.key==='station-destination-handling-strategy'&&optionId==='prepare_alternate'&&!diversionOptionsForIncident(incident,{includeReturnOrigin:false}).length) return 'No suitable alternate is available. Add handling personnel at a candidate airport or request destination handling.';
     if(task.key==='dispatch-ground-destination-strategy'&&optionId==='alternate_destination'&&!diversionOptionsForIncident(incident,{includeReturnOrigin:false}).length) return 'No suitable alternate destination is available. Add handling personnel at a candidate airport or delay/cancel the flight.';
+    if(['crew-diversion-strategy','crew-report-delay-strategy'].includes(task.key)&&optionId==='replace'&&!crewPoolOptions(incident).length){
+      const remote=remoteCrewPoolOptions(incident);
+      return remote.length
+        ? `No qualified crew are at ${flight?.from||'origin'}. Move personnel from ${remote[0].airport} first, then allocate locally.`
+        : 'No qualified crew pool is available. Request or move personnel in the Personnel widget.';
+    }
     return '';
   }
 
@@ -193,6 +200,10 @@
         return `No qualified ${PERSONNEL[nearest.role]?.label?.toLowerCase()||'crew'} are at ${flight.from}. Move personnel from ${nearest.airport} in the Personnel widget, then allocate locally.`;
       }
       return 'No qualified crew pool is available. Request or move personnel in the Personnel widget.';
+    }
+    if(task.kind==='manual_crew_move_required'){
+      const plan=typeof crewRelocationPlanState==='function'?crewRelocationPlanState(incident):null;
+      if(plan&&!plan.ready) return plan.reason;
     }
     if(task.kind==='crew_augmentation'){
       const message=crewAugmentationBlocker(incident);

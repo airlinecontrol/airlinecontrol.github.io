@@ -23,6 +23,7 @@
   const KIND_META={
     aircraft_substitution:{eligibility:{phase:'pre_departure_unfueled'},resources:[{type:'aircraft',mode:'replacement'}]},
     crew_allocation:{resources:[{type:'crew_pool',location:'origin'}]},
+    manual_crew_move_required:{resources:[]},
     crew_augmentation:{resources:[{type:'augmented_crew',location:'origin'}]},
     stand_request:{resources:[{type:'personnel',role:'groundHandling',location:'origin',amount:1}]},
     station_coordination:{resources:[{type:'personnel',role:'groundHandling',location:'origin',amount:1}]},
@@ -119,6 +120,14 @@
       {key:'dispatch-plan-ferry',department:'dispatch',kind:'manual_ferry_required',label:'Plan positioning ferry',detail:'Create the ferry movement in Dispatch & slots, then return here to confirm the aircraft is projected at origin.',dependsOn:['dispatch-position-strategy'],branch:'position_ferry',action:'check_ferry'},
       {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign replacement aircraft',detail:'Use a serviceable spare or borrowed aircraft before the disrupted departure.',dependsOn:['dispatch-position-strategy'],branch:'substitute'},
     ])},
+    aircraft_misposition_after_diversion:{classification:'derived',steps:withCancellation([
+      {key:'dispatch-position-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose post-diversion aircraft recovery',detail:'Select how to protect the next sector after the assigned aircraft diverted away from origin.',options:[
+        {id:'position_ferry',label:'Create recovery ferry',detail:'Manually schedule a positioning leg from the diversion airport to the next origin.'},
+        {id:'substitute',label:'Use replacement aircraft',detail:'Assign a serviceable spare or borrowed aircraft at the next origin.'}
+      ]},
+      {key:'dispatch-plan-ferry',department:'dispatch',kind:'manual_ferry_required',label:'Plan recovery ferry',detail:'Create the ferry movement in Dispatch & slots, then return here to confirm the aircraft is projected at origin.',dependsOn:['dispatch-position-strategy'],branch:'position_ferry',action:'check_ferry'},
+      {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign replacement aircraft',detail:'Use a serviceable spare or borrowed aircraft before the disrupted departure.',dependsOn:['dispatch-position-strategy'],branch:'substitute'},
+    ])},
     postflight_technical_defect:{classification:'derived',steps:withCancellation([
       {key:'mx-postflight-inspect',department:'maintenance',kind:'maintenance_inspection',label:'Inspect inbound aircraft',detail:'Engineering checks the aircraft after the previous sector before releasing it for the next departure.'},
       {key:'mx-postflight-strategy',department:'maintenance',kind:'recovery_strategy',label:'Choose post-flight technical recovery',detail:'Select whether to defer the finding, repair the aircraft, or substitute aircraft.',dependsOn:['mx-postflight-inspect'],options:[
@@ -138,6 +147,28 @@
       {key:'crew-wait-connect',department:'crew',kind:'inbound_wait',label:'Accept crew connection ETA',detail:'Use the crew transfer arrival and reporting time as the operating plan.',dependsOn:['crew-misconnect-strategy'],branch:'wait_crew',action:'wait_crew'},
       {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Allocate replacement crew',detail:'Select a legal qualified local pool and reserve it for the duty.',dependsOn:['crew-misconnect-strategy'],branch:'replace'},
       {key:'crew-report',department:'crew',kind:'crew_report',label:'Replacement report and briefing',detail:'The assigned replacement must report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
+    ])},
+    crew_misposition_after_diversion:{classification:'derived',steps:withCancellation([
+      {key:'crew-diversion-strategy',department:'crew',kind:'recovery_strategy',label:'Choose post-diversion crew recovery',detail:'Select how to recover the through crew after a diversion left them away from the next departure station.',options:[
+        {id:'move_crew',label:'Move diverted crew to origin',detail:'Manually position the displaced crew to the next origin in the Personnel widget.'},
+        {id:'replace',label:'Use local replacement crew',detail:'Allocate a legal qualified crew member already at the departure station.'},
+        {id:'wait_crew',label:'Delay for displaced crew',detail:'Accept the crew positioning ETA and publish the revised departure.'}
+      ]},
+      {key:'crew-move-diverted',department:'crew',kind:'manual_crew_move_required',label:'Move displaced crew',detail:'Book the personnel move, then return here once the crew is projected at the departure station.',dependsOn:['crew-diversion-strategy'],branch:'move_crew',action:'check_crew_move'},
+      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Allocate replacement crew',detail:'Select a legal qualified local pool and reserve it for the duty.',dependsOn:['crew-diversion-strategy'],branch:'replace'},
+      {key:'crew-report',department:'crew',kind:'crew_report',label:'Replacement report and briefing',detail:'The assigned replacement must report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
+      {key:'crew-wait-connect',department:'crew',kind:'inbound_wait',label:'Publish crew-positioning delay',detail:'Use the displaced crew movement time as the operating plan.',dependsOn:['crew-diversion-strategy'],branch:'wait_crew',action:'wait_crew'},
+    ])},
+    crew_report_delayed:{classification:'incident',steps:withCancellation([
+      {key:'crew-report-delay-strategy',department:'crew',kind:'recovery_strategy',label:'Choose crew-report recovery',detail:'Select how Crew Control protects a departure when the assigned crew cannot complete report on time.',options:[
+        {id:'wait_crew',label:'Wait for assigned crew',detail:'Accept the late report and publish the revised departure.'},
+        {id:'replace',label:'Use local reserve crew',detail:'Allocate a legal qualified replacement already at the departure station.'},
+        {id:'move_reserve',label:'Move reserve crew to origin',detail:'Manually position qualified reserve crew from another station, then confirm local availability.'}
+      ]},
+      {key:'crew-wait-report',department:'crew',kind:'inbound_wait',label:'Publish crew-report delay',detail:'Use the crew report ETA as the operating plan.',dependsOn:['crew-report-delay-strategy'],branch:'wait_crew',action:'wait_crew'},
+      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Allocate reserve crew',detail:'Select a legal qualified local pool and reserve it for the duty.',dependsOn:['crew-report-delay-strategy'],branch:'replace'},
+      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve report and briefing',detail:'The assigned reserve must report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
+      {key:'crew-move-reserve',department:'crew',kind:'manual_crew_move_required',label:'Move reserve crew',detail:'Book the personnel move, then return here once the reserve crew is projected at the departure station.',dependsOn:['crew-report-delay-strategy'],branch:'move_reserve',action:'check_crew_move'},
     ])},
     crew_duty_risk:{classification:'derived',steps:withCancellation([
       {key:'crew-duty-strategy',department:'crew',kind:'recovery_strategy',label:'Choose duty recovery',detail:'Select a legal crew recovery before the duty limit is exceeded.',options:[
@@ -191,6 +222,18 @@
       {key:'station-fuel-wait',department:'station',kind:'fuel_recovery',label:'Wait for assigned fuel truck',detail:'Accept the supplier queue and revised fuel completion time.',dependsOn:['station-fuel-strategy'],branch:'wait_truck',action:'wait_truck'},
       {key:'station-fuel-minimum',department:'station',kind:'fuel_recovery',label:'Confirm minimum compliant uplift',detail:'Use planned trip fuel plus reserve without discretionary uplift.',dependsOn:['station-fuel-strategy'],branch:'minimum_uplift',action:'minimum_uplift'},
     ])},
+    fuel_supplier_outage:{classification:'incident',steps:withCancellation([
+      {key:'station-fuel-outage-strategy',department:'station',kind:'recovery_strategy',label:'Choose fuel-supplier recovery',detail:'Select the station/OCC response when the local fuel provider cannot support normal uplift.',options:[
+        {id:'priority',label:'Request priority fuel truck',detail:'Escalate the affected flight with the fuel provider or airport fuel desk.'},
+        {id:'wait_supply',label:'Wait for supplier recovery',detail:'Accept the provider recovery ETA and update the departure plan.'},
+        {id:'minimum_uplift',label:'Use minimum compliant uplift',detail:'Dispatch with legal fuel only if the supplier can provide the minimum required uplift.'},
+        {id:'substitute',label:'Use already fueled replacement aircraft',detail:'Assign a serviceable aircraft that can depart without waiting for the affected aircraft uplift.'}
+      ]},
+      {key:'station-fuel-priority',department:'station',kind:'fuel_recovery',label:'Escalate fuel priority',detail:'Coordinate priority truck dispatch or hydrant access with the provider.',dependsOn:['station-fuel-outage-strategy'],branch:'priority',action:'fuel_outage_priority'},
+      {key:'station-fuel-wait',department:'station',kind:'fuel_recovery',label:'Publish supplier recovery ETA',detail:'Accept the supplier outage recovery time as the departure driver.',dependsOn:['station-fuel-outage-strategy'],branch:'wait_supply',action:'wait_supply'},
+      {key:'station-fuel-minimum',department:'station',kind:'fuel_recovery',label:'Confirm minimum compliant uplift',detail:'Use the legal dispatch fuel plan without discretionary uplift if the provider can support it.',dependsOn:['station-fuel-outage-strategy'],branch:'minimum_uplift',action:'minimum_uplift'},
+      {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign fueled replacement aircraft',detail:'Use a suitable spare or borrowed aircraft before departure.',dependsOn:['station-fuel-outage-strategy'],branch:'substitute'},
+    ])},
     deicing_required:{classification:'derived',steps:withCancellation([
       {key:'station-deicing-strategy',department:'station',kind:'recovery_strategy',label:'Choose deicing recovery',detail:'Select the departure-station response when snow or ice requires treatment before departure.',options:[
         {id:'deice',label:'Request deicing',detail:'Enter the deicing queue and treat the aircraft before departure.'},
@@ -200,6 +243,16 @@
       {key:'station-deice',department:'station',kind:'station_recovery',label:'Request deicing',detail:'Coordinate deicing truck, stand access, and post-treatment release.',dependsOn:['station-deicing-strategy'],branch:'deice',action:'deice'},
       {key:'station-priority-deice',department:'station',kind:'station_recovery',label:'Request priority deicing',detail:'Coordinate an earlier deicing sequence with station and ramp control.',dependsOn:['station-deicing-strategy'],branch:'priority_deice',action:'priority_deice'},
       {key:'station-wait-weather',department:'station',kind:'station_recovery',label:'Hold for weather improvement',detail:'Keep the departure held until snow or ice exposure decreases.',dependsOn:['station-deicing-strategy'],branch:'wait_weather',action:'wait_weather'},
+    ])},
+    deicing_capacity_collapse:{classification:'derived',steps:withCancellation([
+      {key:'station-deicing-collapse-strategy',department:'station',kind:'recovery_strategy',label:'Choose deicing-queue recovery',detail:'Select the station/OCC response when local deicing demand overwhelms available treatment capacity.',options:[
+        {id:'join_queue',label:'Join deicing queue',detail:'Accept the station queue and publish the likely departure delay.'},
+        {id:'priority_deice',label:'Request priority deicing',detail:'Escalate for an earlier treatment slot where operational priority is justified.'},
+        {id:'wait_weather',label:'Wait for weather improvement',detail:'Hold until precipitation or deicing demand eases.'}
+      ]},
+      {key:'station-deice-queue',department:'station',kind:'station_recovery',label:'Publish deicing queue time',detail:'Coordinate station queueing, stand access, and a treatment sequence.',dependsOn:['station-deicing-collapse-strategy'],branch:'join_queue',action:'deice_queue'},
+      {key:'station-priority-deice',department:'station',kind:'station_recovery',label:'Request priority deicing',detail:'Coordinate an earlier deicing sequence with station and ramp control.',dependsOn:['station-deicing-collapse-strategy'],branch:'priority_deice',action:'priority_deice'},
+      {key:'station-wait-weather',department:'station',kind:'station_recovery',label:'Hold for weather improvement',detail:'Keep the departure held until snow or ice exposure decreases.',dependsOn:['station-deicing-collapse-strategy'],branch:'wait_weather',action:'wait_weather'},
     ])},
     holdover_expired:{classification:'derived',steps:withCancellation([
       {key:'station-holdover-strategy',department:'station',kind:'recovery_strategy',label:'Choose holdover recovery',detail:'Select the recovery when the previous deicing holdover window has expired before takeoff.',options:[

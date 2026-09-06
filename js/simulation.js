@@ -595,9 +595,10 @@ function logEvent(){ /* operations log intentionally disabled */ }
 
 const INCIDENT_TYPE_ORDER=[
   'crew_sick','mel_defect','atc_restriction','gate_conflict','destination_closure_ground','destination_closure',
-  'aircraft_out_of_position','postflight_technical_defect','crew_misconnect','no_legal_crew',
+  'aircraft_out_of_position','aircraft_misposition_after_diversion','postflight_technical_defect',
+  'crew_misconnect','crew_misposition_after_diversion','crew_report_delayed','no_legal_crew',
   'airport_capacity_reduction','atc_ground_stop','night_curfew_conflict','performance_limited','destination_handling_unavailable',
-  'fueling_issue','deicing_required','security_screening','crew_fatigue_report','bird_strike'
+  'fueling_issue','fuel_supplier_outage','deicing_required','deicing_capacity_collapse','security_screening','crew_fatigue_report','bird_strike'
 ];
 const INCIDENT_DEFINITIONS={
   crew_sick:{title:'Crew sick call',severity:'critical',decisionMin:30,summary:'A required operating crew member reported unavailable.'},
@@ -607,16 +608,21 @@ const INCIDENT_DEFINITIONS={
   destination_closure_ground:{title:'Destination closure',severity:'critical',decisionMin:35,summary:'The destination is unavailable before departure and needs an OCC operating decision.'},
   destination_closure:{title:'Destination closure',severity:'critical',decisionMin:20,summary:'The destination airport became unavailable while the flight is airborne.',allowAirborne:true,airborneOnly:true},
   aircraft_out_of_position:{title:'Aircraft out of position',severity:'critical',decisionMin:35,summary:'The assigned aircraft is not projected to be at the planned origin in time.'},
+  aircraft_misposition_after_diversion:{title:'Aircraft misposition after diversion',severity:'critical',decisionMin:40,summary:'A previous diversion left the assigned aircraft away from the next planned origin.'},
   postflight_technical_defect:{title:'Post-flight technical defect',severity:'critical',decisionMin:30,summary:'The inbound aircraft needs engineering disposition before the next sector.'},
   crew_duty_risk:{title:'Crew duty risk',severity:'critical',decisionMin:40,summary:'The planned duty is projected to exceed the crew duty envelope.'},
   crew_fatigue_report:{title:'Crew fatigue report',severity:'critical',decisionMin:30,summary:'A crew member reported fatigue or fitness concerns before departure.'},
   crew_fatigue_mid_rotation:{title:'Crew fatigue mid-rotation',severity:'critical',decisionMin:30,summary:'The active crew duty has too little margin for the remaining sector.'},
   crew_misconnect:{title:'Crew misconnect',severity:'critical',decisionMin:30,summary:'Positioned crew is projected to miss the report time for this departure.'},
+  crew_misposition_after_diversion:{title:'Crew misposition after diversion',severity:'critical',decisionMin:35,summary:'The through crew is away from the next departure station after a diversion.'},
+  crew_report_delayed:{title:'Crew report delayed',severity:'warning',decisionMin:30,summary:'The assigned operating crew is not expected to complete report and briefing on time.'},
   no_legal_crew:{title:'No legal crew for departure',severity:'critical',decisionMin:35,summary:'No complete legal qualified crew is available at the departure station.'},
   slot_miss_risk:{title:'Slot miss impact',severity:'warning',decisionMin:25,summary:'The flight is projected to miss its planned airport departure slot.'},
   baggage_loading_issue:{title:'Loadsheet reissue',severity:'warning',decisionMin:30,summary:'A station baggage issue now requires weight-and-balance or load-control reissue.'},
   fueling_issue:{title:'Fuel uplift constraint',severity:'warning',decisionMin:25,summary:'Fuel supply or uplift timing affects departure readiness.'},
+  fuel_supplier_outage:{title:'Fuel supplier outage',severity:'critical',decisionMin:30,summary:'The departure fuel provider has a local outage or truck shortage before departure.'},
   deicing_required:{title:'Deicing required',severity:'warning',decisionMin:35,summary:'Departure weather requires aircraft deicing before takeoff.'},
+  deicing_capacity_collapse:{title:'Deicing capacity collapse',severity:'critical',decisionMin:30,summary:'Winter weather and local demand have overwhelmed the departure deicing queue.'},
   holdover_expired:{title:'Deicing holdover expired',severity:'critical',decisionMin:20,summary:'The treated aircraft exceeded its usable holdover window before takeoff.'},
   airport_capacity_reduction:{title:'Airport capacity reduction',severity:'warning',decisionMin:35,summary:'A temporary airport capacity reduction is affecting departure flow.'},
   atc_ground_stop:{title:'ATC ground stop',severity:'critical',decisionMin:25,summary:'A destination or airspace ground stop prevents normal departure release.'},
@@ -640,8 +646,9 @@ const INCIDENT_DEFINITIONS={
 };
 const RETIRED_INCIDENT_TYPES=new Set(['slot_miss_risk','aircraft_late_inbound']);
 const DERIVED_INCIDENT_TYPES=new Set([
-  'aircraft_out_of_position','postflight_technical_defect','crew_duty_risk','crew_fatigue_mid_rotation','crew_misconnect','no_legal_crew',
-  'deicing_required','holdover_expired','airport_capacity_reduction','atc_ground_stop','night_curfew_conflict','performance_limited',
+  'aircraft_out_of_position','aircraft_misposition_after_diversion','postflight_technical_defect','crew_duty_risk',
+  'crew_fatigue_mid_rotation','crew_misconnect','crew_misposition_after_diversion','no_legal_crew',
+  'deicing_required','deicing_capacity_collapse','holdover_expired','airport_capacity_reduction','atc_ground_stop','night_curfew_conflict','performance_limited',
   'destination_handling_unavailable','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute','destination_weather_deterioration',
   'destination_below_minima','alternate_unsuitable','diversion_airport_unavailable','lightning_strike'
 ]);
@@ -799,7 +806,7 @@ function createIncident(type,flight,{training=false,detectedAt=simNow(),source='
     chainReason:incidentChainReason(type,parent,flight,context)
   };
   if(type==='crew_fatigue_report') incident.affectedRole=crewSickRoleForFlight(flight);
-  if(['no_legal_crew','crew_fatigue_mid_rotation'].includes(type)) incident.affectedRole=context?.role||'captains';
+  if(['no_legal_crew','crew_fatigue_mid_rotation','crew_misposition_after_diversion','crew_report_delayed'].includes(type)) incident.affectedRole=context?.role||'captains';
   if(type==='bird_strike') incident.technicalContext=OperationalIntelligence.melFinding(`${id}:bird`,detectedAt);
   if(type==='crew_misconnect') incident.affectedRole=context?.role||'captains';
   state.incidents.push(incident);
@@ -819,8 +826,10 @@ const PRE_DEPARTURE_INCIDENT_GENERATORS=[
   {type:'gate_conflict',weight:.85},
   {type:'destination_closure_ground',weight:.5,eligible:f=>distanceKm(AIRPORTS[f.from],AIRPORTS[f.to])>250},
   {type:'fueling_issue',weight:.75},
+  {type:'fuel_supplier_outage',weight:.45},
   {type:'security_screening',weight:.55,eligible:f=>f.flightType!=='ferry'},
-  {type:'crew_fatigue_report',weight:.55,eligible:f=>flightUsesLocalCrew(f)}
+  {type:'crew_fatigue_report',weight:.55,eligible:f=>flightUsesLocalCrew(f)},
+  {type:'crew_report_delayed',weight:.45,eligible:f=>flightUsesLocalCrew(f)}
 ];
 
 const GROUND_DELAY_CAUSES=[
@@ -859,9 +868,43 @@ function maybeGenerateOperationalIncident(f,t){
   f.incidentChecks.operationalGeneration=true;
   if(!openIncidentsForFlight(f.id).length&&Math.random()<.16){
     const generator=chooseIncidentGenerator(f,t);
-    if(generator) createIncident(generator.type,f,{detectedAt:t,source:'random',sourceKey:`random:${f.id}`});
+    if(generator){
+      const context=generatedIncidentContext(generator.type,f,t);
+      createIncident(generator.type,f,{detectedAt:t,source:'random',sourceKey:`random:${f.id}`,context});
+    }
   }
   return true;
+}
+
+function generatedIncidentContext(type,flight,t=simNow()){
+  const roll=OperationalIntelligence.stableUnit(`${flight.id}:${type}:context`);
+  if(type==='fuel_supplier_outage'){
+    const reasons=['Fuel-truck fleet shortage','Supplier hydrant pump outage','Fuel farm delivery interruption','Airport fuel provider staffing gap'];
+    const reason=reasons[Math.min(reasons.length-1,Math.floor(roll*reasons.length))];
+    return {
+      sourceId:flight.id,
+      airport:flight.from,
+      reason,
+      delayMin:45+Math.round(roll*45),
+      active:true
+    };
+  }
+  if(type==='crew_report_delayed'){
+    const roles=['captains','firstOfficers','cabinCrew'];
+    const reasons=['Crew transport delay','Security access delay','Late crew hotel shuttle','Crew briefing package reissue'];
+    const role=roles[Math.min(roles.length-1,Math.floor(roll*roles.length))];
+    const reason=reasons[Math.min(reasons.length-1,Math.floor(OperationalIntelligence.stableUnit(`${flight.id}:${type}:reason`)*reasons.length))];
+    return {
+      sourceId:flight.id,
+      role,
+      airport:flight.from,
+      reason,
+      reportReadyAt:flight.departure+(15+Math.round(roll*35))*MIN,
+      delayMin:15+Math.round(roll*35),
+      active:true
+    };
+  }
+  return null;
 }
 
 function impactContextSignature(context){
@@ -1163,6 +1206,33 @@ function aircraftOutOfPositionContextForFlight(flight,t=simNow()){
   };
 }
 
+function aircraftMispositionAfterDiversionContextForFlight(flight,t=simNow()){
+  if(flight.departureLogged||flight.flightType==='ferry'||t<flight.departure-8*HOUR) return null;
+  const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
+  const previous=operationalIndex(t).previousFlightById.get(flight.id)||previousAircraftFlight(flight);
+  if(!aircraft||!previous||!previous.diversionAirport) return null;
+  const divertedTo=flightOperationalDestination(previous);
+  if(divertedTo===flight.from||!AIRPORTS[divertedTo]||!AIRPORTS[flight.from]) return null;
+  const projection=aircraftProjectedLocation(aircraft,flightActualDeparture(flight));
+  const active=projection.location!==flight.from||['position_conflict','stale_unflown'].includes(projection.status);
+  if(!active) return null;
+  const ferryDeparture=Math.max(t+15*MIN,flightActualArrival(previous)+20*MIN);
+  const ferry=estimateFerryFlight(divertedTo,flight.from,aircraft,ferryDeparture);
+  const readyAt=ferryDeparture+ferry.duration+minimumTurnMinutes(aircraft,flight.from)*MIN;
+  return {
+    sourceId:previous.id,
+    previousFlightId:previous.id,
+    aircraftId:aircraft.id,
+    tail:aircraft.tail,
+    expectedLocation:divertedTo,
+    requiredLocation:flight.from,
+    diversionAirport:divertedTo,
+    sourceKey:`diversion-aircraft:${previous.id}:${flight.id}`,
+    delayMin:Math.max(15,Math.ceil((readyAt-flight.departure)/MIN)),
+    active:true
+  };
+}
+
 function positioningFerryPlanState(incident,t=simNow()){
   const flight=incident&&state.flights.find(item=>item.id===incident.flightId&&!item.cancelled);
   const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
@@ -1180,6 +1250,48 @@ function positioningFerryPlanState(incident,t=simNow()){
     ? `${ferry.id} exists, but the aircraft is still not projected at ${to} before ${flight.id}. Adjust timing or schedule.`
     : `Create a ferry flight for ${aircraft.tail} from ${from} to ${to} before ${flight.id}.`;
   return {ready,flight,aircraft,ferry,from,to,projection,reason};
+}
+
+function crewMispositionAfterDiversionContextForFlight(flight,t=simNow()){
+  if(flight.departureLogged||flight.flightType==='ferry'||!returnReusesOutboundCrew(flight)||t<flight.departure-8*HOUR) return null;
+  const previous=operationalIndex(t).previousFlightById.get(flight.id)||previousAircraftFlight(flight);
+  if(!previous||previous.serviceId!==flight.serviceId||!previous.diversionAirport) return null;
+  const crewAirport=flightCrewReleaseAirport(previous);
+  if(crewAirport===flight.from||!AIRPORTS[crewAirport]||!AIRPORTS[flight.from]) return null;
+  const role='captains';
+  const km=distanceKm(AIRPORTS[crewAirport],AIRPORTS[flight.from]);
+  const readyAt=t+Math.max(90,Math.ceil(60+km/750*60))*MIN;
+  return {
+    sourceId:previous.id,
+    previousFlightId:previous.id,
+    role,
+    from:crewAirport,
+    to:flight.from,
+    reason:`Through crew from ${previous.id} is at ${crewAirport} after diversion`,
+    sourceKey:`diversion-crew:${previous.id}:${flight.id}`,
+    readyAt,
+    delayMin:Math.max(15,Math.ceil((readyAt-flight.departure)/MIN)),
+    active:true
+  };
+}
+
+function crewRelocationPlanState(incident,t=simNow()){
+  const flight=incident&&state.flights.find(item=>item.id===incident.flightId&&!item.cancelled);
+  if(!flight) return {ready:false,flight:null,from:'',to:'',role:'',transfer:null,reason:'Affected flight is no longer available.'};
+  const role=incident.affectedRole||incident.context?.role||'captains';
+  const from=incident.context?.from||incident.context?.crewAirport||'';
+  const to=flight.from;
+  const reportBy=flight.departure-20*MIN;
+  const transfer=(state.personnelTransfers||[])
+    .filter(item=>!['cancelled'].includes(item.status)&&item.role===role&&item.to===to&&(!from||item.from===from)&&item.amount>0)
+    .sort((a,b)=>(a.arrival||Infinity)-(b.arrival||Infinity))[0]||null;
+  const ready=Boolean(transfer&&transfer.status==='completed'&&(transfer.actualTo||transfer.to)===to) || Boolean(transfer&&transfer.arrival<=reportBy);
+  const reason=ready
+    ? `${transfer.id} positions ${PERSONNEL[role]?.label?.toLowerCase()||'crew'} to ${to} before report.`
+    : transfer
+      ? `${transfer.id} arrives ${formatTime(transfer.arrival)}, after the report window. Adjust timing or move another crew.`
+      : `Move qualified ${PERSONNEL[role]?.label?.toLowerCase()||'crew'}${from?` from ${from}`:''} to ${to} in the Personnel widget.`;
+  return {ready,flight,from,to,role,transfer,reason};
 }
 
 function legalCrewContextForFlight(flight,t=simNow()){
@@ -1242,6 +1354,35 @@ function deicingContextForFlight(flight,t=simNow()){
     level:weather.level,
     delayMin:Math.max(20,weather.delayMin||20),
     capacityPct:Math.round(weather.capacityFactor*100),
+    active:true
+  };
+}
+
+function deicingCapacityCollapseContextForFlight(flight,t=simNow()){
+  const base=deicingContextForFlight(flight,t);
+  if(!base||t<flight.departure-4*HOUR) return null;
+  const airport=flight.from;
+  const windowStart=flight.departure-90*MIN;
+  const windowEnd=flight.departure+90*MIN;
+  const demand=state.flights.filter(item=>{
+    if(item.cancelled||item.settled||item.departureLogged||item.from!==airport||item.id===flight.id) return false;
+    if(item.departure<windowStart||item.departure>windowEnd) return false;
+    const weather=Management.weatherAt(airport,Math.max(t,item.departure-30*MIN));
+    return weather.type==='snow'||/snow|ice|deicing/i.test(weather.conditions||'');
+  }).length+1;
+  const severe=base.level==='severe'||Number(base.capacityPct||100)<72;
+  const congested=['LHR','JFK','AMS','CDG','HND','ORD','FRA','MUC','ZRH','ARN','CPH','OSL','YYZ','BOS','DEN'].includes(airport);
+  const active=demand>=4 || (demand>=3&&(severe||congested));
+  if(!active) return null;
+  const queueMin=Math.max(35,Math.round((base.delayMin||20)+demand*12+(severe?20:0)));
+  return {
+    ...base,
+    sourceId:flight.id,
+    demand,
+    queueMin,
+    delayMin:queueMin,
+    reason:`${demand} departures need deicing in the local queue`,
+    sourceKey:`deice-collapse:${airport}:${Math.floor(flight.departure/(2*HOUR))}`,
     active:true
   };
 }
@@ -1507,8 +1648,11 @@ function processDerivedOperationalIncidents(t=simNow()){
       const dutyContext={sourceId:flight.id,dutyHours:duty.dutyHours,maxHours:duty.maxHours,label:duty.label};
       if(updateOpenDerivedIncident('crew_duty_risk',flight,dutyActive,dutyContext,t)) changed=true;
 
+      const diversionAircraftContext=aircraftMispositionAfterDiversionContextForFlight(flight,t);
+      if(updateOpenDerivedIncident('aircraft_misposition_after_diversion',flight,Boolean(diversionAircraftContext?.active),diversionAircraftContext,t)) changed=true;
+
       const positionContext=aircraftOutOfPositionContextForFlight(flight,t);
-      if(updateOpenDerivedIncident('aircraft_out_of_position',flight,Boolean(positionContext?.active),positionContext,t)) changed=true;
+      if(updateOpenDerivedIncident('aircraft_out_of_position',flight,Boolean(positionContext?.active&&!diversionAircraftContext?.active),positionContext,t)) changed=true;
 
       const postflightContext=postflightTechnicalContextForFlight(flight,t);
       if(updateOpenDerivedIncident('postflight_technical_defect',flight,Boolean(postflightContext?.active),postflightContext,t)) changed=true;
@@ -1518,6 +1662,9 @@ function processDerivedOperationalIncidents(t=simNow()){
 
       const crewMisconnectContext=crewMisconnectContextForFlight(flight,t);
       if(updateOpenDerivedIncident('crew_misconnect',flight,Boolean(crewMisconnectContext?.active),crewMisconnectContext,t)) changed=true;
+
+      const crewDiversionContext=crewMispositionAfterDiversionContextForFlight(flight,t);
+      if(updateOpenDerivedIncident('crew_misposition_after_diversion',flight,Boolean(crewDiversionContext?.active),crewDiversionContext,t)) changed=true;
 
       const fatigueContext=crewFatigueMidRotationContextForFlight(flight);
       if(updateOpenDerivedIncident('crew_fatigue_mid_rotation',flight,Boolean(fatigueContext?.active),fatigueContext,t)) changed=true;
@@ -1537,8 +1684,11 @@ function processDerivedOperationalIncidents(t=simNow()){
       const handlingContext=destinationHandlingContextForFlight(flight,t);
       if(updateOpenDerivedIncident('destination_handling_unavailable',flight,Boolean(handlingContext?.active),handlingContext,t)) changed=true;
 
+      const deicingCollapseContext=deicingCapacityCollapseContextForFlight(flight,t);
+      if(updateOpenDerivedIncident('deicing_capacity_collapse',flight,Boolean(deicingCollapseContext?.active),deicingCollapseContext,t)) changed=true;
+
       const deicingContext=deicingContextForFlight(flight,t);
-      if(updateOpenDerivedIncident('deicing_required',flight,Boolean(deicingContext?.active),deicingContext,t)) changed=true;
+      if(updateOpenDerivedIncident('deicing_required',flight,Boolean(deicingContext?.active&&!deicingCollapseContext?.active),deicingContext,t)) changed=true;
 
       const holdoverContext=holdoverExpiredContextForFlight(flight,t);
       if(updateOpenDerivedIncident('holdover_expired',flight,Boolean(holdoverContext?.active),holdoverContext,t)) changed=true;
@@ -1854,7 +2004,7 @@ function finalizeOperationalCase(incident){
       applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||incident.context?.delayMin||90);
       incident.outcome=`OCC held ${flight.id} on the ground until ${incident.context?.airport||flight.to} can accept the flight.`;
     }
-  }else if(incident.type==='aircraft_out_of_position'){
+  }else if(['aircraft_out_of_position','aircraft_misposition_after_diversion'].includes(incident.type)){
     if(incident.selectedStrategy==='substitute'){
       incident.outcome=`Replacement aircraft ${incident.replacementAircraftTail||''} assigned to protect the out-of-position departure.`;
     }else{
@@ -1876,6 +2026,20 @@ function finalizeOperationalCase(incident){
       applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||incident.context?.delayMin||25);
       incident.outcome='Connecting crew ETA accepted and the revised departure was published.';
     }
+  }else if(['crew_misposition_after_diversion','crew_report_delayed'].includes(incident.type)){
+    if(incident.selectedStrategy==='replace'){
+      const allocation=tasks.find(task=>task.kind==='crew_allocation');
+      applyIncidentMinimumDelay(flight,allocation?.selection?.reportMin||25);
+      incident.outcome=`Local replacement ${PERSONNEL[allocation?.selection?.role]?.label?.toLowerCase()||'crew'} assigned and the crew plan was updated.`;
+    }else if(['move_crew','move_reserve'].includes(incident.selectedStrategy)){
+      const plan=crewRelocationPlanState(incident);
+      if(!plan.ready) return false;
+      applyIncidentMinimumDelay(flight,Math.max(0,incident.context?.delayMin||0));
+      incident.outcome=`${PERSONNEL[plan.role]?.label||'Crew'} positioning confirmed at ${plan.to}.`;
+    }else{
+      applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||incident.context?.delayMin||25);
+      incident.outcome='Crew report / positioning ETA accepted and the revised departure was published.';
+    }
   }else if(['crew_duty_risk','crew_fatigue_report','crew_fatigue_mid_rotation'].includes(incident.type)){
     if(incident.selectedStrategy==='augment'){
       flight.crewAugmented=true;
@@ -1885,7 +2049,7 @@ function finalizeOperationalCase(incident){
       applyIncidentMinimumDelay(flight,allocation?.selection?.reportMin||25);
       incident.outcome=`Replacement ${PERSONNEL[allocation?.selection?.role]?.label?.toLowerCase()||'crew'} reported and the crew plan was updated.`;
     }
-  }else if(['baggage_loading_issue','fueling_issue','security_screening','deicing_required','holdover_expired'].includes(incident.type)){
+  }else if(['baggage_loading_issue','fueling_issue','fuel_supplier_outage','security_screening','deicing_required','deicing_capacity_collapse','holdover_expired'].includes(incident.type)){
     applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||20);
     incident.outcome=incident.stationOutcome||'Station recovery completed and the operating plan was updated.';
   }else if(incident.type==='performance_limited'){
@@ -2063,10 +2227,13 @@ const STATION_RECOVERY_EFFECTS={
   hold_screening:{delay:30,outcome:'Airport security completed rescreening before departure.'},
   offload_passenger:{delay:25,outcome:'Affected passenger and baggage were offloaded and the manifest was corrected.'},
   priority:{delay:10,outcome:'Fuel provider accepted priority fueling.'},
+  fuel_outage_priority:{delay:20,outcome:'Fuel provider accepted escalation and dispatched limited fuel capacity.'},
   wait_truck:{delay:35,outcome:'Fuel truck delay accepted and fuel completion time updated.'},
+  wait_supply:{delay:75,outcome:'Fuel supplier outage recovery ETA accepted and departure plan updated.'},
   minimum_uplift:{delay:15,outcome:'Minimum compliant fuel uplift confirmed with dispatch.'},
   deice:{delay:25,outcome:'Aircraft deicing completed and a holdover window was started.'},
   priority_deice:{delay:15,outcome:'Station accepted priority deicing and a holdover window was started.'},
+  deice_queue:{delay:60,outcome:'Aircraft entered the constrained deicing queue and a treatment sequence was confirmed.'},
   wait_weather:{delay:45,outcome:'Flight held until snow/ice exposure improves.'},
   redeice:{delay:25,outcome:'Repeat deicing completed and a new holdover window was started.'},
   wait_deice_slot:{delay:35,outcome:'Flight held for the next available deicing treatment slot.'}
@@ -2328,6 +2495,11 @@ function performOperationalTask(taskId,actionId='',payload={}){
     incident.positioningFerryId=plan.ferry?.id||'';
     task.selection={action:'check_ferry',ferryFlightId:incident.positioningFerryId,projectedLocation:plan.projection?.location||''};
     completeOperationalTask(task,incident.positioningFerryId?`Positioning ferry ${incident.positioningFerryId} confirmed.`:'Aircraft projection confirmed at origin.');
+  }else if(task.kind==='manual_crew_move_required'){
+    const plan=crewRelocationPlanState(incident);
+    if(!plan.ready) return toast(plan.reason);
+    task.selection={action:'check_crew_move',transferId:plan.transfer?.id||'',role:plan.role,to:plan.to};
+    completeOperationalTask(task,plan.transfer?`${plan.transfer.id} positions ${PERSONNEL[plan.role]?.label?.toLowerCase()||'crew'} to ${plan.to}.`:`Qualified ${PERSONNEL[plan.role]?.label?.toLowerCase()||'crew'} confirmed at ${plan.to}.`);
   }else if(task.kind==='atc_coordination'){
     const action=actionId||task.action;
     if(action==='accept'){
@@ -2371,8 +2543,8 @@ function performOperationalTask(taskId,actionId='',payload={}){
     const delay=incident.context?.inboundDelayMin||incident.context?.delayMin||flightTotalDepartureDelayMin(flight)||15;
     incident.coordinatedDelayMin=Math.max(15,delay);
     task.selection={action:actionId||task.action||'wait_inbound',delayMin:incident.coordinatedDelayMin};
-    const prefix=incident.type==='aircraft_out_of_position'?'Aircraft positioning':
-      incident.type==='crew_misconnect'?'Crew connection':
+    const prefix=['aircraft_out_of_position','aircraft_misposition_after_diversion'].includes(incident.type)?'Aircraft positioning':
+      ['crew_misconnect','crew_misposition_after_diversion','crew_report_delayed'].includes(incident.type)?'Crew timing':
         incident.type==='destination_handling_unavailable'?'Destination handling':'Timing';
     completeOperationalTask(task,`${prefix} accepted with ${incident.coordinatedDelayMin} minutes projected delay.`);
   }else if(task.kind==='turnaround_expedite'){
@@ -2384,19 +2556,26 @@ function performOperationalTask(taskId,actionId='',payload={}){
     const action=actionId||task.action;
     const effect=STATION_RECOVERY_EFFECTS[action];
     if(!effect) return false;
-    if(task.kind==='fuel_recovery'&&['priority','minimum_uplift'].includes(action)) fuelFlight(flight,simNow(),true);
+    const delay=action==='deice_queue'?Math.max(effect.delay,incident.context?.queueMin||incident.context?.delayMin||0):
+      action==='wait_supply'?Math.max(effect.delay,incident.context?.delayMin||0):
+      action==='fuel_outage_priority'?Math.max(effect.delay,Math.round((incident.context?.delayMin||45)*.35)):
+      effect.delay;
+    const outcome=action==='deice_queue'&&incident.context?.demand
+      ? `Station sequenced ${incident.context.demand} deicing-demand departures; treatment queue accepted.`
+      : effect.outcome;
+    if(task.kind==='fuel_recovery'&&['priority','fuel_outage_priority','minimum_uplift'].includes(action)) fuelFlight(flight,simNow(),true);
     if(task.kind==='security_coordination'&&action==='offload_passenger'&&flight.pax>0){
       flight.pax=Math.max(0,flight.pax-1);
       if(flight.classPax?.economy) flight.classPax.economy=Math.max(0,flight.classPax.economy-1);
     }
     if(task.kind==='station_recovery'&&['deice','priority_deice','redeice'].includes(action)){
-      flight.deicingCompletedAt=simNow()+effect.delay*MIN;
+      flight.deicingCompletedAt=simNow()+delay*MIN;
       flight.deicingHoldoverUntil=flight.deicingCompletedAt+35*MIN;
     }
-    incident.coordinatedDelayMin=effect.delay;
-    incident.stationOutcome=effect.outcome;
-    task.selection={action,delayMin:effect.delay};
-    createExternalWorkflowRequest(task,task.kind==='fuel_recovery'?'Fuel provider':task.kind==='security_coordination'?'Airport security':'Station ramp control',Math.max(8,Math.ceil(effect.delay/2)),effect.outcome);
+    incident.coordinatedDelayMin=delay;
+    incident.stationOutcome=outcome;
+    task.selection={action,delayMin:delay};
+    createExternalWorkflowRequest(task,task.kind==='fuel_recovery'?'Fuel provider':task.kind==='security_coordination'?'Airport security':'Station ramp control',Math.max(8,Math.ceil(delay/2)),outcome);
   }else if(task.kind==='performance_coordination'){
     const action=actionId||task.action;
     if(action==='payload_reduce'){

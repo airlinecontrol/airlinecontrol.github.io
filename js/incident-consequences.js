@@ -47,12 +47,20 @@
     const currentDelay=flightTotalDepartureDelayMin(flight);
     if(optionId==='cancel') return 'flight removed before departure · aircraft and crew released';
 
-    if(['crew-strategy','crew-duty-strategy','crew-fatigue-strategy','crew-misconnect-strategy'].includes(task.key)&&optionId==='replace'){
+    if(['crew-strategy','crew-duty-strategy','crew-fatigue-strategy','crew-misconnect-strategy','crew-diversion-strategy','crew-report-delay-strategy'].includes(task.key)&&optionId==='replace'){
       if(crewPoolOptions(incident).length) return 'local replacement report about +20 min';
       if(remoteCrewPoolOptions(incident).length) return 'local pool unavailable · move remote personnel first';
       return 'requires qualified local or moved personnel';
     }
     if(task.key==='crew-misconnect-strategy'&&optionId==='wait_crew') return `${consequenceDelayText(incident.context?.delayMin||25)} · crew transfer becomes the departure driver`;
+    if(task.key==='crew-diversion-strategy'){
+      if(optionId==='move_crew') return `${consequenceDelayText(incident.context?.delayMin||45)} · requires manual personnel move`;
+      if(optionId==='wait_crew') return `${consequenceDelayText(incident.context?.delayMin||45)} · displaced through crew stays with flight`;
+    }
+    if(task.key==='crew-report-delay-strategy'){
+      if(optionId==='wait_crew') return `${consequenceDelayText(incident.context?.delayMin||25)} · assigned crew remains on duty`;
+      if(optionId==='move_reserve') return 'requires manual personnel move · recovery depends on transfer ETA';
+    }
     if(['crew-duty-strategy','crew-fatigue-strategy'].includes(task.key)&&optionId==='augment') return 'no extra delay if crew is available · extra crew tied up';
 
     if(['mx-strategy','mx-postflight-strategy'].includes(task.key)){
@@ -92,10 +100,21 @@
       if(optionId==='wait_truck') return `possible +35 min delay · ${rotationRiskText(flight)}`;
       if(optionId==='minimum_uplift') return 'possible +15 min delay · less discretionary fuel margin';
     }
+    if(task.key==='station-fuel-outage-strategy'){
+      if(optionId==='priority') return 'possible +20 min delay · depends on provider escalation';
+      if(optionId==='wait_supply') return `${consequenceDelayText(incident.context?.delayMin||75)} · supplier outage drives departure`;
+      if(optionId==='minimum_uplift') return 'possible +25 min delay · legal fuel only, smaller operational margin';
+      if(optionId==='substitute') return replacementConsequenceText(incident);
+    }
     if(task.key==='station-deicing-strategy'){
       if(optionId==='deice') return 'possible +25 min delay · holdover window starts after treatment';
       if(optionId==='priority_deice') return 'possible +15 min delay · uses priority station resources';
       if(optionId==='wait_weather') return `possible +45 min delay · ${rotationRiskText(flight)}`;
+    }
+    if(task.key==='station-deicing-collapse-strategy'){
+      if(optionId==='join_queue') return `${consequenceDelayText(incident.context?.queueMin||incident.context?.delayMin||60)} · airport deicing queue controls departure`;
+      if(optionId==='priority_deice') return 'possible +20 min delay · station priority may affect other departures';
+      if(optionId==='wait_weather') return `${consequenceDelayText(Math.max(45,incident.context?.delayMin||60))} · waits for demand or precipitation to ease`;
     }
     if(task.key==='station-holdover-strategy'){
       if(optionId==='redeice') return 'possible +25 min delay · new holdover window starts';
