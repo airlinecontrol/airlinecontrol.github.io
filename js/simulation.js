@@ -2144,6 +2144,7 @@ function finalizeOperationalCase(incident){
       : 'ATC reroute accepted and revised arrival estimate published.';
   }
   resolveIncidentImpacts(incident,simNow(),incident.selectedStrategy&&['wait_inbound','accept_next','accept'].includes(incident.selectedStrategy)?'accepted':'handled');
+  if(typeof recordResolvedIncidentRecoveryCost==='function') recordResolvedIncidentRecoveryCost(incident);
   incident.status='resolved'; incident.blocking=false; incident.resolvedAt=simNow();
   incident.selectedAction='workflow_complete'; incident.automaticResolution=false;
   for(const task of incidentTasks(incident.id)){
@@ -3020,6 +3021,234 @@ function updatePassengerConnections(){
   return changed;
 }
 
+function passengerRecoveryExposures(t=simNow()){
+  return state.flights
+    .filter(flight=>flight.flightType!=='ferry'&&(flight.pax||0)>0)
+    .map(flight=>{
+      const sortAt=flight.cancelled?(flight.cancelledAt||flight.departure):flightActualDeparture(flight);
+      if(sortAt<t-24*HOUR||sortAt>t+72*HOUR) return null;
+      const delayMin=flightTotalDepartureDelayMin(flight);
+      const overnight=typeof passengerOvernightExposure==='function'?passengerOvernightExposure(flight,delayMin):{pax:0,cost:0,reason:''};
+      const diverted=Boolean(flight.diversionAirport&&flight.diversionAirport!==flight.to);
+      const cancelled=Boolean(flight.cancelled);
+      const critical=Number(flight.connectionCriticalPax)||0;
+      const atRisk=Number(flight.connectionAtRiskPax)||0;
+      const releaseIncident=passengerReleaseIncident(flight);
+      const releaseCandidate=passengerReleaseApplicable({flight,delayMin,pax:flight.pax});
+      const active=cancelled||diverted||overnight.pax>0||critical>0||atRisk>0||releaseCandidate;
+      if(!active) return null;
+      const connectionCost=(critical+atRisk)>0?Math.max(800,(critical+atRisk)*85):0;
+      const cost=cancelled&&typeof cancellationRecoveryCost==='function'
+        ? cancellationRecoveryCost(flight)
+        : Math.max(overnight.cost,connectionCost,typeof passengerDelayCost==='function'?passengerDelayCost(flight,delayMin):0);
+      const reason=cancelled?'cancelled flight':diverted?`diverted to ${flight.diversionAirport}`:overnight.reason||releaseIncident?.reason||'connections at risk';
+      const exposure={
+        flightId:flight.id,flight,reason,cost,delayMin,
+        pax:flight.pax||0,overnightPax:overnight.pax||0,
+        criticalConnections:critical,atRiskConnections:atRisk,
+        sortAt
+      };
+      exposure.records=passengerRecoveryRecordsForFlight(flight.id);
+      exposure.actions=passengerRecoveryActionsForExposure(exposure);
+      const allActionsConfirmed=exposure.actions.length>0&&exposure.actions.every(action=>exposure.records.some(record=>record.action===action.id&&record.status==='confirmed'));
+      const legacyHandled=!exposure.records.length&&Boolean(flight.passengerRecoveryArrangedAt||flight.passengerAccommodationArrangedAt||flight.passengerReleasedAt);
+      exposure.arranged=allActionsConfirmed||legacyHandled;
+      return exposure;
+    })
+    .filter(Boolean)
+    .sort((a,b)=>(a.arranged===b.arranged?0:a.arranged?1:-1)||b.cost-a.cost||a.sortAt-b.sortAt)
+    .slice(0,20);
+}
+
+function passengerRecoveryRecordsForFlight(flightId){
+  return (state.passengerRecoveries||[])
+    .filter(item=>item.flightId===flightId)
+    .sort((a,b)=>(a.completedAt||a.updatedAt||a.requestedAt)-(b.completedAt||b.updatedAt||b.requestedAt));
+}
+
+function passengerRecoveryActionLabel(action){
+  return {
+    rebooking:'Authorize reaccommodation',
+    release:'Release passengers',
+    hotel:'Authorize hotel',
+    transport:'Authorize transport',
+    station_support:'Request station support'
+  }[action]||'Coordinate recovery';
+}
+
+function passengerRecoveryActionRequestLabel(action){
+  return {
+    rebooking:'reaccommodation authorization',
+    release:'passenger release authorization',
+    hotel:'hotel authorization',
+    transport:'transport authorization',
+    station_support:'station support request'
+  }[action]||'customer recovery coordination';
+}
+
+function passengerRecoveryStatusLabel(status){
+  return {requested:'Requested',in_progress:'In progress',confirmed:'Confirmed'}[status]||'Requested';
+}
+
+function passengerRecoveryActionEstimate(exposure,action){
+  const pax=Math.max(1,Number(exposure.pax)||0);
+  const connectionPax=(Number(exposure.criticalConnections)||0)+(Number(exposure.atRiskConnections)||0);
+  if(action==='rebooking') return Math.max(800,(connectionPax||pax)*85);
+  if(action==='release') return Math.max(450,pax*14);
+  if(action==='hotel') return Math.max(1200,Math.max(Number(exposure.overnightPax)||0,pax)*115);
+  if(action==='transport') return Math.max(600,pax*35);
+  if(action==='station_support') return Math.max(500,pax*8);
+  return Math.max(0,Number(exposure.cost)||0);
+}
+
+function passengerRecoveryActionPax(exposure,action){
+  if(action==='rebooking') return Math.max(1,(Number(exposure.criticalConnections)||0)+(Number(exposure.atRiskConnections)||0));
+  if(action==='hotel') return Math.max(Number(exposure.overnightPax)||0,Number(exposure.pax)||0);
+  return Math.max(1,Number(exposure.pax)||0);
+}
+
+function passengerReleaseIncident(flight){
+  const incident=state.incidents.find(item=>
+    item.status==='open'&&item.flightId===flight.id&&item.severity==='critical'&&!INCIDENT_DEFINITIONS[item.type]?.allowAirborne
+  );
+  if(!incident) return null;
+  return {incident,reason:`uncertain ETD: ${INCIDENT_DEFINITIONS[incident.type]?.title||incident.type}`};
+}
+
+function passengerReleaseApplicable(exposure){
+  const flight=exposure.flight;
+  if(!flight||flight.flightType==='ferry'||flight.departureLogged) return false;
+  if(flight.cancelled) return true;
+  if((exposure.delayMin||0)>=120) return true;
+  if((Number(flight.nightRestrictionConflictDelayMin)||0)>0) return true;
+  return Boolean(passengerReleaseIncident(flight));
+}
+
+function passengerRecoveryActionsForExposure(exposure){
+  const actions=[];
+  const push=(id)=>{ if(!actions.some(item=>item.id===id)) actions.push({id,label:passengerRecoveryActionLabel(id),amount:passengerRecoveryActionEstimate(exposure,id)}); };
+  const diverted=Boolean(exposure.flight?.diversionAirport&&exposure.flight.diversionAirport!==exposure.flight.to);
+  const cancelled=Boolean(exposure.flight?.cancelled);
+  if(passengerReleaseApplicable(exposure)) push('release');
+  if(cancelled||(exposure.criticalConnections||0)+(exposure.atRiskConnections||0)>0) push('rebooking');
+  if((exposure.overnightPax||0)>0||cancelled) push('hotel');
+  if(diverted) push('transport');
+  if(diverted||cancelled||(exposure.overnightPax||0)>0||(exposure.delayMin||0)>=180) push('station_support');
+  return actions;
+}
+
+function passengerRecoveryActionDuration(action){
+  return {rebooking:35*MIN,release:12*MIN,hotel:25*MIN,transport:20*MIN,station_support:15*MIN}[action]||20*MIN;
+}
+
+function processPassengerRecoveries(t=simNow()){
+  let changed=false;
+  for(const recovery of state.passengerRecoveries||[]){
+    if(recovery.status==='confirmed') continue;
+    if(recovery.status==='requested'&&t>=recovery.requestedAt+10*MIN){
+      recovery.status='in_progress';
+      recovery.updatedAt=t;
+      changed=true;
+    }
+    if(recovery.status==='in_progress'&&t>=recovery.confirmsAt){
+      recovery.status='confirmed';
+      recovery.completedAt=t;
+      recovery.updatedAt=t;
+      const flight=state.flights.find(item=>item.id===recovery.flightId);
+      if(flight){
+        if(recovery.action==='release') flight.passengerReleasedAt=t;
+        if(recovery.action==='hotel'||recovery.action==='transport') flight.passengerAccommodationArrangedAt=t;
+        else if(recovery.action!=='release') flight.passengerRecoveryArrangedAt=t;
+      }
+      changed=true;
+    }
+  }
+  return changed;
+}
+
+function crewAccommodationExposures(t=simNow()){
+  return state.flights
+    .filter(flight=>!flight.cancelled&&flight.flightType!=='ferry')
+    .map(flight=>{
+      const sortAt=flightCrewRelease(flight);
+      if(sortAt<t-24*HOUR||sortAt>t+72*HOUR) return null;
+      const releaseAirport=flightCrewReleaseAirport(flight);
+      const delayMin=flightTotalDepartureDelayMin(flight);
+      const diverted=Boolean(flight.diversionAirport&&flight.diversionAirport!==flight.to);
+      const awayFromHome=releaseAirport&&releaseAirport!==state.home;
+      const lateRelease=delayMin>=180||new Date(sortAt).getHours()>=23||new Date(sortAt).getHours()<5;
+      if(!diverted&&!(awayFromHome&&lateRelease&&delayMin>=60)) return null;
+      const crew=typeof crewComplementForFlight==='function'?crewComplementForFlight(flight):3;
+      const cost=typeof crewRecoveryCost==='function'?crewRecoveryCost(flight,{hotel:true,position:diverted}):crew*140;
+      return {
+        flightId:flight.id,flight,releaseAirport,crew,cost,delayMin,
+        reason:diverted?`crew released at diversion airport ${releaseAirport}`:lateRelease?'late release / rest hotel exposure':'crew away from home base',
+        arranged:Boolean(flight.crewAccommodationArrangedAt),
+        sortAt
+      };
+    })
+    .filter(Boolean)
+    .sort((a,b)=>(a.arranged===b.arranged?0:a.arranged?1:-1)||b.cost-a.cost||a.sortAt-b.sortAt)
+    .slice(0,20);
+}
+
+function authorizePassengerRecovery(flightId,action='hotel'){
+  const exposure=passengerRecoveryExposures().find(item=>item.flightId===flightId);
+  if(!exposure) return toast('No passenger disruption exposure is currently projected for that flight.');
+  const flight=exposure.flight;
+  const available=passengerRecoveryActionsForExposure(exposure).find(item=>item.id===action);
+  if(!available) return toast(`${passengerRecoveryActionLabel(action)} is not applicable to ${flight.id}.`);
+  const existing=passengerRecoveryRecordsForFlight(flightId).find(item=>item.action===action);
+  if(existing) return toast(`${flight.id}: ${passengerRecoveryActionRequestLabel(action)} already ${passengerRecoveryStatusLabel(existing.status).toLowerCase()}.`);
+  const now=simNow();
+  const amount=available.amount;
+  const event=typeof recordRecoveryCostEvent==='function'?recordRecoveryCostEvent({
+    flight,category:'passenger',kind:`passenger_${action}`,
+    amount,passengers:passengerRecoveryActionPax(exposure,action),
+    airport:flightOperationalDestination(flight),
+    description:`${flight.id}: ${passengerRecoveryActionRequestLabel(action)}`
+  }):null;
+  state.passengerRecoveries??=[];
+  state.passengerRecoveries.push({
+    id:`PR${state.nextPassengerRecovery++}`,
+    flightId,
+    action,
+    status:'requested',
+    requestedAt:now,
+    updatedAt:now,
+    confirmsAt:now+passengerRecoveryActionDuration(action),
+    completedAt:0,
+    amount,
+    passengers:passengerRecoveryActionPax(exposure,action),
+    reason:exposure.reason,
+    costEventId:event?.id||''
+  });
+  AeroServices.commit();
+  requestUiRefresh('desk','left','context');
+  toast(`${flight.id}: ${passengerRecoveryActionRequestLabel(action)} requested${event?` (${money(event.amount)})`:''}.`);
+  return event;
+}
+
+function arrangePassengerRecovery(flightId,mode='accommodation'){
+  return authorizePassengerRecovery(flightId,mode==='connections'?'rebooking':'hotel');
+}
+
+function arrangeCrewAccommodation(flightId){
+  const exposure=crewAccommodationExposures().find(item=>item.flightId===flightId);
+  if(!exposure) return toast('No crew accommodation exposure is currently projected for that flight.');
+  const flight=exposure.flight;
+  const event=typeof recordRecoveryCostEvent==='function'?recordRecoveryCostEvent({
+    flight,category:'crew',kind:'crew_accommodation',
+    amount:exposure.cost,crew:exposure.crew,airport:exposure.releaseAirport,
+    description:`${flight.id}: crew hotel/rest accommodation at ${exposure.releaseAirport}`
+  }):null;
+  flight.crewAccommodationArrangedAt=simNow();
+  AeroServices.commit();
+  requestUiRefresh('desk','left','context');
+  toast(`${flight.id}: crew accommodation arranged${event?` (${money(event.amount)})`:''}.`);
+  return event;
+}
+
 function processMelConstraints(t=simNow()){
   let changed=false;
   for(const aircraft of state.aircraft){
@@ -3066,6 +3295,7 @@ function processEvents(){
   if(repairFirstFlightFuelAttribution()) changed=true;
   if(processPersonnelTransfers(t)){ changed=true; needsRecalc=true; }
   if(processResourceRequests(t)){ changed=true; needsRecalc=true; }
+  if(processPassengerRecoveries(t)) changed=true;
   if(processMelConstraints(t)){ changed=true; needsRecalc=true; }
 
   for(const f of state.flights){
@@ -3345,6 +3575,7 @@ function createFlightRecord({aircraftId,from,to,departure,fare,serviceId=null,se
     nightRecoveryDecision:'',nightRecoverySourceKey:'',nightRecoveryApprovedAt:0,
     crewDutyId:'',crewDutySplit:false,crewSwappedAt:0,crewRoleSwaps:{},
     connectionPax:0,connectionCriticalPax:0,connectionAtRiskPax:0,connectionMissedPax:0,
+    passengerAccommodationArrangedAt:0,passengerRecoveryArrangedAt:0,passengerReleasedAt:0,recoveryCostBooked:0,cancellationCostBooked:'',
     weatherLiveChecks:{},weatherRouteHazard:'',weatherCause:null,
     slotMissed:false,opsChecked:false,enrouteChecked:false,slotLogged:false
   };
@@ -3874,6 +4105,14 @@ function substituteSelectedRotation(flightId,newAcId){
     returnFlight.aircraftId=newAcId;
     clearAircraftSpecificDelay(returnFlight);
   }
+  if(typeof recordRecoveryCostEvent==='function'){
+    const amount=Math.round((2_500*(typeof aircraftSizeFactor==='function'?aircraftSizeFactor(outbound):1))/100)*100;
+    recordRecoveryCostEvent({
+      flight:outbound,category:'aircraft',kind:'manual_aircraft_swap',amount,
+      airport:outbound.from,
+      description:`${outbound.id}: manual round-trip aircraft swap to ${newAc.tail}`
+    });
+  }
   for(const flight of [outbound,returnFlight].filter(Boolean)){
     for(const incident of state.incidents.filter(item=>item.flightId===flight.id&&item.status==='open')){
       incident.aircraftId=newAcId;
@@ -3903,6 +4142,14 @@ function swapSelectedFlightAircraft(flightId,newAcId){
   const candidates=manualSwapCandidatesForFlight(flight);
   if(!candidates.some(item=>item.id===newAcId)) return toast(`${aircraft.tail} is not available for this flight.`);
   flight.aircraftId=newAcId;
+  if(typeof recordRecoveryCostEvent==='function'){
+    const amount=Math.round((2_500*(typeof aircraftSizeFactor==='function'?aircraftSizeFactor(flight):1))/100)*100;
+    recordRecoveryCostEvent({
+      flight,category:'aircraft',kind:'manual_aircraft_swap',amount,
+      airport:flight.from,
+      description:`${flight.id}: manual aircraft swap to ${aircraft.tail}`
+    });
+  }
   for(const incident of state.incidents.filter(item=>item.flightId===flight.id&&item.status==='open')){
     incident.aircraftId=newAcId;
   }
@@ -3993,6 +4240,14 @@ function delayFlight(flightId,minutes=15){
   const f=state.flights.find(item=>item.id===flightId&&!item.cancelled);
   if(!f||f.departureLogged) return toast('Only a flight still on the ground can be held.');
   f.manualDelayMin=(Number(f.manualDelayMin)||0)+minutes;
+  if(typeof recordRecoveryCostEvent==='function'&&typeof passengerDelayCost==='function'){
+    const amount=passengerDelayCost(f,minutes);
+    if(amount) recordRecoveryCostEvent({
+      flight:f,category:'dispatch',kind:'manual_delay',amount,
+      passengers:f.pax||0,airport:f.from,
+      description:`${f.id}: manual OCC hold +${minutes} min`
+    });
+  }
   f.issueAcknowledgedAt=0; f.issueAcknowledgedKey='';
   recalculateOperations();
   processDerivedOperationalIncidents(simNow());
@@ -4022,6 +4277,13 @@ function swapCrewForFlight(flightId){
   flight.crewDutySplit=true;
   flight.crewAugmented=false;
   flight.crewSwappedAt=simNow();
+  if(typeof recordRecoveryCostEvent==='function'&&typeof crewRecoveryCost==='function'){
+    recordRecoveryCostEvent({
+      flight,category:'crew',kind:'manual_crew_swap',amount:crewRecoveryCost(flight,{replace:true}),
+      crew:typeof crewComplementForFlight==='function'?crewComplementForFlight(flight):0,airport:flight.from,
+      description:`${flight.id}: local reserve crew swap`
+    });
+  }
   flight.issueAcknowledgedAt=0; flight.issueAcknowledgedKey='';
   recalculateOperations();
   processDerivedOperationalIncidents(simNow());
@@ -4044,7 +4306,16 @@ function cancelFlight(flightId,{skipConfirm=false,reason=''}={}){
   const pairing=targets.length>1?' The paired return leg will also be cancelled so the aircraft remains correctly positioned.':'';
   if(!skipConfirm&&!AeroServices.confirm(`Cancel ${f.id}?${pairing}`)) return;
   for(const flight of targets){
-    flight.cancelled=true; flight.cancelledAt=simNow(); flight.cancellationCost=0;
+    const cancellationCost=typeof cancellationRecoveryCost==='function'?cancellationRecoveryCost(flight):0;
+    flight.cancelled=true; flight.cancelledAt=simNow(); flight.cancellationCost=cancellationCost;
+    if(cancellationCost&&!flight.cancellationCostBooked&&typeof recordRecoveryCostEvent==='function'){
+      const event=recordRecoveryCostEvent({
+        flight,category:'passenger',kind:'flight_cancellation',amount:cancellationCost,
+        passengers:flight.pax||0,airport:flight.from,
+        description:`${flight.id}: cancellation recovery and reaccommodation`
+      });
+      flight.cancellationCostBooked=event?.id||'manual';
+    }
     flight.issueAcknowledgedAt=0; flight.issueAcknowledgedKey='';
     state.stats.cancelled+=1;
     for(const incident of state.incidents){
@@ -4067,7 +4338,16 @@ function cancelSingleFlight(flightId,{skipConfirm=false,reason='Manual OCC cance
   if(!skipConfirm&&!AeroServices.confirm(`Cancel single flight ${flight.id}?${rotationWarning}`)) return false;
   flight.cancelled=true;
   flight.cancelledAt=simNow();
-  flight.cancellationCost=0;
+  const cancellationCost=typeof cancellationRecoveryCost==='function'?cancellationRecoveryCost(flight):0;
+  flight.cancellationCost=cancellationCost;
+  if(cancellationCost&&!flight.cancellationCostBooked&&typeof recordRecoveryCostEvent==='function'){
+    const event=recordRecoveryCostEvent({
+      flight,category:'passenger',kind:'flight_cancellation',amount:cancellationCost,
+      passengers:flight.pax||0,airport:flight.from,
+      description:`${flight.id}: cancellation recovery and reaccommodation`
+    });
+    flight.cancellationCostBooked=event?.id||'manual';
+  }
   flight.issueAcknowledgedAt=0;
   flight.issueAcknowledgedKey='';
   state.stats.cancelled+=1;

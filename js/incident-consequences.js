@@ -14,6 +14,238 @@
     return {min:Math.min(...clean),max:Math.max(...clean)};
   }
 
+  function roundCost(value){
+    const amount=Math.max(0,Number(value)||0);
+    if(amount>=10_000) return Math.round(amount/500)*500;
+    return Math.round(amount/100)*100;
+  }
+
+  function moneyText(value){
+    return typeof money==='function'?money(roundCost(value)):`€${roundCost(value).toLocaleString('en-IE')}`;
+  }
+
+  function aircraftSizeFactor(flight){
+    const aircraft=state.aircraft.find(item=>item.id===flight?.aircraftId);
+    const seats=aircraft?cabinSeatCount(aircraft):Math.max(80,Number(flight?.pax)||100);
+    return seats>=240?1.9:seats>=160?1.35:seats>=100?1.0:.72;
+  }
+
+  function passengerDelayCost(flight,delayMin){
+    const pax=Math.max(0,Number(flight?.pax)||0);
+    const minutes=Math.max(0,Number(delayMin)||0);
+    const soft=pax*minutes*.38;
+    const voucher=minutes>=120?pax*18:minutes>=60?pax*7:0;
+    const overnight=passengerOvernightExposure(flight,minutes);
+    return roundCost(soft+voucher+overnight.cost);
+  }
+
+  function passengerOvernightExposure(flight,extraDelayMin=0){
+    if(!flight||flight.flightType==='ferry'||!(flight.pax>0)) return {pax:0,cost:0,reason:''};
+    const delayMin=Math.max(flightTotalDepartureDelayMin(flight),Number(extraDelayMin)||0);
+    const actualArrival=flightActualArrival(flight)+Math.max(0,(Number(extraDelayMin)||0)-flightTotalDepartureDelayMin(flight))*MIN;
+    const localHour=new Date(actualArrival).getHours();
+    const severeDelay=delayMin>=240;
+    const lateArrival=delayMin>=120&&(localHour>=23||localHour<5);
+    const cancelled=Boolean(flight.cancelled);
+    const diverted=Boolean(flight.diversionAirport&&flight.diversionAirport!==flight.to);
+    if(!severeDelay&&!lateArrival&&!cancelled&&!diverted) return {pax:0,cost:0,reason:''};
+    const fraction=cancelled?0.75:diverted?0.45:severeDelay?0.35:0.22;
+    const pax=Math.ceil((Number(flight.pax)||0)*fraction);
+    const unit=cancelled?165:diverted?145:125;
+    const reason=cancelled?'cancelled flight':diverted?'diversion':severeDelay?'long delay':'late-night arrival';
+    return {pax,cost:roundCost(pax*unit),reason};
+  }
+
+  function crewComplementForFlight(flight){
+    const aircraft=state.aircraft.find(item=>item.id===flight?.aircraftId);
+    const cabin=aircraft&&flight?.flightType!=='ferry'?Math.max(1,Math.ceil(cabinSeatCount(aircraft)/50)):0;
+    return 2+cabin;
+  }
+
+  function crewRecoveryCost(flight,{hotel=false,position=false,replace=false,augment=false}={}){
+    const crew=crewComplementForFlight(flight);
+    const hotelCost=hotel?crew*135:0;
+    const positionCost=position?crew*260:0;
+    const replaceCost=replace?crew*180:0;
+    const augmentCost=augment?crew*310:0;
+    return roundCost(hotelCost+positionCost+replaceCost+augmentCost);
+  }
+
+  function ferryRecoveryCost(flight,from,to){
+    const aircraft=state.aircraft.find(item=>item.id===flight?.aircraftId);
+    if(!aircraft||!AIRPORTS[from]||!AIRPORTS[to]) return 0;
+    const km=distanceKm(AIRPORTS[from],AIRPORTS[to]);
+    const model=MODELS[aircraft.model];
+    return roundCost(Math.max(1_500,km*(model?.costPerKm||7)*1.15+1_200));
+  }
+
+  function cancellationRecoveryCost(flight){
+    if(!flight) return 0;
+    const pax=Math.max(0,Number(flight.pax)||0);
+    const revenue=Math.max(0,Number(flight.revenue)||0);
+    return roundCost(revenue*.55+pax*95+crewRecoveryCost(flight,{hotel:flight.from!==state.home}));
+  }
+
+  function estimateRecoveryOptionCost(task,incident,optionId){
+    const flight=state.flights.find(item=>item.id===incident?.flightId&&!item.cancelled);
+    if(!task||!incident||!flight) return {amount:0,label:'',category:'recovery',components:[]};
+    const context=incident.context||{};
+    const currentDelay=flightTotalDepartureDelayMin(flight);
+    let amount=0,category='recovery',components=[];
+    const add=(label,value)=>{
+      const cost=roundCost(value);
+      if(cost>0){ amount+=cost; components.push({label,cost}); }
+    };
+    const delay=minutes=>add('delay exposure',passengerDelayCost(flight,minutes));
+    if(optionId==='cancel'){
+      category='passenger';
+      add('cancel/rebook exposure',cancellationRecoveryCost(flight));
+    }else if(['crew-strategy','crew-duty-strategy','crew-fatigue-strategy','crew-misconnect-strategy','crew-diversion-strategy','crew-report-delay-strategy'].includes(task.key)){
+      category='crew';
+      if(optionId==='replace') add('reserve crew callout',crewRecoveryCost(flight,{replace:true}));
+      if(optionId==='augment') add('augmented crew',crewRecoveryCost(flight,{augment:true}));
+      if(['wait_crew','move_crew','move_reserve'].includes(optionId)) delay(context.delayMin||currentDelay||35);
+      if(['move_crew','move_reserve'].includes(optionId)) add('crew positioning',crewRecoveryCost(flight,{position:true}));
+    }else if(['mx-strategy','mx-postflight-strategy','dispatch-tech-decision','dispatch-lightning-decision','dispatch-bird-decision','dispatch-pressure-decision'].includes(task.key)){
+      category='maintenance';
+      if(optionId==='defer') add('MEL admin / follow-up',700);
+      if(optionId==='repair') add('unscheduled repair',9_500*aircraftSizeFactor(flight));
+      if(optionId==='substitute') add('aircraft swap',2_000*aircraftSizeFactor(flight));
+      if(['divert','return_origin'].includes(optionId)) add('arrival engineering support',4_500*aircraftSizeFactor(flight));
+      if(['continue','continue_low'].includes(optionId)) add('arrival inspection',1_800*aircraftSizeFactor(flight));
+    }else if(task.key==='dispatch-position-strategy'){
+      category='aircraft';
+      if(optionId==='position_ferry') add('positioning ferry',ferryRecoveryCost(flight,context.expectedLocation||context.diversionAirport||'',flight.from));
+      if(optionId==='substitute') add('aircraft swap',2_500*aircraftSizeFactor(flight));
+      delay(context.delayMin||currentDelay||15);
+    }else if(['station-fuel-strategy','station-fuel-outage-strategy'].includes(task.key)){
+      category='station';
+      if(['priority','fuel_outage_priority'].includes(optionId)) add('provider priority surcharge',3_500*aircraftSizeFactor(flight));
+      if(['wait_truck','wait_supply'].includes(optionId)) delay(context.delayMin||35);
+      if(optionId==='minimum_uplift') add('reduced fuel margin handling',900*aircraftSizeFactor(flight));
+      if(optionId==='substitute') add('aircraft swap',2_500*aircraftSizeFactor(flight));
+    }else if(['station-deicing-strategy','station-deicing-collapse-strategy','station-holdover-strategy'].includes(task.key)){
+      category='station';
+      if(['deice','redeice','join_queue'].includes(optionId)) add('deicing service',2_200*aircraftSizeFactor(flight));
+      if(optionId==='priority_deice') add('priority deicing surcharge',4_200*aircraftSizeFactor(flight));
+      if(['wait_weather','wait_deice_slot','join_queue'].includes(optionId)) delay(context.queueMin||context.delayMin||45);
+    }else if(['station-stand-strategy','station-security-strategy','station-destination-handling-strategy','dispatch-ground-destination-strategy'].includes(task.key)){
+      category='passenger';
+      if(['remote','tow','hold_screening','delay_departure','delay_reopen'].includes(optionId)) delay(context.delayMin||currentDelay||30);
+      if(['offload_passenger','alternate_destination','prepare_alternate','request_handling'].includes(optionId)) add('passenger / station handling',Math.max(1_000,(flight.pax||0)*28));
+    }else if(['dispatch-flow-strategy','dispatch-capacity-strategy','dispatch-groundstop-strategy','dispatch-night-curfew-strategy','dispatch-reroute-strategy'].includes(task.key)){
+      category='dispatch';
+      if(['priority','direct'].includes(optionId)) add('priority coordination',1_200*aircraftSizeFactor(flight));
+      delay(optionId==='priority'?Math.max(10,(context.delayMin||30)*.55):context.delayMin||currentDelay||30);
+    }else if(['dispatch-flightdeck-decision','dispatch-medical-decision','dispatch-fuel-decision','dispatch-holding-fuel-decision','dispatch-cabin-decision','dispatch-weather-decision','dispatch-minima-decision','dispatch-alternate-decision','dispatch-diversion-airport-decision'].includes(task.key)){
+      category=['continue','monitor','direct','conserve','hold'].includes(optionId)?'dispatch':'passenger';
+      if(['divert','alternate','reselect'].includes(optionId)) add('diversion recovery',Math.max(3_500,(flight.pax||0)*42+2_500*aircraftSizeFactor(flight)));
+      if(optionId==='return_origin') add('return recovery',Math.max(3_000,(flight.pax||0)*38+2_000*aircraftSizeFactor(flight)));
+      if(['hold','continue_low'].includes(optionId)) delay(context.delayMin||25);
+      if(optionId==='continue') add('arrival coordination',1_200*aircraftSizeFactor(flight));
+    }else if(task.key==='dispatch-performance-strategy'){
+      category='passenger';
+      if(optionId==='payload_reduce') add('payload/passenger reaccommodation',Math.max(1_500,(flight.pax||0)*(context.payloadReductionPct||12)*1.2));
+      if(optionId==='delay_conditions') delay(context.delayMin||45);
+      if(optionId==='substitute') add('performance aircraft swap',3_000*aircraftSizeFactor(flight));
+    }
+    const overnight=passengerOvernightExposure(flight,context.delayMin||0);
+    if(overnight.pax&&category!=='crew') add('accommodation exposure',overnight.cost);
+    amount=roundCost(amount);
+    return {
+      amount,
+      label:amount?`est ${moneyText(amount)}`:'',
+      category,
+      components,
+      passengerAccommodationPax:overnight.pax,
+      passengerAccommodationReason:overnight.reason
+    };
+  }
+
+  function costPreviewText(task,incident,optionId){
+    const estimate=estimateRecoveryOptionCost(task,incident,optionId);
+    return estimate.amount?`est ${moneyText(estimate.amount)}`:'';
+  }
+
+  function appendCostPreview(text,task,incident,optionId){
+    const cost=costPreviewText(task,incident,optionId);
+    return [text,cost].filter(Boolean).join(' · ');
+  }
+
+  function recoveryCostSummaryForIncident(incident){
+    if(!incident||incident.recoveryCostEventId) return null;
+    const tasks=(typeof playableIncidentTasks==='function'?playableIncidentTasks(incident):incidentTasks(incident.id))||[];
+    const strategy=incident.selectedStrategy||incident.selectedAction||'';
+    const strategyTask=tasks.find(task=>(task.strategyOptions||[]).some(option=>option.id===strategy));
+    if(strategyTask&&strategy){
+      const estimate=estimateRecoveryOptionCost(strategyTask,incident,strategy);
+      if(estimate.amount) return {...estimate,taskId:strategyTask.id,optionId:strategy};
+    }
+    const costTask=tasks.find(task=>task.selection&&(task.selection.action||task.selection.airport||task.selection.assignmentId||task.selection.ferryFlightId||task.kind==='aircraft_substitution'));
+    if(!costTask) return null;
+    let optionId=costTask.selection?.action||strategy||'complete';
+    if(costTask.kind==='aircraft_substitution') optionId='substitute';
+    if(costTask.kind==='crew_allocation') optionId='replace';
+    if(costTask.kind==='crew_augmentation') optionId='augment';
+    if(costTask.kind==='alternate_selection') optionId=incident.diversionReturnOrigin?'return_origin':'divert';
+    const estimate=estimateRecoveryOptionCost(costTask,incident,optionId);
+    return estimate.amount?{...estimate,taskId:costTask.id,optionId}:null;
+  }
+
+  function recordRecoveryCostEvent({flight=null,incident=null,task=null,category='recovery',amount=0,description='',kind='incident',passengers=0,crew=0,airport=''}={}){
+    const value=roundCost(amount);
+    if(!value) return null;
+    state.recoveryCostEvents??=[];
+    state.stats??={};
+    const event={
+      id:`RC${state.nextRecoveryCostEvent++}`,
+      flightId:flight?.id||incident?.flightId||task?.flightId||'',
+      incidentId:incident?.id||task?.incidentId||'',
+      taskId:task?.id||'',
+      category,
+      kind,
+      amount:value,
+      passengers:Math.max(0,Math.round(Number(passengers)||0)),
+      crew:Math.max(0,Math.round(Number(crew)||0)),
+      airport:airport||incident?.airport||flight?.from||'',
+      description:description||'Operational recovery cost',
+      createdAt:simNow()
+    };
+    state.recoveryCostEvents.push(event);
+    state.stats.recoveryCosts=(Number(state.stats.recoveryCosts)||0)+value;
+    if(category==='passenger') state.stats.passengerRecoveryCosts=(Number(state.stats.passengerRecoveryCosts)||0)+value;
+    if(category==='crew') state.stats.crewRecoveryCosts=(Number(state.stats.crewRecoveryCosts)||0)+value;
+    if(flight){
+      flight.recoveryCostBooked=(Number(flight.recoveryCostBooked)||0)+value;
+      if(flight.economics){
+        flight.economics.recoveryOps=(Number(flight.economics.recoveryOps)||0)+value;
+        refreshEconomicsTotals(flight);
+      }
+    }
+    if(typeof postTransaction==='function') postTransaction(-value,'Recovery',event.description,event.incidentId||event.flightId);
+    return event;
+  }
+
+  function recordResolvedIncidentRecoveryCost(incident){
+    if(!incident||incident.status!=='open'||incident.recoveryCostEventId) return null;
+    const flight=state.flights.find(item=>item.id===incident.flightId);
+    if(!flight) return null;
+    const summary=recoveryCostSummaryForIncident(incident);
+    if(!summary?.amount) return null;
+    const event=recordRecoveryCostEvent({
+      flight,incident,task:summary.taskId?state.coordinationTasks.find(item=>item.id===summary.taskId):null,
+      category:summary.category||'recovery',
+      amount:summary.amount,
+      kind:'incident_recovery',
+      passengers:summary.passengerAccommodationPax||0,
+      crew:summary.category==='crew'?crewComplementForFlight(flight):0,
+      airport:incident.airport||flight.from,
+      description:`${INCIDENT_DEFINITIONS[incident.type]?.title||incident.type}: ${summary.optionId||incident.selectedStrategy||'recovery'}`
+    });
+    if(event) incident.recoveryCostEventId=event.id;
+    return event;
+  }
+
   function rotationRiskText(flight){
     const rotation=rotationForFlight(flight);
     if(rotation.returnFlight&&flight.serviceLeg!=='return') return `${rotation.returnFlight.id} return sector at risk`;
@@ -217,7 +449,9 @@
 
   const api={
     consequenceDelayText,consequenceRange,rotationRiskText,replacementConsequenceText,
-    diversionConsequenceText,operationalOptionConsequence
+    diversionConsequenceText,operationalOptionConsequence,estimateRecoveryOptionCost,costPreviewText,appendCostPreview,
+    aircraftSizeFactor,passengerDelayCost,passengerOvernightExposure,crewComplementForFlight,crewRecoveryCost,cancellationRecoveryCost,
+    recordRecoveryCostEvent,recordResolvedIncidentRecoveryCost
   };
   global.AeroIncidentConsequences=api;
   Object.assign(global,api);

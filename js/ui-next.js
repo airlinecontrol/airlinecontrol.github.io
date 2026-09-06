@@ -120,6 +120,12 @@ function infoTip(text){
 }
 function shortClock(ms){ return new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit'}).format(new Date(ms)); }
 function shortDay(ms){ return new Intl.DateTimeFormat('en-GB',{weekday:'short',day:'2-digit',month:'short'}).format(new Date(ms)); }
+function responseTimeLabel(record,now=simNow()){
+  if(!record) return '';
+  if(record.status==='confirmed') return `confirmed ${shortClock(record.completedAt||record.updatedAt)}`;
+  const remaining=Math.max(0,(Number(record.confirmsAt)||now)-now);
+  return remaining ? `response in ${formatDuration(remaining)}` : 'awaiting confirmation';
+}
 function formatPct(value){ return `${Math.round(clamp(Number(value)||0,0,1)*100)}%`; }
 function selectedOperatingCalendar(){ return {days:[],months:[]}; }
 function currentScheduleFares(){
@@ -730,8 +736,9 @@ function taskActions(task,incident){
     const optionLabels=options.filter(option=>option.id!=='cancel').map(option=>`<span>${esc(option.label||option.id)}</span>`).join('');
     const cancelBlocker=cancelOption?branchStrategyOptionBlocker(task,incident,'cancel'):'';
     const cancelConsequence=cancelOption?operationalOptionConsequence(task,incident,'cancel'):'';
+    const cancelCost=cancelOption&&typeof costPreviewText==='function'?costPreviewText(task,incident,'cancel'):'';
     const cancelMarkup=cancelOption&&!flight?.departureLogged
-      ? `<button class="choice-button danger" type="button" data-task-action="cancel" ${cancelBlocker?'disabled':''}><b>${esc(cancelOption.label)}</b><span>${esc(cancelBlocker||cancelOption.detail)}</span>${cancelConsequence?`<em class="choice-consequence">${esc(cancelConsequence)}</em>`:''}</button>`
+      ? `<button class="choice-button danger" type="button" data-task-action="cancel" ${cancelBlocker?'disabled':''}><b>${esc(cancelOption.label)}</b><span>${esc(cancelBlocker||cancelOption.detail)}</span>${cancelConsequence?`<em class="choice-consequence">${esc(cancelConsequence)}</em>`:''}${cancelCost?`<em class="choice-cost">${esc(cancelCost)}</em>`:''}</button>`
       : '';
     return `<div class="authority-task"><button class="primary-button" type="button" data-task-action="complete">${esc(task.label)}</button>${optionLabels?`<div>${optionLabels}</div>`:''}${cancelMarkup}</div>`;
   }
@@ -742,7 +749,8 @@ function taskActions(task,incident){
     return `<div class="choice-list">${options.map(option=>{
       const optionBlocker=branchStrategyOptionBlocker(task,incident,option.id);
       const consequence=operationalOptionConsequence(task,incident,option.id);
-      return `<button class="choice-button ${option.id==='cancel'?'danger':''}" type="button" data-task-action="${esc(option.id)}" ${optionBlocker?'disabled':''}><b>${esc(option.label||option.id)}</b><span>${esc(optionBlocker||option.detail||'Select this recovery path.')}</span>${consequence?`<em class="choice-consequence">${esc(consequence)}</em>`:''}</button>`;
+      const cost=typeof costPreviewText==='function'?costPreviewText(task,incident,option.id):'';
+      return `<button class="choice-button ${option.id==='cancel'?'danger':''}" type="button" data-task-action="${esc(option.id)}" ${optionBlocker?'disabled':''}><b>${esc(option.label||option.id)}</b><span>${esc(optionBlocker||option.detail||'Select this recovery path.')}</span>${consequence?`<em class="choice-consequence">${esc(consequence)}</em>`:''}${cost?`<em class="choice-cost">${esc(cost)}</em>`:''}</button>`;
     }).join('')}</div>`;
   }
   if(task.kind==='maintenance_disposition') return `<div class="choice-list"><button class="choice-button" type="button" data-task-action="defer"><b>Defer under MEL</b><br>Document restrictions and continue if permitted.</button><button class="choice-button" type="button" data-task-action="repair"><b>Repair aircraft</b><br>Ground the aircraft while engineering completes the repair.</button></div>`;
@@ -1435,10 +1443,11 @@ function planningDeskMarkup(requests){
     ${resourceActivityMarkup(aircraftRequests,[],'Resource requests')}`;
 }
 
-function personnelDeskMarkup(requests,transfers){
+function personnelDeskMarkup(requests,transfers,crewExposures=[]){
   return `${deskPanelMarkup('personnel','personnel','Request personnel')}
     ${deskPanelMarkup('personnel','relocation','Move personnel')}
     ${deskPanelMarkup('personnel','crew-swap','Swap full crew',crewSwapPanelMarkup())}
+    ${crewAccommodationMarkup(crewExposures)}
     ${personnelSnapshotMarkup()}${resourceActivityMarkup(requests.filter(item=>item.kind==='personnel'),transfers,'Personnel movement') || ''}`;
 }
 
@@ -1532,6 +1541,38 @@ function connectionsDeskMarkup(rows=connectionRowsForWidget()){
   return `${selectedMarkup}<section class="desk-section"><h2>Network connections</h2>${visibleRows.length?visibleRows.map(row=>connectionFlightMarkup(row)).join(''):'<div class="empty-state">No at-risk own-network connections in the next 24 hours.</div>'}</section>`;
 }
 
+function passengerRecoveryDeskMarkup(exposures=passengerRecoveryExposures()){
+  const now=simNow();
+  const active=exposures.filter(item=>!item.arranged).slice(0,6);
+  const rows=active.map(item=>{
+    const detail=[
+      item.reason,
+      item.delayMin?`+${item.delayMin} min`:'',
+      item.overnightPax?`${item.overnightPax} overnight pax`:'',
+      item.criticalConnections||item.atRiskConnections?`${item.criticalConnections} critical / ${item.atRiskConnections} at risk`:''
+    ].filter(Boolean).join(' · ');
+    const actions=(item.actions||[]).map(action=>{
+      const record=(item.records||[]).find(entry=>entry.action===action.id);
+      if(record) return `<span class="recovery-status-pill"><b>${esc(action.label)}</b><em>${esc(passengerRecoveryStatusLabel(record.status))} · ${esc(responseTimeLabel(record,now))}</em></span>`;
+      return `<button class="secondary-button" type="button" data-passenger-recovery="${esc(item.flightId)}" data-passenger-recovery-action="${esc(action.id)}">${esc(action.label)}</button>`;
+    }).join('');
+    return `<div class="desk-list-row passenger-recovery-row">
+      <button class="row-main-button" type="button" data-connection-flight="${esc(item.flightId)}"><b>${esc(item.flightId)} · ${esc(item.flight.from)} → ${esc(flightOperationalDestination(item.flight))}</b><span>${esc(detail)}</span></button>
+      <div class="occ-action-controls"><em>exposure ${money(item.cost)}</em>${actions}</div>
+    </div>`;
+  }).join('');
+  const arranged=exposures.filter(item=>item.arranged).length;
+  return `<section class="desk-section"><h2>Customer coordination</h2>${rows||'<div class="empty-state">No passenger impact needs coordination.</div>'}${arranged?`<p class="panel-note">${arranged} confirmed passenger coordination item${arranged===1?'':'s'} tracked in recovery costs.</p>`:''}</section>`;
+}
+
+function crewAccommodationMarkup(exposures=crewAccommodationExposures()){
+  const rows=exposures.filter(item=>!item.arranged).slice(0,5).map(item=>`<div class="desk-list-row crew-accommodation-row">
+    <button class="row-main-button" type="button" data-connection-flight="${esc(item.flightId)}"><b>${esc(item.flightId)} · crew at ${esc(item.releaseAirport)}</b><span>${esc(item.reason)} · ${item.crew} crew · release ${shortClock(flightCrewRelease(item.flight))}</span></button>
+    <div class="occ-action-controls"><em>${money(item.cost)}</em><button class="secondary-button" type="button" data-crew-accommodation="${esc(item.flightId)}">Hotel/rest</button></div>
+  </div>`).join('');
+  return `<section class="desk-section"><h2>Crew accommodation</h2>${rows||'<div class="empty-state">No disrupted crew accommodation exposure.</div>'}</section>`;
+}
+
 function renderDeskStack(force=false){
   const root=document.getElementById('deskStack');
   if(!root) return;
@@ -1546,6 +1587,10 @@ function renderDeskStack(force=false){
   const activeTransfers=(state.personnelTransfers||[]).filter(item=>!['completed','cancelled'].includes(item.status));
   const connectionRows=connectionRowsForWidget();
   const connectionIssueCount=connectionRows.reduce((sum,row)=>sum+(row.manifest.critical||0)+(row.manifest.atRisk||0),0);
+  const passengerExposures=typeof passengerRecoveryExposures==='function'?passengerRecoveryExposures(now):[];
+  const passengerActionCount=passengerExposures.filter(item=>!item.arranged).length;
+  const crewExposures=typeof crewAccommodationExposures==='function'?crewAccommodationExposures(now):[];
+  const crewAccommodationCount=crewExposures.filter(item=>!item.arranged).length;
   const aircraftIssues=state.aircraft.filter(ac=>{
     const status=Management.maintenanceStatus(ac,simNow());
     return status.due||status.grounding||(ac.melItems||[]).some(item=>['open','expired'].includes(item.status));
@@ -1565,6 +1610,9 @@ function renderDeskStack(force=false){
       return f?`${f.id}:${flightActualDeparture(f)}:${flightActualArrival(f)}:${f.aircraftId}:${f.cancelled?1:0}:${f.staffingBlocked?1:0}`:'';
     })():'',
     connectionRows.map(row=>`${row.flight.id}:${flightActualArrival(row.flight)}:${row.manifest.critical||0}:${row.manifest.atRisk||0}:${row.manifest.total||0}`).join('|'),
+    passengerExposures.map(item=>`${item.flightId}:${item.cost}:${item.arranged?1:0}:${item.reason}:${item.overnightPax}:${item.criticalConnections}:${item.atRiskConnections}:${(item.records||[]).map(record=>`${record.action}:${record.status}:${record.updatedAt}`).join(',')}`).join('|'),
+    (state.passengerRecoveries||[]).map(item=>`${item.id}:${item.flightId}:${item.action}:${item.status}:${item.updatedAt}:${item.completedAt}`).join('|'),
+    crewExposures.map(item=>`${item.flightId}:${item.cost}:${item.arranged?1:0}:${item.releaseAirport}`).join('|'),
     state.aircraft.map(ac=>`${ac.id}:${ac.location}:${attentionForAircraft(ac)}:${Math.round(ac.condition??100)}`).join('|'),
     Math.floor(now/MIN),state.slotRights.length,
     JSON.stringify(state.personnel.assignments||{}),transferSignature,
@@ -1583,11 +1631,12 @@ function renderDeskStack(force=false){
       {panel:'remove-schedule',label:'Remove schedule'}
     ]),planningDeskMarkup(activeRequests))}
     ${occWidgetMarkup('connections','Network desk','Connections',connectionIssueCount,connectionIssueCount?`${connectionIssueCount} connecting passengers need review`:`${connectionRows.length} connection bank${connectionRows.length===1?'':'s'} visible`,'',connectionsDeskMarkup(connectionRows))}
-    ${occWidgetMarkup('personnel','People desk','Personnel',activeRequests.filter(item=>item.kind==='personnel').length+activeTransfers.length,activeTransfers.length?'Movements underway':activeRequests.some(item=>item.kind==='personnel')?'Requests underway':'Staffing ready',deskActionBar('personnel',[
+    ${occWidgetMarkup('passengers','Passenger desk','Passenger impact',passengerActionCount,passengerActionCount?`${passengerActionCount} passenger impact item${passengerActionCount===1?'':'s'} need coordination`:'No passenger impact exposure','',passengerRecoveryDeskMarkup(passengerExposures))}
+    ${occWidgetMarkup('personnel','People desk','Personnel',activeRequests.filter(item=>item.kind==='personnel').length+activeTransfers.length+crewAccommodationCount,crewAccommodationCount?`${crewAccommodationCount} crew accommodation item${crewAccommodationCount===1?'':'s'}`:activeTransfers.length?'Movements underway':activeRequests.some(item=>item.kind==='personnel')?'Requests underway':'Staffing ready',deskActionBar('personnel',[
       {panel:'personnel',label:'Request personnel'},
       {panel:'relocation',label:'Move personnel'},
       {panel:'crew-swap',label:'Swap full crew'}
-    ]),personnelDeskMarkup(activeRequests,activeTransfers))}
+    ]),personnelDeskMarkup(activeRequests,activeTransfers,crewExposures))}
     ${occWidgetMarkup('maintenance','Engineering desk','Maintenance',aircraftIssues.length,aircraftIssues.length?'Aircraft need attention':'Fleet serviceable',deskActionBar('maintenance',[
       {panel:'maintenance',label:'Schedule check'}
     ]),maintenanceDeskMarkup())}`;
@@ -1639,6 +1688,16 @@ function renderDeskStack(force=false){
     }
   }));
   root.querySelectorAll('[data-connection-flight]').forEach(button=>button.addEventListener('click',()=>settleSelectedFlight(button.dataset.connectionFlight)));
+  root.querySelectorAll('[data-passenger-recovery]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    authorizePassengerRecovery(button.dataset.passengerRecovery,button.dataset.passengerRecoveryAction||'hotel');
+    markUiDirty('all');
+  }));
+  root.querySelectorAll('[data-crew-accommodation]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    arrangeCrewAccommodation(button.dataset.crewAccommodation);
+    markUiDirty('all');
+  }));
   root.querySelectorAll('[data-crew-swap-flight]').forEach(button=>button.addEventListener('click',()=>{
     swapCrewForFlight(button.dataset.crewSwapFlight);
     markUiDirty('all');

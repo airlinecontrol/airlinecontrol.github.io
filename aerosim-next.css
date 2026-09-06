@@ -932,6 +932,13 @@ body,
   font-style:normal;
   line-height:1.25;
 }
+.choice-button .choice-cost{
+  margin-top:4px;
+  color:#8fd0e6;
+  font-size:10px;
+  font-style:normal;
+  line-height:1.25;
+}
 .occ-action-context{
   margin-bottom:8px;
   padding:8px 9px;
@@ -1047,6 +1054,42 @@ body,
   font-size:11px;
   line-height:1.3;
 }
+.row-main-button{
+  min-width:0;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:inherit;
+  text-align:left;
+  font:inherit;
+}
+.row-main-button:hover b{
+  color:#dff7ff;
+}
+.passenger-recovery-row,
+.crew-accommodation-row{
+  align-items:center;
+}
+.passenger-recovery-row{
+  grid-template-columns:1fr;
+  gap:8px;
+}
+.passenger-recovery-row .occ-action-controls,
+.crew-accommodation-row .occ-action-controls{
+  min-width:92px;
+}
+.passenger-recovery-row .occ-action-controls{
+  justify-content:flex-start;
+}
+.passenger-recovery-row .occ-action-controls>em{
+  flex-basis:100%;
+  text-align:left;
+}
+.passenger-recovery-row .secondary-button{
+  min-height:26px;
+  padding:4px 7px;
+  font-size:10px;
+}
 .occ-action-row{
   display:grid;
   grid-template-columns:minmax(0,1fr) auto;
@@ -1064,7 +1107,36 @@ body,
   display:flex;
   align-items:center;
   justify-content:flex-end;
+  flex-wrap:wrap;
   gap:5px;
+}
+.recovery-status-pill{
+  display:inline-flex;
+  flex-direction:column;
+  align-items:flex-start;
+  gap:1px;
+  min-height:26px;
+  padding:4px 7px;
+  border-radius:5px;
+  background:#102631;
+  color:#a8bbc4;
+  font-size:10px;
+  font-weight:800;
+}
+.recovery-status-pill b,
+.recovery-status-pill em{
+  display:block;
+  font-size:10px;
+  line-height:1.2;
+  text-align:left;
+}
+.recovery-status-pill b{
+  color:#d5e4ea;
+}
+.recovery-status-pill em{
+  color:#94aab4;
+  font-style:normal;
+  font-weight:700;
 }
 .occ-action-controls.wide{
   min-width:0;

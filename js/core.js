@@ -701,7 +701,7 @@ function calculateFlightEconomics({from,to,model,distanceKm,duration,pax,fare,ti
 }
 
 function flightEconomicsTotal(economics){
-  return ['fuel','landingFees','passengerFees','groundHandling','navigation','emissions','maintenanceReserve','unscheduledMaintenance','weatherOps','insurance','parking','legacyOperating']
+  return ['fuel','landingFees','passengerFees','groundHandling','navigation','emissions','maintenanceReserve','unscheduledMaintenance','weatherOps','recoveryOps','insurance','parking','legacyOperating']
     .reduce((total,key)=>total+(Number(economics[key])||0),0);
 }
 
@@ -867,6 +867,8 @@ function newState(){
     nextResourceRequest:1,
     nextExternalRequest:1,
     nextResourceAssignment:1,
+    nextRecoveryCostEvent:1,
+    nextPassengerRecovery:1,
     incidentExerciseIndex:0,
     slotRights:[],
     aircraft:[],
@@ -880,11 +882,14 @@ function newState(){
     transactions:[],
     personnelTransfers:[],
     resourceRequests:[],
+    recoveryCostEvents:[],
+    passengerRecoveries:[],
+    crewRecoveries:[],
     fuelMarket:{pricePerGallon:FUEL_MARKET_BASE_EUR_GAL,updatedAt:sim},
     personnel:{assignments:{},lastPayrollAt:sim},
     ops:{automaticDisruptions:true,caseLinksRepaired:true,phaseRealismRepaired:true},
     management:{cycleStart:sim,reviews:[]},
-    stats:{revenue:0,costs:0,staffCosts:0,leaseCosts:0,transferCosts:0,cancellationCosts:0,scheduledMaintenanceCosts:0,cancelled:0,pax:0,completed:0},
+    stats:{revenue:0,costs:0,staffCosts:0,leaseCosts:0,transferCosts:0,recoveryCosts:0,cancellationCosts:0,passengerRecoveryCosts:0,crewRecoveryCosts:0,scheduledMaintenanceCosts:0,cancelled:0,pax:0,completed:0},
   };
 return s;
 }
@@ -911,7 +916,12 @@ function migrateState(parsed){
   if(!Number.isFinite(parsed.nextExternalRequest)) parsed.nextExternalRequest=parsed.externalRequests.length+1;
   if(!Number.isFinite(parsed.nextResourceAssignment)) parsed.nextResourceAssignment=parsed.resourceAssignments.length+1;
   if(!Array.isArray(parsed.resourceRequests)) parsed.resourceRequests=[];
+  if(!Array.isArray(parsed.recoveryCostEvents)) parsed.recoveryCostEvents=[];
+  if(!Array.isArray(parsed.passengerRecoveries)) parsed.passengerRecoveries=[];
+  if(!Array.isArray(parsed.crewRecoveries)) parsed.crewRecoveries=[];
   if(!Number.isFinite(parsed.nextResourceRequest)) parsed.nextResourceRequest=parsed.resourceRequests.length+1;
+  if(!Number.isFinite(parsed.nextRecoveryCostEvent)) parsed.nextRecoveryCostEvent=parsed.recoveryCostEvents.length+1;
+  if(!Number.isFinite(parsed.nextPassengerRecovery)) parsed.nextPassengerRecovery=parsed.passengerRecoveries.length+1;
   if(!Number.isFinite(parsed.nextIncident)) parsed.nextIncident=parsed.incidents.length+1;
   if(!Number.isFinite(parsed.incidentExerciseIndex)) parsed.incidentExerciseIndex=0;
   for(const incident of parsed.incidents){
@@ -950,6 +960,19 @@ function migrateState(parsed){
     parsed.transactions=[{id:'TX1',timestamp:parsed.clock?.simBase||Date.now(),amount:parsed.cash||0,category:'Opening',description:'Balance brought forward from existing save',balanceAfter:parsed.cash||0}];
   }
   if(!Number.isFinite(parsed.nextTransaction)) parsed.nextTransaction=parsed.transactions.length+1;
+  for(const recovery of parsed.passengerRecoveries){
+    if(!recovery.id) recovery.id=`PR${parsed.nextPassengerRecovery++}`;
+    if(recovery.action===undefined) recovery.action='rebooking';
+    if(recovery.status===undefined) recovery.status=recovery.completedAt?'confirmed':'requested';
+    if(!Number.isFinite(recovery.requestedAt)) recovery.requestedAt=parsed.clock?.simBase||Date.now();
+    if(!Number.isFinite(recovery.updatedAt)) recovery.updatedAt=recovery.requestedAt;
+    if(!Number.isFinite(recovery.confirmsAt)) recovery.confirmsAt=recovery.updatedAt;
+    if(!Number.isFinite(recovery.completedAt)) recovery.completedAt=0;
+    if(!Number.isFinite(recovery.amount)) recovery.amount=0;
+    if(!Number.isFinite(recovery.passengers)) recovery.passengers=0;
+    if(recovery.reason===undefined) recovery.reason='';
+    if(recovery.costEventId===undefined) recovery.costEventId='';
+  }
   if(!Array.isArray(parsed.personnelTransfers)) parsed.personnelTransfers=[];
   for(const transfer of parsed.personnelTransfers){
     if(!transfer.qualifications&&transfer.qualification) transfer.qualifications={[transfer.qualification]:transfer.amount||1};
@@ -980,6 +1003,9 @@ function migrateState(parsed){
   if(!Number.isFinite(parsed.stats.staffCosts)) parsed.stats.staffCosts=0;
   if(!Number.isFinite(parsed.stats.leaseCosts)) parsed.stats.leaseCosts=0;
   if(!Number.isFinite(parsed.stats.transferCosts)) parsed.stats.transferCosts=0;
+  if(!Number.isFinite(parsed.stats.recoveryCosts)) parsed.stats.recoveryCosts=parsed.recoveryCostEvents.reduce((sum,item)=>sum+(Number(item.amount)||0),0);
+  if(!Number.isFinite(parsed.stats.passengerRecoveryCosts)) parsed.stats.passengerRecoveryCosts=parsed.recoveryCostEvents.filter(item=>item.category==='passenger').reduce((sum,item)=>sum+(Number(item.amount)||0),0);
+  if(!Number.isFinite(parsed.stats.crewRecoveryCosts)) parsed.stats.crewRecoveryCosts=parsed.recoveryCostEvents.filter(item=>item.category==='crew').reduce((sum,item)=>sum+(Number(item.amount)||0),0);
   if(!Number.isFinite(parsed.nextSlotRight)) parsed.nextSlotRight=1;
   if(!parsed.ops) parsed.ops={automaticDisruptions:true};
   parsed.ops.automaticDisruptions=true;
@@ -1019,6 +1045,12 @@ function migrateState(parsed){
     if(f.connectionCriticalPax===undefined) f.connectionCriticalPax=0;
     if(f.connectionAtRiskPax===undefined) f.connectionAtRiskPax=0;
     if(f.connectionMissedPax===undefined) f.connectionMissedPax=0;
+    if(!Number.isFinite(f.passengerAccommodationArrangedAt)) f.passengerAccommodationArrangedAt=0;
+    if(!Number.isFinite(f.passengerRecoveryArrangedAt)) f.passengerRecoveryArrangedAt=0;
+    if(!Number.isFinite(f.passengerReleasedAt)) f.passengerReleasedAt=0;
+    if(!Number.isFinite(f.crewAccommodationArrangedAt)) f.crewAccommodationArrangedAt=0;
+    if(!Number.isFinite(f.recoveryCostBooked)) f.recoveryCostBooked=0;
+    if(f.cancellationCostBooked===undefined) f.cancellationCostBooked='';
     if(f.crewAugmented===undefined) f.crewAugmented=false;
     if(f.crewDutyId===undefined) f.crewDutyId='';
     if(f.crewDutySplit===undefined) f.crewDutySplit=false;
