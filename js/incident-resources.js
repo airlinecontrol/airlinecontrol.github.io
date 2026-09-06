@@ -120,7 +120,7 @@
       if(message) return message;
     }
     const flight=state.flights.find(item=>item.id===incident.flightId);
-    if(['dispatch-flow-strategy','dispatch-capacity-strategy','dispatch-groundstop-strategy'].includes(task.key)&&staffAt(flight?.from,'operations')<=0){
+    if(['dispatch-flow-strategy','dispatch-capacity-strategy','dispatch-groundstop-strategy','dispatch-night-curfew-strategy'].includes(task.key)&&staffAt(flight?.from,'operations')<=0){
       return `No operations/dispatch personnel are available at ${flight?.from||'the origin'}. Add personnel in the Personnel widget.`;
     }
     if(task.key==='station-stand-strategy'&&staffAt(flight?.from,'groundHandling')<=0){

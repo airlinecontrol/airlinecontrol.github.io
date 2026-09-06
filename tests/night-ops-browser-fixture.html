@@ -48,24 +48,68 @@
     let futureFraLate=w.simNow()+60*60_000;
     for(let i=0;i<96&&w.airportNightStatus('FRA',futureFraLate).status!=='closed';i++) futureFraLate+=30*60_000;
     assert(w.airportNightStatus('FRA',futureFraLate).status==='closed','fixture could not find a future FRA night curfew window');
-    const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    let futureFraStart=futureFraLate;
+    for(let i=0;i<180&&w.airportNightStatus('FRA',futureFraStart-5*60_000).status==='closed';i++) futureFraStart-=5*60_000;
+    const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'LHR');
+    w.changeStaff('LHR','operations',1);
     const flight=w.createFlightRecord({
       aircraftId:aircraft.id,
-      from:'FRA',
-      to:'LHR',
-      departure:futureFraLate,
+      from:'LHR',
+      to:'FRA',
+      departure:futureFraStart-105*60_000,
       fare:{economy:140,business:360,first:700}
     });
+    flight.arrival=futureFraStart-15*60_000;
+    flight.operationalDurationMs=flight.arrival-flight.departure;
+    flight.manualDelayMin=30;
     w.recalculateOperations();
-    assert(flight.nightRestrictionDelayMin>=300,'recalculation did not persist night restriction delay');
-    assert(w.flightActualDeparture(flight)>flight.departure,'night restriction did not move actual departure');
+    assert(flight.nightRestrictionDelayMin===0,'night curfew conflict should not auto-reschedule before OCC decision');
+    assert(flight.nightRestrictionConflictDelayMin>=300,'recalculation did not expose the pending night curfew conflict');
+    assert(w.flightActualDeparture(flight)<w.flightNightRestriction(flight,w.flightActualDeparture(flight)).nextDeparture,'flight was magically moved to the post-curfew departure');
+    assert(w.processDerivedOperationalIncidents(flight.departure-5*60_000),'night curfew conflict did not create a derived incident');
+    const incident=w.eval(`state.incidents.find(item=>item.flightId==='${flight.id}'&&item.type==='night_curfew_conflict'&&item.status==='open')`);
+    assert(incident,'night curfew conflict incident is missing');
+    const task=w.incidentTasks(incident.id).find(item=>item.kind==='recovery_strategy');
+    assert(task?.strategyOptions?.some(option=>option.id==='reschedule_after_curfew'),'night curfew incident does not offer reschedule-after-curfew');
+    assert(task.strategyOptions.some(option=>option.id==='cancel'),'night curfew incident does not offer cancellation');
     w.alignScheduleWindowToFlight(flight);
     w.refreshAll();
     await wait(100);
     const block=d.querySelector(`[data-flight-id="${flight.id}"]`);
-    assert(block?.querySelector('.flight-night-marker'),'schedule flight bar does not show a night restriction marker');
-    assert(block.getAttribute('title')?.includes('Night curfew'),'schedule flight bar tooltip does not explain the night restriction');
-    assert(block.querySelector('.flight-night-marker')?.getAttribute('title')?.includes('expected departure'),'night marker tooltip does not include the expected departure');
+    assert(!block?.querySelector('.flight-night-marker'),'pending night curfew conflict should not show an applied night-delay marker');
+    const nightBar=d.querySelector('#schedule-board .night-closure-bar[data-night-airport="FRA"]');
+    assert(nightBar,'arrival near curfew did not render a horizontal night closure bar');
+    assert(nightBar.textContent.includes('23:00')&&nightBar.textContent.includes('05:00'),'night closure bar does not show local closure times');
+    assert(nightBar.getAttribute('title')?.includes('Night curfew'),'night closure bar tooltip does not explain the curfew');
+    assert(w.performOperationalTask(task.id,'reschedule_after_curfew'),'reschedule-after-curfew option did not complete');
+    assert(flight.nightRecoveryDecision==='reschedule_after_curfew','flight did not store the night recovery decision');
+    assert(flight.nightRestrictionDelayMin>=300,'reschedule-after-curfew did not apply the night restriction delay');
+    assert(w.flightActualDeparture(flight)>=incident.context.nextDeparture,'rescheduled flight did not move to the airport reopening plan');
+
+    const reopening=incident.context.nextDeparture;
+    const morningAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const morning=w.createFlightRecord({
+      aircraftId:morningAc.id,
+      from:'FRA',
+      to:'LHR',
+      departure:reopening+20*60_000,
+      fare:{economy:140,business:360,first:700}
+    });
+    w.recalculateOperations();
+    w.alignScheduleWindowToFlight(morning);
+    w.refreshAll();
+    await wait(100);
+    const departureNightBar=d.querySelector(`#schedule-board .night-closure-bar[data-night-flight="${morning.id}"][data-night-edge="departure"][data-night-airport="FRA"]`);
+    assert(departureNightBar,'departure shortly after curfew did not render the previous night closure bar');
+    assert(departureNightBar.textContent.includes('23:00')&&departureNightBar.textContent.includes('05:00'),'departure night closure bar does not show local closure times');
+
+    for(let i=0;i<60&&!w.__aeroMapReady;i++) await wait(100);
+    const fraMarker=[...d.querySelectorAll('.airport-marker')].find(node=>node.textContent.includes('FRA'));
+    assert(fraMarker?.title.includes('Night closure: 23:00-05:00 local'),'airport marker title does not expose night closure times');
+    fraMarker.dispatchEvent(new MouseEvent('mouseenter',{bubbles:false}));
+    await wait(50);
+    assert(d.querySelector('.maplibregl-popup-content')?.textContent.includes('Night closure: 23:00-05:00 local'),'airport hover popup does not show night closure times');
+    fraMarker.dispatchEvent(new MouseEvent('mouseleave',{bubbles:false}));
     assert(!d.querySelector('[data-desk-widget="airports"]'),'airport widget should not be rendered');
     result.textContent='PASS night operations validated';
   }catch(error){

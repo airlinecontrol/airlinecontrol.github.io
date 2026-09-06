@@ -12,7 +12,7 @@ const assertRecordedAuthorityOptions=task=>{
 };
 assert.deepEqual(Object.keys(workflows.DEPARTMENTS),['dispatch','crew','maintenance','station']);
 assert.deepEqual(Object.keys(workflows.WORKFLOWS),[
-  'crew_sick','mel_defect','atc_restriction','gate_conflict','destination_closure',
+  'crew_sick','mel_defect','atc_restriction','night_curfew_conflict','gate_conflict','destination_closure',
   'aircraft_out_of_position','postflight_technical_defect',
   'crew_misconnect','crew_duty_risk','crew_fatigue_report','crew_fatigue_mid_rotation',
   'no_legal_crew','baggage_loading_issue','fueling_issue','deicing_required',

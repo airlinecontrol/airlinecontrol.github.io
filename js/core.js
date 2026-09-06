@@ -409,10 +409,12 @@ function flightNightRestriction(flight,proposedDeparture=flight.departure){
   const destination=flight.diversionAirport||flight.to;
   let departure=proposedDeparture;
   let closedDelay=0;
+  let closedStatus=null;
   const reasons=[];
   for(let i=0;i<6;i++){
     const depStatus=airportNightStatus(flight.from,departure);
     if(depStatus.status==='closed'){
+      closedStatus=depStatus;
       const wait=depStatus.nextOpenAt-departure;
       closedDelay+=wait; departure+=wait;
       reasons.push(`${flight.from} opens ${depStatus.localWeekday} ${depStatus.rule.end}`);
@@ -421,6 +423,7 @@ function flightNightRestriction(flight,proposedDeparture=flight.departure){
     const arrival=departure+duration+(Number(flight.enrouteDelayMin)||0)*MIN;
     const arrStatus=airportNightStatus(destination,arrival);
     if(arrStatus.status==='closed'){
+      closedStatus=arrStatus;
       const wait=arrStatus.nextOpenAt-arrival;
       closedDelay+=wait; departure+=wait;
       reasons.push(`${destination} opens ${arrStatus.localWeekday} ${arrStatus.rule.end}`);
@@ -437,6 +440,7 @@ function flightNightRestriction(flight,proposedDeparture=flight.departure){
     delayMin,nextDeparture:departure+advisoryDelay*MIN,
     status:closedDelay?'closed':active.length?'restricted':'open',
     departure:depStatus,arrival:arrStatus,
+    closedStatus,
     reason:closedDelay?`Night curfew: ${reasons.slice(-1)[0]||'next opening'}`:
       active.length?`Night restrictions at ${active.map(status=>status.airport).join('/')}`:'Night operations clear'
   };
@@ -994,10 +998,14 @@ function migrateState(parsed){
     if(!ac.cabin) ac.cabin=defaultCabin(ac.model);
   }
   for(const f of parsed.flights){
-    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','incidentDelayMin','enrouteDelayMin','liveWeatherDelayMin','propagatedDelayMin','slotDelayMin','turnaroundRecoveryMin','slotPriorityMin','nightRestrictionDelayMin','deicingCompletedAt','deicingHoldoverUntil'])
+    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','incidentDelayMin','enrouteDelayMin','liveWeatherDelayMin','propagatedDelayMin','slotDelayMin','turnaroundRecoveryMin','slotPriorityMin','nightRestrictionDelayMin','nightRestrictionConflictDelayMin','taxiOutDelayMin','taxiInDelayMin','deicingCompletedAt','deicingHoldoverUntil','nightRecoveryApprovedAt'])
       if(f[k]===undefined) f[k]=0;
+    if(!Array.isArray(f.taxiDelayCauses)) f.taxiDelayCauses=[];
     for(const k of ['airportDelayMin','airspaceDelayMin']) if(f[k]===undefined) f[k]=0;
     if(f.nightRestrictionLabel===undefined) f.nightRestrictionLabel='';
+    if(f.nightRestrictionConflictLabel===undefined) f.nightRestrictionConflictLabel='';
+    if(f.nightRecoveryDecision===undefined) f.nightRecoveryDecision='';
+    if(f.nightRecoverySourceKey===undefined) f.nightRecoverySourceKey='';
     if(f.constraintChecked===undefined) f.constraintChecked=Boolean(f.departureLogged);
     if(f.airportConstraintLabel===undefined) f.airportConstraintLabel='';
     if(f.airspaceConstraintLabel===undefined) f.airspaceConstraintLabel='';

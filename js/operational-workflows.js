@@ -82,6 +82,11 @@
         {id:'priority',label:'Request earlier opportunity',detail:'Ask flow management for a better regulated slot.'}
       ]},
     ])},
+    night_curfew_conflict:{classification:'derived',steps:withCancellation([
+      {key:'dispatch-night-curfew-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose night-curfew recovery',detail:'A delay now conflicts with an airport night curfew. Decide whether to protect the flight after reopening or cancel before departure.',options:[
+        {id:'reschedule_after_curfew',label:'Reschedule after curfew',detail:'Publish the first feasible departure after the airport reopens.'}
+      ]},
+    ])},
     gate_conflict:{classification:'constraint',steps:withCancellation([
       {key:'station-stand-strategy',department:'station',kind:'recovery_strategy',label:'Choose stand recovery',detail:'Select the practical stand or gate recovery path.',options:[
         {id:'remote',label:'Use remote stand',detail:'Accept remote parking and passenger bussing.'},

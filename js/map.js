@@ -73,6 +73,13 @@ function addFillLayer(id,source,paint={}){
   map.addLayer({id,type:'fill',source,paint});
 }
 
+function airportNightTooltip(airport){
+  const rule=AIRPORT_NIGHT_RULES[airport.iata];
+  if(!rule||rule.mode==='open') return `${airport.iata} - ${airport.name}\nNight: 24h operations`;
+  const modeLabel=rule.mode==='curfew'?'Night closure':rule.mode==='quota'?'Night quota':'Night procedures';
+  return `${airport.iata} - ${airport.name}\n${modeLabel}: ${rule.start}-${rule.end} local\n${rule.detail||rule.label}`;
+}
+
 function simplifyBaseMapLabels(){
   for(const id of HIDDEN_BASEMAP_LABEL_LAYERS){
     if(layerExists(id)) map.setLayoutProperty(id,'visibility','none');
@@ -97,7 +104,9 @@ function aircraftMarkerHtml(ac, p, index=operationalIndex()) {
   const label = p.flight ? `${p.flight.id}  ${ac.tail}` : ac.tail;
   const incident=aircraftMapIncidentState(ac,p,index);
   const rotation = Math.round((p.heading || 0) - 45);
-  return `<div class="plane-shell ${p.status === 'airborne' ? 'airborne' : 'ground'} ${incident.level} ${selected ? 'selected' : ''}" title="${esc(incident.label)}">
+  const movementClass=p.status==='airborne'?'airborne':p.status==='taxi_out'||p.status==='taxi_in'?'taxi':'ground';
+  const statusLabel=p.status==='taxi_out'?'Taxi out':p.status==='taxi_in'?'Taxi in':p.status==='airborne'?'Airborne':'On ground';
+  return `<div class="plane-shell ${movementClass} ${incident.level} ${selected ? 'selected' : ''}" title="${esc(incident.label||statusLabel)}">
     <span class="plane-halo"></span>
     <span class="plane-glyph" style="transform:rotate(${rotation}deg)">&#9992;</span>
     <span class="plane-label-map">${esc(label)}</span>
@@ -108,8 +117,16 @@ function createAirportMarker(airport){
   const element=document.createElement('button');
   element.type='button';
   element.className='airport-marker';
-  element.title=`${airport.iata} - ${airport.name}`;
+  const tooltip=airportNightTooltip(airport);
+  element.title=tooltip;
   element.innerHTML=`<span class="airport-dot"></span><span class="airport-label">${esc(airport.iata)}</span>`;
+  element.addEventListener('mouseenter',()=>{
+    mapPopup
+      .setLngLat([airport.lon,airport.lat])
+      .setHTML(esc(tooltip).replace(/\n/g,'<br>'))
+      .addTo(map);
+  });
+  element.addEventListener('mouseleave',()=>mapPopup.remove());
   element.addEventListener('click',event=>{
     event.stopPropagation();
     if(typeof setOperationsAirportFilter==='function') setOperationsAirportFilter(airport.iata);
@@ -154,7 +171,7 @@ function routeLineFeature(f,routeWeather,t){
       id:f.id,
       selected,
       status:st,
-      color:selected ? '#58d2ff' : (st === 'airborne' ? '#74a9c1' : '#607887'),
+      color:selected ? '#58d2ff' : (['airborne','taxi_out','taxi_in'].includes(st) ? '#74a9c1' : '#607887'),
       width:selected ? 3 : 2,
       opacity:(st === 'scheduled' || st === 'delayed') ? .38 : .78,
       tooltip:`${f.id} · ${f.from} -> ${destination}${destination!==f.to?` (planned ${f.to})`:''}${routeWeather.delayMin?` · ${routeWeather.label} +${routeWeather.delayMin}m`:''}`
@@ -322,7 +339,7 @@ function updateMapData() {
 
     if (!record) record=createAircraftMarker(ac,p,index);
     record.marker.setLngLat([p.lon,p.lat]);
-    record.element.style.zIndex=p.status === 'airborne' ? '1000' : '300';
+    record.element.style.zIndex=['airborne','taxi_out','taxi_in'].includes(p.status) ? '1000' : '300';
     if(record.iconKey!==iconKey){
       record.element.innerHTML=aircraftMarkerHtml(ac,p,index);
       record.iconKey=iconKey;

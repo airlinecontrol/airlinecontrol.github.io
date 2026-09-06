@@ -111,6 +111,11 @@
       if(optionId==='hold_ground') return `${consequenceDelayText(delay)} · aircraft remains at origin`;
       if(optionId==='priority') return `${consequenceDelayText(Math.max(10,delay*.55),delay)} · waits for flow-management reply`;
     }
+    if(task.key==='dispatch-night-curfew-strategy'&&optionId==='reschedule_after_curfew'){
+      const delay=Math.max(0,incident.context?.delayMin||0);
+      const next=incident.context?.nextDeparture?formatTime(incident.context.nextDeparture):'after airport reopening';
+      return `${consequenceDelayText(delay)} · first feasible departure ${next}`;
+    }
     if(task.key==='dispatch-performance-strategy'){
       if(optionId==='payload_reduce') return `possible +20 min delay · about ${incident.context?.payloadReductionPct||12}% payload offload`;
       if(optionId==='delay_conditions') return `${consequenceDelayText(incident.context?.delayMin||45)} · waits for runway/weather performance margin`;

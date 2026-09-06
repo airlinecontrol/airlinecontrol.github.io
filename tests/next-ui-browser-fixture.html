@@ -202,6 +202,8 @@
     assert(flight.manualDelayMin>=15,'manual OCC hold did not add departure delay');
     assert(d.querySelector(`[data-flight-id="${flight.id}"].shifted`),'shifted flight does not render the actual schedule bar');
     assert(d.querySelector(`[data-flight-id="${flight.id}"].shifted`)?.textContent.includes(w.shortClock(w.flightActualDeparture(flight))),'shifted schedule card did not repaint to the new departure time');
+    assert(d.querySelector(`[data-flight-id="${flight.id}"].shifted`)?.getAttribute('title')?.includes('Primary cause: Manual OCC hold'),'shifted schedule card tooltip does not explain the delay cause');
+    assert(d.querySelector(`[data-dispatch-delay-flight="${flight.id}"]`)?.textContent.includes('Primary cause: Manual OCC hold'),'dispatch widget does not show selected-flight delay analysis');
     assert(d.querySelector('#schedule-board.has-selected-flight .flight-block.selected'),'selected schedule flight is not visually focused');
     d.querySelector('#schedule-board').dispatchEvent(new MouseEvent('click',{bubbles:true}));
     await wait(80);
@@ -216,7 +218,16 @@
     d.querySelector(`[data-occ-swap-flight="${flight.id}"]`).click(); await wait(120);
     assert(flight.aircraftId===spare.id,'manual OCC swap did not assign the selected spare aircraft');
     assert(incident.aircraftId===spare.id,'open incident did not follow the manually swapped aircraft');
-    assert(!d.querySelector(`[data-occ-cancel-flight="${flight.id}"]`),'dispatch should not expose a general cancel-flight action');
+    assert(d.querySelector(`[data-occ-cancel-single-flight="${flight.id}"]`),'dispatch should expose a single-flight cancellation action');
+    const cancelAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const cancelOut=w.createFlightRecord({aircraftId:cancelAc.id,from:'FRA',to:'LHR',departure:w.simNow()+5*60*60_000,fare:{economy:120,business:300,first:600},serviceId:'CANCEL_PAIR',serviceLeg:'outbound'});
+    const cancelReturn=w.createFlightRecord({aircraftId:cancelAc.id,from:'LHR',to:'FRA',departure:w.flightActualArrival(cancelOut)+80*60_000,fare:{economy:120,business:300,first:600},serviceId:'CANCEL_PAIR',serviceLeg:'return'});
+    w.settleSelectedFlight(cancelOut.id); w.refreshAll(); await wait(120);
+    assert(d.querySelector(`[data-occ-cancel-single-flight="${cancelOut.id}"]`),'selected future flight does not expose single-flight cancel action');
+    w.confirm=()=>true;
+    d.querySelector(`[data-occ-cancel-single-flight="${cancelOut.id}"]`).click(); await wait(120);
+    assert(cancelOut.cancelled,'single-flight cancel did not cancel selected flight');
+    assert(!cancelReturn.cancelled,'single-flight cancel also cancelled the paired return leg');
     const shellBg=getComputedStyle(d.querySelector('.operations-rail')).backgroundColor;
     assert(getComputedStyle(d.querySelector('.topbar')).backgroundColor===shellBg,'top bar background does not match the side panels');
     assert(getComputedStyle(d.querySelector('#center-workspace')).backgroundColor===shellBg,'center workspace background does not match the side panels');
