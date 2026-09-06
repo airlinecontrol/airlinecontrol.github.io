@@ -70,8 +70,9 @@
     const incident=w.eval(`state.incidents.find(item=>item.flightId==='${flight.id}'&&item.type==='night_curfew_conflict'&&item.status==='open')`);
     assert(incident,'night curfew conflict incident is missing');
     const task=w.incidentTasks(incident.id).find(item=>item.kind==='recovery_strategy');
-    assert(task?.strategyOptions?.some(option=>option.id==='reschedule_after_curfew'),'night curfew incident does not offer reschedule-after-curfew');
+    assert(task?.strategyOptions?.some(option=>option.id==='change_departure'),'night curfew incident does not offer manual departure change');
     assert(task.strategyOptions.some(option=>option.id==='cancel'),'night curfew incident does not offer cancellation');
+    assert(incident.context.restrictionSummary?.includes('FRA'),'night curfew incident does not explain the affected restriction chain');
     w.alignScheduleWindowToFlight(flight);
     w.refreshAll();
     await wait(100);
@@ -81,10 +82,15 @@
     assert(nightBar,'arrival near curfew did not render a horizontal night closure bar');
     assert(nightBar.textContent.includes('23:00')&&nightBar.textContent.includes('05:00'),'night closure bar does not show local closure times');
     assert(nightBar.getAttribute('title')?.includes('Night curfew'),'night closure bar tooltip does not explain the curfew');
-    assert(w.performOperationalTask(task.id,'reschedule_after_curfew'),'reschedule-after-curfew option did not complete');
-    assert(flight.nightRecoveryDecision==='reschedule_after_curfew','flight did not store the night recovery decision');
-    assert(flight.nightRestrictionDelayMin>=300,'reschedule-after-curfew did not apply the night restriction delay');
-    assert(w.flightActualDeparture(flight)>=incident.context.nextDeparture,'rescheduled flight did not move to the airport reopening plan');
+    assert(w.performOperationalTask(task.id,'change_departure'),'manual departure-change option did not complete');
+    const manualTask=w.incidentTasks(incident.id).find(item=>item.kind==='manual_departure_change_required');
+    assert(manualTask?.status==='available','manual departure-change follow-up did not unlock');
+    assert(!w.performOperationalTask(manualTask.id),'manual departure-change task completed before the flight was retimed');
+    w.delayFlightUntil(flight.id,incident.context.nextDeparture+5*60_000);
+    assert(w.flightActualDeparture(flight)>=incident.context.nextDeparture,'hold-until action did not move the projected departure past reopening');
+    assert(w.performOperationalTask(manualTask.id),'manual departure-change task did not complete after retiming');
+    assert(flight.nightRecoveryDecision==='manual_departure_change','flight did not store the manual night recovery decision');
+    assert(incident.status==='resolved','night curfew incident did not resolve after the manual departure change was confirmed');
 
     const airborneAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'LHR');
     w.changeStaff('LHR','operations',1);
@@ -130,6 +136,26 @@
     const departureNightBar=d.querySelector(`#schedule-board .night-closure-bar[data-night-flight="${morning.id}"][data-night-edge="departure"][data-night-airport="FRA"]`);
     assert(departureNightBar,'departure shortly after curfew did not render the previous night closure bar');
     assert(departureNightBar.textContent.includes('23:00')&&departureNightBar.textContent.includes('05:00'),'departure night closure bar does not show local closure times');
+    const overlapFlight=w.createFlightRecord({
+      aircraftId:morningAc.id,
+      from:'MUC',
+      to:'LHR',
+      departure:reopening+40*60_000,
+      fare:{economy:140,business:360,first:700}
+    });
+    w.recalculateOperations();
+    w.alignScheduleWindowToFlight(morning);
+    w.refreshAll();
+    await wait(100);
+    const nightRow=d.querySelector(`#schedule-board [data-sched-aircraft="${morningAc.id}"]`);
+    assert(nightRow,'overlap fixture did not render the aircraft schedule row');
+    const rowNightBars=[...nightRow.querySelectorAll('.night-closure-bar')];
+    const fraNight=rowNightBars.find(node=>node.dataset.nightAirport==='FRA');
+    const mucNight=rowNightBars.find(node=>node.dataset.nightAirport==='MUC');
+    assert(fraNight&&mucNight,`overlap fixture did not render both night bars for ${morning.id} and ${overlapFlight.id}`);
+    const fraRect=fraNight.getBoundingClientRect(),mucRect=mucNight.getBoundingClientRect();
+    const horizontallyOverlapping=fraRect.left<mucRect.right&&mucRect.left<fraRect.right;
+    assert(!horizontallyOverlapping||Math.abs(fraRect.top-mucRect.top)>4,'overlapping night closure bars were not stacked into separate lanes');
 
     for(let i=0;i<60&&!w.__aeroMapReady;i++) await wait(100);
     const fraMarker=[...d.querySelectorAll('.airport-marker')].find(node=>node.textContent.includes('FRA'));

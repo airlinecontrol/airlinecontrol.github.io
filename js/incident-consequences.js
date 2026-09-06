@@ -372,10 +372,11 @@
       if(optionId==='hold_ground') return `${consequenceDelayText(delay)} · aircraft remains at origin`;
       if(optionId==='priority') return `${consequenceDelayText(Math.max(10,delay*.55),delay)} · waits for flow-management reply`;
     }
-    if(task.key==='dispatch-night-curfew-strategy'&&optionId==='reschedule_after_curfew'){
+    if(task.key==='dispatch-night-curfew-strategy'&&optionId==='change_departure'){
       const delay=Math.max(0,incident.context?.delayMin||0);
       const next=incident.context?.nextDeparture?formatTime(incident.context.nextDeparture):'after airport reopening';
-      return `${consequenceDelayText(delay)} · first feasible departure ${next}`;
+      const chain=incident.context?.restrictionSummary?` · ${incident.context.restrictionSummary}`:'';
+      return `${consequenceDelayText(delay)} · manually hold in Dispatch, recommended earliest clear departure ${next}${chain}`;
     }
     if(task.key==='dispatch-ground-destination-strategy'){
       if(optionId==='delay_reopen') return `${consequenceDelayText(incident.context?.delayMin||90)} · aircraft waits on ground for destination acceptance`;

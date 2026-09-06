@@ -86,8 +86,9 @@
     ])},
     night_curfew_conflict:{classification:'derived',steps:withCancellation([
       {key:'dispatch-night-curfew-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose night-curfew recovery',detail:'A delay now conflicts with an airport night curfew. Decide whether to protect the flight after reopening or cancel before departure.',options:[
-        {id:'reschedule_after_curfew',label:'Reschedule after curfew',detail:'Publish the first feasible departure after the airport reopens.'}
+        {id:'change_departure',label:'Change departure in Dispatch',detail:'Use Dispatch OCC actions to manually hold the flight until the curfew conflict is clear.'}
       ]},
+      {key:'dispatch-night-departure-change',department:'dispatch',kind:'manual_departure_change_required',label:'Confirm revised departure',detail:'Change the selected flight departure in Dispatch OCC actions, then confirm the updated timing no longer violates a hard curfew.',dependsOn:['dispatch-night-curfew-strategy'],branch:'change_departure'}
     ])},
     arrival_curfew_coordination:{classification:'derived',steps:[
       {key:'dispatch-arrival-curfew-coordinate',department:'dispatch',kind:'flight_watch_coordination',label:'Coordinate curfew arrival exception',detail:'The flight is already airborne and projected to arrive inside a hard night curfew. Coordinate airport, ATC, station, and handling acceptance.'}

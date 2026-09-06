@@ -510,7 +510,8 @@ function networkConstraintsForFlight(flight){
 }
 
 function nightConflictSourceKey(flight,night){
-  const affected=night?.closedStatus||(night?.departure?.status==='closed'?night.departure:night?.arrival?.status==='closed'?night.arrival:null);
+  const firstClosure=night?.closures?.[0];
+  const affected=firstClosure||night?.closedStatus||(night?.departure?.status==='closed'?night.departure:night?.arrival?.status==='closed'?night.arrival:null);
   return `night-curfew:${flight.id}:${affected?.airport||flightOperationalDestination(flight)}:${Math.floor((affected?.nextOpenAt||night?.nextDeparture||0)/DAY)}`;
 }
 
@@ -526,7 +527,30 @@ function nightCurfewConflictContextForFlight(flight,proposedDeparture=flightActu
   if(night.status!=='closed'||night.delayMin<=0) return null;
   const sourceKey=nightConflictSourceKey(flight,night);
   if(flight.nightRecoveryDecision==='reschedule_after_curfew'&&flight.nightRecoverySourceKey===sourceKey) return null;
-  const affected=night.departure?.status==='closed'?night.departure:night.arrival?.status==='closed'?night.arrival:null;
+  const curfewPhases=(night.closures||[]).map(item=>({
+    phase:item.phase,airport:item.airport,localTime:item.localTime,
+    nextOpenAt:item.nextOpenAt,opensAt:item.opensAt,label:item.label
+  }));
+  if(!curfewPhases.length&&night.closedStatus){
+    curfewPhases.push({
+      phase:night.closedStatus.airport===flight.from?'departure':'arrival',
+      airport:night.closedStatus.airport,
+      localTime:night.closedStatus.localTime,
+      nextOpenAt:night.closedStatus.nextOpenAt,
+      opensAt:night.closedStatus.rule?.end,
+      label:night.closedStatus.label
+    });
+  }
+  const restrictionPhases=(night.restrictions||[])
+    .filter(item=>item.status==='restricted'&&item.rule?.mode!=='curfew')
+    .map(item=>({
+      phase:item.phase,airport:item.airport,mode:item.rule?.mode||'restricted',
+      label:item.label,localTime:item.localTime,delayMin:item.delayMin||0
+    }));
+  const phaseText=phase=>phase==='departure'?'departure':'arrival';
+  const curfewSummary=curfewPhases.map(item=>`${item.airport} ${phaseText(item.phase)} curfew until ${item.opensAt||'reopening'}`);
+  const restrictionSummary=restrictionPhases.map(item=>`${item.airport} ${phaseText(item.phase)} ${item.mode==='quota'?'night quota':'night restriction'}${item.delayMin?` +${item.delayMin}m`:''}`);
+  const affected=curfewPhases[0]||night.closedStatus;
   return {
     sourceId:flight.id,
     sourceKey,
@@ -535,11 +559,37 @@ function nightCurfewConflictContextForFlight(flight,proposedDeparture=flightActu
     readyAt:proposedDeparture,
     nextDeparture:night.nextDeparture,
     affectedAirport:affected?.airport||flightOperationalDestination(flight),
-    affectedPhase:night.departure?.status==='closed'?'departure':'arrival',
+    affectedPhase:affected?.phase||(night.departure?.status==='closed'?'departure':'arrival'),
+    curfewPhases,
+    restrictionPhases,
+    restrictionSummary:[...curfewSummary,...restrictionSummary].join(' · '),
     reason:night.reason,
     causedByDelay:proposedDeparture>flight.departure+5*MIN,
     plannedDeparture:flight.departure,
     plannedArrival:flight.arrival
+  };
+}
+
+function nightDepartureChangePlanState(incident){
+  const flight=incident&&state.flights.find(item=>item.id===incident.flightId&&!item.cancelled);
+  if(!flight) return {ready:false,flight:null,reason:'Affected flight is no longer available.'};
+  if(flight.departureLogged) return {ready:false,flight,reason:'The flight has already departed. Use airborne curfew coordination instead.'};
+  const current=nightCurfewConflictContextForFlight(flight,flightActualDeparture(flight));
+  if(current?.active){
+    const target=current.nextDeparture?` Recommended earliest clear departure ${formatTime(current.nextDeparture)}.`:'';
+    return {
+      ready:false,flight,current,
+      reason:`Current projected departure ${formatTime(flightActualDeparture(flight))} still conflicts with ${current.restrictionSummary||current.reason}.${target}`
+    };
+  }
+  const night=flightNightRestriction(flight,flightActualDeparture(flight));
+  const restricted=(night.restrictions||[]).filter(item=>item.status==='restricted'&&item.rule?.mode!=='curfew');
+  const restrictionSummary=restricted.map(item=>`${item.airport} ${item.phase} ${item.rule?.mode==='quota'?'night quota':'night restriction'}${item.delayMin?` +${item.delayMin}m`:''}`).join(' · ');
+  return {
+    ready:true,flight,current:null,restrictionSummary,
+    reason:restrictionSummary
+      ? `Hard curfew cleared. Remaining restriction: ${restrictionSummary}.`
+      : `Hard curfew cleared at projected departure ${formatTime(flightActualDeparture(flight))}.`
   };
 }
 
@@ -1311,8 +1361,9 @@ function aircraftOutOfPositionContextForFlight(flight,t=simNow()){
   if(!flight.positioningBlocked) return null;
   const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
   if(!aircraft) return null;
+  const projection=aircraftProjectedLocation(aircraft,flightActualDeparture(flight));
   const active=aircraftActiveFlight(aircraft.id,t);
-  const expectedLocation=active?flightOperationalDestination(active):aircraft.location;
+  const expectedLocation=projection.location || (active?flightOperationalDestination(active):aircraft.location);
   return {
     sourceId:flight.id,
     aircraftId:aircraft.id,
@@ -1320,7 +1371,7 @@ function aircraftOutOfPositionContextForFlight(flight,t=simNow()){
     expectedLocation,
     requiredLocation:flight.from,
     delayMin:Math.max(15,Number(flight.positioningDelayMin)||15),
-    active:expectedLocation!==flight.from
+    active:expectedLocation!==flight.from || ['position_conflict','stale_unflown'].includes(projection.status)
   };
 }
 
@@ -2196,12 +2247,21 @@ function finalizeOperationalCase(incident){
     applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||45);
     incident.outcome=incident.atcOutcome||'Returned airport flow opportunity incorporated into the operating plan.';
   }else if(incident.type==='night_curfew_conflict'){
-    const context=nightCurfewConflictContextForFlight(flight,flightActualDeparture(flight))||incident.context;
-    if(!context?.sourceKey) return false;
-    flight.nightRecoveryDecision='reschedule_after_curfew';
-    flight.nightRecoverySourceKey=context.sourceKey;
-    flight.nightRecoveryApprovedAt=simNow();
-    incident.outcome=`${flight.id} rescheduled after ${context.affectedAirport||flightOperationalDestination(flight)} night curfew; first feasible departure ${formatTime(context.nextDeparture)}.`;
+    if(incident.selectedStrategy==='change_departure'){
+      const plan=nightDepartureChangePlanState(incident);
+      if(!plan.ready) return false;
+      flight.nightRecoveryDecision='manual_departure_change';
+      flight.nightRecoverySourceKey=incident.context?.sourceKey||'';
+      flight.nightRecoveryApprovedAt=simNow();
+      incident.outcome=`${flight.id} manually retimed in Dispatch. ${plan.reason}`;
+    }else{
+      const context=nightCurfewConflictContextForFlight(flight,flightActualDeparture(flight))||incident.context;
+      if(!context?.sourceKey) return false;
+      flight.nightRecoveryDecision='reschedule_after_curfew';
+      flight.nightRecoverySourceKey=context.sourceKey;
+      flight.nightRecoveryApprovedAt=simNow();
+      incident.outcome=`${flight.id} rescheduled after night restrictions${context.restrictionSummary?`: ${context.restrictionSummary}`:''}; first feasible departure ${formatTime(context.nextDeparture)}.`;
+    }
   }else if(incident.type==='arrival_curfew_coordination'){
     const context=arrivalCurfewContextForFlight(flight,simNow())||incident.context;
     if(!context?.sourceKey) return false;
@@ -2755,6 +2815,11 @@ function performOperationalTask(taskId,actionId='',payload={}){
     if(!plan.ready) return toast(plan.reason);
     task.selection={action:'check_crew_move',transferId:plan.transfer?.id||'',role:plan.role,to:plan.to};
     completeOperationalTask(task,plan.transfer?`${plan.transfer.id} positions ${PERSONNEL[plan.role]?.label?.toLowerCase()||'crew'} to ${plan.to}.`:`Qualified ${PERSONNEL[plan.role]?.label?.toLowerCase()||'crew'} confirmed at ${plan.to}.`);
+  }else if(task.kind==='manual_departure_change_required'){
+    const plan=nightDepartureChangePlanState(incident);
+    if(!plan.ready) return toast(plan.reason);
+    task.selection={action:'check_departure_change',actualDeparture:flightActualDeparture(flight),restrictionSummary:plan.restrictionSummary||''};
+    completeOperationalTask(task,plan.reason);
   }else if(task.kind==='atc_coordination'){
     const action=actionId||task.action;
     if(action==='accept'){
@@ -4256,20 +4321,36 @@ function updatePositioningConstraints(t=simNow()){
   let changed=false;
   for(const ac of state.aircraft){
     const active=aircraftActiveFlight(ac.id,t);
-    const next=state.flights
-      .filter(f=>f.aircraftId===ac.id&&!f.cancelled&&!f.settled&&!f.departureLogged&&flightActualDeparture(f)>t)
-      .sort((a,b)=>flightActualDeparture(a)-flightActualDeparture(b))[0];
-    if(!next) continue;
-    const expectedLocation=active?flightOperationalDestination(active):ac.location;
-    if(next.from!==expectedLocation){
-      const delay=Math.max(15,Math.ceil((t+15*MIN-next.departure)/(15*MIN))*15);
-      if(!next.positioningBlocked||next.positioningDelayMin!==delay) changed=true;
-      next.positioningBlocked=true;
-      next.positioningDelayMin=delay;
-    }else if(next.positioningBlocked||next.positioningDelayMin){
-      next.positioningBlocked=false;
-      next.positioningDelayMin=0;
-      changed=true;
+    let projectedLocation=active?flightOperationalDestination(active):ac.location;
+    let availableAt=active?flightActualArrival(active):t;
+    const future=state.flights
+      .filter(f=>f.aircraftId===ac.id&&!f.cancelled&&!f.settled&&!f.departureLogged&&flightActualArrival(f)>t)
+      .sort((a,b)=>flightActualDeparture(a)-flightActualDeparture(b)||flightActualArrival(a)-flightActualArrival(b));
+    for(const flight of future){
+      const dep=flightActualDeparture(flight),destination=flightOperationalDestination(flight);
+      const outOfPosition=flight.from!==projectedLocation;
+      const inActionWindow=t>=flight.departure-6*HOUR;
+      const delay=outOfPosition&&inActionWindow
+        ? Math.max(15,Math.ceil((Math.max(t+15*MIN,availableAt)-flight.departure)/(15*MIN))*15)
+        : 0;
+      if(outOfPosition){
+        if(!flight.positioningBlocked||flight.positioningDelayMin!==delay) changed=true;
+        flight.positioningBlocked=true;
+        flight.positioningDelayMin=delay;
+        continue;
+      }
+      if(flight.positioningBlocked||flight.positioningDelayMin){
+        flight.positioningBlocked=false;
+        flight.positioningDelayMin=0;
+        changed=true;
+      }
+      if(dep>=availableAt){
+        projectedLocation=destination;
+        availableAt=flightActualArrival(flight)+minimumTurnMinutes(ac,destination)*MIN;
+      }else{
+        projectedLocation=destination;
+        availableAt=Math.max(availableAt,flightActualArrival(flight)+minimumTurnMinutes(ac,destination)*MIN);
+      }
     }
   }
   return changed;
@@ -4637,6 +4718,16 @@ function delayFlight(flightId,minutes=15){
   toast(`${f.id} held for ${minutes} additional minutes. Downstream delays were recalculated.`);
 }
 
+function delayFlightUntil(flightId,targetTime){
+  const f=state.flights.find(item=>item.id===flightId&&!item.cancelled);
+  if(!f||f.departureLogged) return toast('Only a flight still on the ground can be held.');
+  if(!Number.isFinite(targetTime)) return toast('Choose a valid hold-until time.');
+  const current=flightActualDeparture(f);
+  if(targetTime<=current+30_000) return toast(`${f.id} is already projected at or after that time.`);
+  const minutes=Math.ceil((targetTime-current)/MIN);
+  delayFlight(flightId,minutes);
+}
+
 function crewSwapBlocker(flight){
   if(!flight||flight.cancelled) return 'Select an active flight first.';
   if(flight.departureLogged) return 'Crew swap is only available before departure.';
@@ -4679,46 +4770,20 @@ function flightCancellationTargets(f){
   return [rotation.outbound,rotation.returnFlight].filter(Boolean).filter(item=>!item.cancelled&&!item.departureLogged);
 }
 
-function cancelFlight(flightId,{skipConfirm=false,reason=''}={}){
-  const f=state.flights.find(item=>item.id===flightId&&!item.cancelled);
-  if(!f||f.departureLogged) return toast('An airborne or completed flight cannot be cancelled.');
-  const targets=flightCancellationTargets(f);
-  const pairing=targets.length>1?' The paired return leg will also be cancelled so the aircraft remains correctly positioned.':'';
-  if(!skipConfirm&&!AeroServices.confirm(`Cancel ${f.id}?${pairing}`)) return;
-  for(const flight of targets){
-    const cancellationCost=typeof cancellationRecoveryCost==='function'?cancellationRecoveryCost(flight):0;
-    flight.cancelled=true; flight.cancelledAt=simNow(); flight.cancellationCost=cancellationCost;
-    if(cancellationCost&&!flight.cancellationCostBooked&&typeof recordRecoveryCostEvent==='function'){
-      const event=recordRecoveryCostEvent({
-        flight,category:'passenger',kind:'flight_cancellation',amount:cancellationCost,
-        passengers:flight.pax||0,airport:flight.from,
-        description:`${flight.id}: cancellation recovery and reaccommodation`
-      });
-      flight.cancellationCostBooked=event?.id||'manual';
-    }
-    flight.issueAcknowledgedAt=0; flight.issueAcknowledgedKey='';
-    state.stats.cancelled+=1;
-    for(const incident of state.incidents){
-      if(incident.flightId!==flight.id||incident.status!=='open') continue;
-      resolveIncidentImpacts(incident,simNow(),'handled');
-      incident.status='resolved'; incident.blocking=false; incident.resolvedAt=simNow();
-      incident.selectedAction='cancel'; incident.outcome=`${flight.id} cancelled${reason?` · ${reason}`:''}.`;
-      for(const task of incidentTasks(incident.id)) if(task.status!=='completed') task.status='cancelled';
-    }
-  }
-  recalculateOperations();
-  AeroServices.commit();
-  toast(`${targets.map(item=>item.id).join(' and ')} cancelled.`);
+function turnaroundCancellationTargets(f){
+  if(!f?.serviceId) return [];
+  const rotation=rotationForFlight(f);
+  const targets=[rotation.outbound,rotation.returnFlight]
+    .filter(Boolean)
+    .filter(item=>!item.cancelled&&!item.departureLogged);
+  return [...new Map(targets.map(item=>[item.id,item])).values()];
 }
 
-function cancelSingleFlight(flightId,{skipConfirm=false,reason='Manual OCC cancellation'}={}){
-  const flight=state.flights.find(item=>item.id===flightId&&!item.cancelled);
-  if(!flight||flight.departureLogged) return toast('An airborne or completed flight cannot be cancelled.');
-  const rotationWarning=flight.serviceId?' This cancels only this leg; any paired leg remains in the programme and may need aircraft recovery.':'';
-  if(!skipConfirm&&!AeroServices.confirm(`Cancel single flight ${flight.id}?${rotationWarning}`)) return false;
-  flight.cancelled=true;
-  flight.cancelledAt=simNow();
+function applyFlightCancellation(flight,reason=''){
+  const now=simNow();
   const cancellationCost=typeof cancellationRecoveryCost==='function'?cancellationRecoveryCost(flight):0;
+  flight.cancelled=true;
+  flight.cancelledAt=now;
   flight.cancellationCost=cancellationCost;
   if(cancellationCost&&!flight.cancellationCostBooked&&typeof recordRecoveryCostEvent==='function'){
     const event=recordRecoveryCostEvent({
@@ -4733,20 +4798,54 @@ function cancelSingleFlight(flightId,{skipConfirm=false,reason='Manual OCC cance
   state.stats.cancelled+=1;
   for(const incident of state.incidents){
     if(incident.flightId!==flight.id||incident.status!=='open') continue;
-    resolveIncidentImpacts(incident,simNow(),'handled');
+    resolveIncidentImpacts(incident,now,'handled');
     incident.status='resolved';
     incident.blocking=false;
-    incident.resolvedAt=simNow();
+    incident.resolvedAt=now;
     incident.selectedAction='cancel';
     incident.outcome=`${flight.id} cancelled${reason?` · ${reason}`:''}.`;
     for(const task of incidentTasks(incident.id)) if(task.status!=='completed') task.status='cancelled';
   }
-  if(selectedFlightId===flight.id) selectedFlightId=null;
+}
+
+function finishFlightCancellations(targets,message){
+  if(targets.some(flight=>selectedFlightId===flight.id)) selectedFlightId=null;
   recalculateOperations();
   updatePassengerConnections();
   AeroServices.commit();
-  toast(`${flight.id} cancelled.`);
+  requestUiRefresh('all');
+  toast(message);
   return true;
+}
+
+function cancelFlight(flightId,{skipConfirm=false,reason=''}={}){
+  const f=state.flights.find(item=>item.id===flightId&&!item.cancelled);
+  if(!f||f.departureLogged) return toast('An airborne or completed flight cannot be cancelled.');
+  const targets=flightCancellationTargets(f);
+  const pairing=targets.length>1?' The paired return leg will also be cancelled so the aircraft remains correctly positioned.':'';
+  if(!skipConfirm&&!AeroServices.confirm(`Cancel ${f.id}?${pairing}`)) return;
+  for(const flight of targets) applyFlightCancellation(flight,reason);
+  return finishFlightCancellations(targets,`${targets.map(item=>item.id).join(' and ')} cancelled.`);
+}
+
+function cancelSingleFlight(flightId,{skipConfirm=false,reason='Manual OCC cancellation'}={}){
+  const flight=state.flights.find(item=>item.id===flightId&&!item.cancelled);
+  if(!flight||flight.departureLogged) return toast('An airborne or completed flight cannot be cancelled.');
+  const rotationWarning=flight.serviceId?' This cancels only this leg; any paired leg remains in the programme and may need aircraft recovery.':'';
+  if(!skipConfirm&&!AeroServices.confirm(`Cancel single flight ${flight.id}?${rotationWarning}`)) return false;
+  applyFlightCancellation(flight,reason);
+  return finishFlightCancellations([flight],`${flight.id} cancelled.`);
+}
+
+function cancelTurnaround(flightId,{skipConfirm=false,reason='Manual OCC turnaround cancellation'}={}){
+  const flight=state.flights.find(item=>item.id===flightId&&!item.cancelled);
+  if(!flight||flight.departureLogged) return toast('An airborne or completed flight cannot be cancelled.');
+  const targets=turnaroundCancellationTargets(flight);
+  if(targets.length<2) return toast('No complete future turnaround pair is available for this flight.');
+  const label=targets.map(item=>item.id).join(' + ');
+  if(!skipConfirm&&!AeroServices.confirm(`Cancel turnaround ${label}? Future rotations in the recurring schedule stay active.`)) return false;
+  for(const target of targets) applyFlightCancellation(target,reason);
+  return finishFlightCancellations(targets,`Turnaround ${label} cancelled. Recurring schedule remains active.`);
 }
 
 function prioritizeFuel(flightId){

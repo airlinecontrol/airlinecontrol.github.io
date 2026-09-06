@@ -410,23 +410,34 @@ function flightNightRestriction(flight,proposedDeparture=flight.departure){
   let departure=proposedDeparture;
   let closedDelay=0;
   let closedStatus=null;
+  const closureEvents=[];
   const reasons=[];
   for(let i=0;i<6;i++){
     const depStatus=airportNightStatus(flight.from,departure);
     if(depStatus.status==='closed'){
       closedStatus=depStatus;
+      closureEvents.push({
+        phase:'departure',airport:flight.from,localTime:depStatus.localTime,
+        nextOpenAt:depStatus.nextOpenAt,opensAt:depStatus.rule.end,
+        label:depStatus.label,detail:depStatus.detail
+      });
       const wait=depStatus.nextOpenAt-departure;
       closedDelay+=wait; departure+=wait;
-      reasons.push(`${flight.from} opens ${depStatus.localWeekday} ${depStatus.rule.end}`);
+      reasons.push(`${flight.from} opens ${depStatus.rule.end}`);
       continue;
     }
     const arrival=departure+duration+(Number(flight.enrouteDelayMin)||0)*MIN;
     const arrStatus=airportNightStatus(destination,arrival);
     if(arrStatus.status==='closed'){
       closedStatus=arrStatus;
+      closureEvents.push({
+        phase:'arrival',airport:destination,localTime:arrStatus.localTime,
+        nextOpenAt:arrStatus.nextOpenAt,opensAt:arrStatus.rule.end,
+        label:arrStatus.label,detail:arrStatus.detail
+      });
       const wait=arrStatus.nextOpenAt-arrival;
       closedDelay+=wait; departure+=wait;
-      reasons.push(`${destination} opens ${arrStatus.localWeekday} ${arrStatus.rule.end}`);
+      reasons.push(`${destination} opens ${arrStatus.rule.end}`);
       continue;
     }
     break;
@@ -435,12 +446,15 @@ function flightNightRestriction(flight,proposedDeparture=flight.departure){
   const arrStatus=airportNightStatus(destination,departure+duration+(Number(flight.enrouteDelayMin)||0)*MIN);
   const advisoryDelay=Math.max(depStatus.status==='restricted'?depStatus.delayMin:0,arrStatus.status==='restricted'?arrStatus.delayMin:0);
   const delayMin=Math.ceil(closedDelay/MIN)+advisoryDelay;
-  const active=[depStatus,arrStatus].filter(status=>status.status!=='open');
+  const active=[
+    {...depStatus,phase:'departure'},
+    {...arrStatus,phase:'arrival'}
+  ].filter(status=>status.status!=='open');
   return {
     delayMin,nextDeparture:departure+advisoryDelay*MIN,
     status:closedDelay?'closed':active.length?'restricted':'open',
     departure:depStatus,arrival:arrStatus,
-    closedStatus,
+    closedStatus,closures:closureEvents,restrictions:active,
     reason:closedDelay?`Night curfew: ${reasons.slice(-1)[0]||'next opening'}`:
       active.length?`Night restrictions at ${active.map(status=>status.airport).join('/')}`:'Night operations clear'
   };

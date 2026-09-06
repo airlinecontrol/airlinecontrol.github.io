@@ -53,6 +53,10 @@ const atcTasks=workflows.tasksForIncident({id:'INC11',type:'atc_restriction',fli
 assert.deepEqual(atcTasks.find(task=>task.key==='dispatch-flow-strategy').strategyOptions.map(option=>option.id),['accept','priority','cancel']);
 assert.equal(atcTasks.length,1);
 
+const nightTasks=workflows.tasksForIncident({id:'INC11B',type:'night_curfew_conflict',flightId:'AS11B',aircraftId:'AC11B',detectedAt:1000});
+assert.deepEqual(nightTasks.find(task=>task.key==='dispatch-night-curfew-strategy').strategyOptions.map(option=>option.id),['change_departure','cancel']);
+assert.equal(nightTasks.find(task=>task.key==='dispatch-night-departure-change').kind,'manual_departure_change_required');
+
 const gateTasks=workflows.tasksForIncident({id:'INC12',type:'gate_conflict',flightId:'AS12',aircraftId:'AC12',detectedAt:1000});
 assert.deepEqual(gateTasks.find(task=>task.key==='station-stand-strategy').strategyOptions.map(option=>option.id),['remote','tow','wait_gate','cancel']);
 assert.equal(gateTasks.length,1);

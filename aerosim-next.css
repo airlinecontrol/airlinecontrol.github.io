@@ -386,7 +386,7 @@ body,
 .planned-flight-block .flight-night-marker{top:3px;right:3px}
 .night-closure-bar{
   position:absolute;
-  top:53px;
+  top:var(--night-lane-top,53px);
   z-index:5;
   height:13px;
   display:flex;
@@ -436,6 +436,9 @@ body,
   animation:lateInboundPulse 1.25s ease-in-out infinite;
   padding-right:30px;
   box-shadow:0 0 0 1px rgba(233,198,109,.45),0 5px 12px rgba(0,0,0,.22)!important;
+}
+.flight-block.positioning-conflict{
+  box-shadow:0 0 0 1px rgba(223,94,114,.65),0 5px 12px rgba(0,0,0,.22)!important;
 }
 .flight-late-inbound{
   position:absolute;
@@ -1174,6 +1177,10 @@ body,
 }
 .occ-action-controls input{
   width:52px;
+}
+.occ-action-controls input[type="datetime-local"]{
+  width:172px;
+  max-width:172px;
 }
 .occ-action-controls select{
   width:190px;

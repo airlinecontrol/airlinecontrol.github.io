@@ -268,6 +268,22 @@
       assert(incident.status==='resolved','positioning incident did not resolve after manual ferry confirmation');
     }
 
+    {
+      const aircraft=w.assignRequestedAircraft('E190',w.defaultCabin('E190'),'VIE');
+      const first=w.createFlightRecord({aircraftId:aircraft.id,from:'VIE',to:'LHR',departure:now+70*60_000,fare:{economy:120,business:300,first:0}});
+      const broken=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'VIE',departure:w.flightActualArrival(first)+75*60_000,fare:{economy:120,business:300,first:0}});
+      first.weatherChecked=true; first.constraintChecked=true; first.opsChecked=true; first.enrouteChecked=true;
+      broken.weatherChecked=true; broken.constraintChecked=true; broken.opsChecked=true; broken.enrouteChecked=true;
+      w.recalculateOperations();
+      assert(w.updatePositioningConstraints(now),'future positioning scanner did not detect a broken later leg');
+      w.recalculateOperations();
+      assert(broken.positioningBlocked,'later broken aircraft chain leg was not marked out of position');
+      const context=w.aircraftOutOfPositionContextForFlight(broken,now);
+      assert(context.expectedLocation==='LHR'&&context.requiredLocation==='FRA','future positioning context did not use the projected previous arrival airport');
+      assert(w.processDerivedOperationalIncidents(now),'future positioning issue did not open an incident');
+      assert(w.openIncidentsForFlight(broken.id).some(item=>item.type==='aircraft_out_of_position'),'later broken aircraft chain did not create an out-of-position incident');
+    }
+
     result.textContent='PASS derived incidents validated';
   }catch(error){
     result.textContent='FAIL '+(error.stack||error);

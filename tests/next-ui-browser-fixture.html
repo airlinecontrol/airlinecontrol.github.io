@@ -209,10 +209,12 @@
     d.querySelector('#schedule-board').dispatchEvent(new MouseEvent('click',{bubbles:true}));
     await wait(80);
     assert(!d.querySelector('#schedule-board.has-selected-flight'),'clicking empty schedule space did not clear selected flight focus');
+    assert(!d.querySelector(`#schedule-board .planned-flight-block[data-flight-id="${flight.id}"]`),'unselected shifted flight still shows the planned ghost box');
     w.settleSelectedFlight(flight.id); await wait(80);
+    assert(d.querySelector(`[data-flight-id="${flight.id}"].shifted.delayed`),'shifted delayed flight is not painted yellow in the schedule');
     assert(d.querySelector(`[data-flight-id="${flight.id}"].shifted .flight-times`)?.textContent.includes('S '),'shifted flight does not show planned timing inside the single bar');
     assert(d.querySelector(`[data-flight-id="${flight.id}"].shifted .flight-times`)?.textContent.includes('A '),'shifted flight does not show actual timing inside the single bar');
-    assert(d.querySelector(`#schedule-board .planned-flight-block[data-flight-id="${flight.id}"]`),'shifted flight does not show the planned ghost box');
+    assert(d.querySelector(`#schedule-board .planned-flight-block[data-flight-id="${flight.id}"]`),'selected shifted flight does not show the planned ghost box');
     assert(!d.querySelector('#schedule-board .planned-flight-reference'),'schedule should not render a second planned lane');
     assert(d.querySelector(`[data-dispatch-occ-flight="${flight.id}"] [data-occ-swap-aircraft]`),'manual swap selector is missing despite an available spare');
     d.querySelector(`[data-dispatch-occ-flight="${flight.id}"] [data-occ-swap-aircraft]`).value=spare.id;
@@ -229,6 +231,14 @@
     d.querySelector(`[data-occ-cancel-single-flight="${cancelOut.id}"]`).click(); await wait(120);
     assert(cancelOut.cancelled,'single-flight cancel did not cancel selected flight');
     assert(!cancelReturn.cancelled,'single-flight cancel also cancelled the paired return leg');
+    assert(d.querySelector(`#schedule-board .flight-block.cancelled[data-flight-id="${cancelOut.id}"]`),'cancelled flight is not kept visible as a red schedule block');
+    const turnAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const turnOut=w.createFlightRecord({aircraftId:turnAc.id,from:'FRA',to:'CDG',departure:w.simNow()+7*60*60_000,fare:{economy:120,business:300,first:600},serviceId:'CANCEL_TURN',serviceLeg:'outbound'});
+    const turnReturn=w.createFlightRecord({aircraftId:turnAc.id,from:'CDG',to:'FRA',departure:w.flightActualArrival(turnOut)+80*60_000,fare:{economy:120,business:300,first:600},serviceId:'CANCEL_TURN',serviceLeg:'return'});
+    w.settleSelectedFlight(turnReturn.id); w.refreshAll(); await wait(120);
+    assert(d.querySelector(`[data-occ-cancel-turnaround="${turnReturn.id}"]`),'selected return leg does not expose turnaround cancellation');
+    d.querySelector(`[data-occ-cancel-turnaround="${turnReturn.id}"]`).click(); await wait(120);
+    assert(turnOut.cancelled&&turnReturn.cancelled,'turnaround cancellation did not cancel both paired legs');
     const shellBg=getComputedStyle(d.querySelector('.operations-rail')).backgroundColor;
     assert(getComputedStyle(d.querySelector('.topbar')).backgroundColor===shellBg,'top bar background does not match the side panels');
     assert(getComputedStyle(d.querySelector('#center-workspace')).backgroundColor===shellBg,'center workspace background does not match the side panels');
