@@ -1103,6 +1103,67 @@ function incidentCaseMarkup(incident){
   </article>`;
 }
 
+function disruptionCaseGroups(incidents,now=simNow()){
+  const byId=new Map((state.incidents||[]).map(incident=>[incident.id,incident]));
+  const groups=new Map();
+  for(const incident of incidents){
+    const key=incident.caseId||incident.rootIncidentId||incident.id;
+    if(!groups.has(key)){
+      const root=byId.get(incident.rootIncidentId)||byId.get(key)||incident;
+      groups.set(key,{id:key,root,incidents:[]});
+    }
+    groups.get(key).incidents.push(incident);
+  }
+  const severityScore=incident=>incident?.severity==='critical'?2:incident?.severity==='warning'?1:0;
+  return [...groups.values()].map(group=>{
+    group.incidents.sort((a,b)=>{
+      if(a.id===group.root.id) return -1;
+      if(b.id===group.root.id) return 1;
+      return Number(incidentIsActionable(b,now))-Number(incidentIsActionable(a,now))
+        ||severityScore(b)-severityScore(a)
+        ||(a.deadline||0)-(b.deadline||0);
+    });
+    return group;
+  }).sort((a,b)=>{
+    const aActive=a.incidents.some(incident=>incident.id===workspaceUi.nextActiveIncidentId);
+    const bActive=b.incidents.some(incident=>incident.id===workspaceUi.nextActiveIncidentId);
+    const aAction=a.incidents.some(incident=>incidentIsActionable(incident,now));
+    const bAction=b.incidents.some(incident=>incidentIsActionable(incident,now));
+    const aCritical=a.incidents.some(incident=>incident.severity==='critical');
+    const bCritical=b.incidents.some(incident=>incident.severity==='critical');
+    return Number(bActive)-Number(aActive)
+      ||Number(bAction)-Number(aAction)
+      ||Number(bCritical)-Number(aCritical)
+      ||Math.min(...a.incidents.map(incident=>incident.deadline||Infinity))-Math.min(...b.incidents.map(incident=>incident.deadline||Infinity));
+  });
+}
+
+function disruptionRootReference(root){
+  const flight=root?.flightId&&state.flights.find(item=>item.id===root.flightId);
+  const aircraft=root?.aircraftId&&state.aircraft.find(item=>item.id===root.aircraftId);
+  if(flight) return `${flight.id} · ${flight.from} → ${flightOperationalDestination(flight)}`;
+  if(aircraft) return `${aircraft.tail} · ${aircraft.model}`;
+  return 'Network disruption';
+}
+
+function disruptionCaseGroupMarkup(group){
+  const root=group.root||group.incidents[0],rootCopy=incidentCopy(root);
+  const actionable=group.incidents.filter(incident=>incidentIsActionable(incident)).length;
+  const effects=group.incidents.filter(incident=>incident.id!==root.id);
+  const chainRows=effects.slice(0,4).map(incident=>{
+    const copy=incidentCopy(incident);
+    return `<div class="disruption-chain-row"><span>${esc(incident.chainReason||'Operational consequence')}</span><b>${esc(copy.title)}</b></div>`;
+  }).join('');
+  return `<section class="disruption-case-group" data-disruption-case="${esc(group.id)}">
+    <header class="disruption-case-header">
+      <div><span>Disruption case · ${esc(disruptionRootReference(root))}</span><b>Root: ${esc(rootCopy.title||'Operational disruption')}</b></div>
+      <em>${actionable?`${actionable} actionable`:''}${actionable&&effects.length?' · ':''}${effects.length} effect${effects.length===1?'':'s'}</em>
+    </header>
+    ${chainRows?`<div class="disruption-chain-list">${chainRows}${effects.length>4?`<div class="disruption-chain-row muted"><span>More effects</span><b>${effects.length-4} additional open incident${effects.length-4===1?'':'s'}</b></div>`:''}</div>`:''}
+    <div class="disruption-incident-list">${group.incidents.map(incidentCaseMarkup).join('')}</div>
+  </section>`;
+}
+
 function deskActionBar(desk,actions){
   return `<div class="desk-action-bar">${actions.map(action=>{
     if(action.kind==='direct') return `<button class="desk-action-link" type="button" ${action.attr||''}>${esc(action.label)}</button>`;
@@ -1364,10 +1425,11 @@ function incidentFilterMarkup(allIncidents){
 function incidentsDeskMarkup(allIncidents){
   const filter=['actionable','today','watch','all'].includes(workspaceUi.incidentFilter)?workspaceUi.incidentFilter:'actionable';
   const incidents=filteredOperationalIncidents(allIncidents,filter);
+  const groups=disruptionCaseGroups(incidents);
   const empty=filter==='actionable'&&allIncidents.length
     ? '<div class="occ-clear-state"><b>No immediate cases</b><span>Open cases are parked in Today, Watch, or All.</span></div>'
     : '<div class="occ-clear-state"><b>Operation normal</b><span>No unresolved incidents require coordination.</span></div>';
-  return `${incidentFilterMarkup(allIncidents)}<div class="incident-case-list">${incidents.length?incidents.map(incidentCaseMarkup).join(''):empty}</div>`;
+  return `${incidentFilterMarkup(allIncidents)}<div class="incident-case-list">${groups.length?groups.map(group=>group.incidents.length>1?disruptionCaseGroupMarkup(group):incidentCaseMarkup(group.incidents[0])).join(''):empty}</div>`;
 }
 
 function connectionSeverityScore(manifest){
@@ -1443,6 +1505,7 @@ function renderDeskStack(force=false){
   const filteredIncidents=filteredOperationalIncidents(incidents);
   const activeIncident=activeIncidentCase(filteredIncidents);
   workspaceUi.nextActiveIncidentId=activeIncident?.id||'';
+  const disruptionGroupCount=disruptionCaseGroups(incidents).length;
   const activeRequests=(state.resourceRequests||[]).filter(item=>!['delivered','cancelled'].includes(item.status));
   const activeTransfers=(state.personnelTransfers||[]).filter(item=>!['completed','cancelled'].includes(item.status));
   const connectionRows=connectionRowsForWidget();
@@ -1456,7 +1519,7 @@ function renderDeskStack(force=false){
     selectedFlightId||'',selectedAircraftId||'',
     workspaceUi.nextActiveIncidentId||'',
     workspaceUi.incidentFilter||'actionable',
-    incidents.map(item=>`${item.id}:${item.status}:${item.blocking?1:0}:${(item.impacts||[]).map(impact=>`${impact.key}:${impact.status}:${impact.summary}`).join(',')}`).join('|'),
+    incidents.map(item=>`${item.id}:${item.status}:${item.blocking?1:0}:${item.caseId||''}:${item.rootIncidentId||''}:${item.triggeredByIncidentId||''}:${item.chainReason||''}:${(item.impacts||[]).map(impact=>`${impact.key}:${impact.status}:${impact.summary}`).join(',')}`).join('|'),
     actionableTasks().map(t=>`${t.id}:${t.status}:${t.completesAt}:${t.outcome||''}:${JSON.stringify(t.selection||{})}`).join('|'),
     (state.externalRequests||[]).map(item=>`${item.id}:${item.status}:${item.respondsAt}`).join('|'),
     activeRequests.map(item=>`${item.id}:${item.status}:${item.readyAt}`).join('|'),
@@ -1475,7 +1538,7 @@ function renderDeskStack(force=false){
   if(!force&&root.contains(document.activeElement)) return;
   lastDeskStackSignature=signature;
   restoreEmbeddedManagementPages();
-  root.innerHTML=`${occWidgetMarkup('incidents','Operational work','Open incidents',incidents.length,incidents.length?`${incidents.length} unresolved case${incidents.length===1?'':'s'}`:'No action required',deskActionBar('incidents',[
+  root.innerHTML=`${occWidgetMarkup('incidents','Operational work','Open incidents',disruptionGroupCount,incidents.length?`${disruptionGroupCount} disruption case${disruptionGroupCount===1?'':'s'} · ${incidents.length} open incident${incidents.length===1?'':'s'}`:'No action required',deskActionBar('incidents',[
       {kind:'direct',label:'Training scenario',attr:'data-training-incident'}
     ]),incidentsDeskMarkup(incidents))}
     ${occWidgetMarkup('planning','Dispatch planning','Dispatch & slots',activeRequests.filter(item=>item.kind==='aircraft').length,activeRequests.some(item=>item.kind==='aircraft')?'Requests underway':'Planner ready',deskActionBar('planning',[

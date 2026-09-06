@@ -882,7 +882,7 @@ function newState(){
     resourceRequests:[],
     fuelMarket:{pricePerGallon:FUEL_MARKET_BASE_EUR_GAL,updatedAt:sim},
     personnel:{assignments:{},lastPayrollAt:sim},
-    ops:{automaticDisruptions:true},
+    ops:{automaticDisruptions:true,caseLinksRepaired:true},
     management:{cycleStart:sim,reviews:[]},
     stats:{revenue:0,costs:0,staffCosts:0,leaseCosts:0,transferCosts:0,cancellationCosts:0,scheduledMaintenanceCosts:0,cancelled:0,pax:0,completed:0},
   };
@@ -934,6 +934,10 @@ function migrateState(parsed){
     if(incident.context===undefined) incident.context=null;
     if(!Number.isFinite(incident.lastDetectedAt)) incident.lastDetectedAt=incident.detectedAt;
     if(!Array.isArray(incident.impacts)) incident.impacts=[];
+    if(!incident.caseId) incident.caseId=incident.id;
+    if(!incident.rootIncidentId) incident.rootIncidentId=incident.id;
+    if(incident.triggeredByIncidentId===undefined) incident.triggeredByIncidentId='';
+    if(incident.chainReason===undefined) incident.chainReason='';
   }
   for(const task of parsed.coordinationTasks){
     if(task.branch===undefined) task.branch='';
@@ -979,6 +983,7 @@ function migrateState(parsed){
   if(!Number.isFinite(parsed.nextSlotRight)) parsed.nextSlotRight=1;
   if(!parsed.ops) parsed.ops={automaticDisruptions:true};
   parsed.ops.automaticDisruptions=true;
+  if(parsed.ops.caseLinksRepaired===undefined) parsed.ops.caseLinksRepaired=false;
   for(const ac of parsed.aircraft){
     if(!ac.acquisitionType) ac.acquisitionType='requested';
     if(ac.acquisitionType!=='requested'){

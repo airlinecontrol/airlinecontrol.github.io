@@ -638,6 +638,12 @@ const INCIDENT_DEFINITIONS={
   pressurization_issue:{title:'Pressurization issue',severity:'critical',decisionMin:15,summary:'The flight deck reports abnormal pressurization requiring immediate flight-watch support.',allowAirborne:true,airborneOnly:true}
 };
 const RETIRED_INCIDENT_TYPES=new Set(['slot_miss_risk','aircraft_late_inbound']);
+const DERIVED_INCIDENT_TYPES=new Set([
+  'aircraft_out_of_position','postflight_technical_defect','crew_duty_risk','crew_fatigue_mid_rotation','crew_misconnect','no_legal_crew',
+  'deicing_required','holdover_expired','airport_capacity_reduction','atc_ground_stop','night_curfew_conflict','performance_limited',
+  'destination_handling_unavailable','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute','destination_weather_deterioration',
+  'destination_below_minima','alternate_unsuitable','diversion_airport_unavailable','lightning_strike'
+]);
 
 function openIncidentsForFlight(flightId){
   return operationalIndex().openIncidentsByFlight.get(flightId)||[];
@@ -667,6 +673,85 @@ function incidentAirport(type,flight){
   return flight.from;
 }
 
+function incidentIsDerivedType(type,source=''){
+  return source==='derived'||DERIVED_INCIDENT_TYPES.has(type);
+}
+
+function incidentCaseParentScore(candidate,type,flight,context,detectedAt,sourceKey){
+  if(!candidate||candidate.status!=='open'||candidate.sourceKey&&sourceKey&&candidate.sourceKey===sourceKey) return 0;
+  if(candidate.flightId===flight.id&&candidate.type===type) return 0;
+  const index=operationalIndex(detectedAt);
+  const candidateFlight=candidate.flightId?index.flightsById.get(candidate.flightId):null;
+  let score=0;
+  if(context?.sourceIncidentId&&candidate.id===context.sourceIncidentId) score+=120;
+  if(context?.sourceId&&(candidate.id===context.sourceId||candidate.flightId===context.sourceId)) score+=80;
+  if(context?.previousFlightId&&candidate.flightId===context.previousFlightId) score+=85;
+  if(candidate.flightId===flight.id) score+=72;
+  if(candidate.aircraftId&&candidate.aircraftId===flight.aircraftId) score+=34;
+  if(candidate.airport&&candidate.airport===incidentAirport(type,flight)) score+=8;
+  if(!incidentIsDerivedType(candidate.type,candidate.source)) score+=20;
+  if(candidate.rootIncidentId&&candidate.rootIncidentId===candidate.id) score+=8;
+  if(candidate.detectedAt<=detectedAt) score+=10;
+  else score-=18;
+  if(candidateFlight&&candidateFlight.departure<=flight.departure) score+=12;
+  if(candidate.type==='night_curfew_conflict'&&type==='night_curfew_conflict') score-=60;
+  return score;
+}
+
+function findIncidentCaseParent(type,flight,context,detectedAt,source,sourceKey){
+  if(!incidentIsDerivedType(type,source)||!flight) return null;
+  let best=null,bestScore=0;
+  for(const candidate of state.incidents||[]){
+    const score=incidentCaseParentScore(candidate,type,flight,context,detectedAt,sourceKey);
+    if(score>bestScore){ best=candidate; bestScore=score; }
+  }
+  return bestScore>=55?best:null;
+}
+
+function incidentChainReason(type,parent,flight,context){
+  if(!parent) return '';
+  if(context?.previousFlightId&&parent.flightId===context.previousFlightId) return `Knock-on from inbound ${context.previousFlightId}`;
+  if(parent.flightId===flight.id) return 'Same disrupted flight';
+  if(parent.aircraftId===flight.aircraftId) return 'Same aircraft rotation';
+  if(context?.sourceId) return `Linked operational source ${context.sourceId}`;
+  return 'Linked operational consequence';
+}
+
+function ensureIncidentCaseFields(incident,parent=null,flight=null,context=null){
+  if(!incident) return false;
+  let changed=false;
+  if(parent){
+    const caseId=parent.caseId||parent.id;
+    const rootIncidentId=parent.rootIncidentId||parent.id;
+    if(incident.caseId!==caseId){ incident.caseId=caseId; changed=true; }
+    if(incident.rootIncidentId!==rootIncidentId){ incident.rootIncidentId=rootIncidentId; changed=true; }
+    if(incident.triggeredByIncidentId!==parent.id){ incident.triggeredByIncidentId=parent.id; changed=true; }
+    const reason=incidentChainReason(incident.type,parent,flight||state.flights.find(item=>item.id===incident.flightId),context||incident.context||null);
+    if(incident.chainReason!==reason){ incident.chainReason=reason; changed=true; }
+  }else{
+    if(!incident.caseId){ incident.caseId=incident.id; changed=true; }
+    if(!incident.rootIncidentId){ incident.rootIncidentId=incident.id; changed=true; }
+    if(incident.triggeredByIncidentId===undefined){ incident.triggeredByIncidentId=''; changed=true; }
+    if(incident.chainReason===undefined){ incident.chainReason=''; changed=true; }
+  }
+  return changed;
+}
+
+function repairIncidentCaseLinks(){
+  let changed=false;
+  for(const incident of state.incidents||[]) changed=ensureIncidentCaseFields(incident)||changed;
+  const open=(state.incidents||[]).filter(incident=>incident.status==='open'&&incidentIsDerivedType(incident.type,incident.source));
+  for(const incident of open){
+    if(incident.triggeredByIncidentId) continue;
+    const flight=state.flights.find(item=>item.id===incident.flightId);
+    if(!flight) continue;
+    const parent=findIncidentCaseParent(incident.type,flight,incident.context,incident.detectedAt||simNow(),incident.source,incident.sourceKey);
+    if(parent&&parent.id!==incident.id) changed=ensureIncidentCaseFields(incident,parent,flight,incident.context)||changed;
+  }
+  if(changed) invalidateOperationalIndex();
+  return changed;
+}
+
 function createIncident(type,flight,{training=false,detectedAt=simNow(),source='random',sourceKey='',context=null}={}){
   const definition=INCIDENT_DEFINITIONS[type];
   if(RETIRED_INCIDENT_TYPES.has(type)||!definition||!flight||flight.cancelled||flight.settled) return null;
@@ -674,29 +759,37 @@ function createIncident(type,flight,{training=false,detectedAt=simNow(),source='
   if(definition.airborneOnly&&!flightIsAirborne(flight,detectedAt)) return null;
   const duplicate=state.incidents.find(incident=>incident.flightId===flight.id&&incident.type===type&&incident.status==='open'&&(!sourceKey||incident.sourceKey===sourceKey));
   if(duplicate){
+    const parent=duplicate.triggeredByIncidentId?null:findIncidentCaseParent(type,flight,context,detectedAt,source,sourceKey);
     duplicate.context=context||duplicate.context||null;
     duplicate.lastDetectedAt=detectedAt;
+    ensureIncidentCaseFields(duplicate,parent,flight,duplicate.context);
     invalidateOperationalIndex();
     return duplicate;
   }
+  const id='INC'+state.nextIncident++;
+  const parent=findIncidentCaseParent(type,flight,context,detectedAt,source,sourceKey);
   const latestUsefulDeadline=Math.max(detectedAt+5*MIN,flight.departure);
   const airborne=flightIsAirborne(flight,detectedAt);
   const deadline=airborne
     ? Math.min(detectedAt+definition.decisionMin*MIN,Math.max(detectedAt+5*MIN,flightActualArrival(flight)))
     : Math.min(detectedAt+definition.decisionMin*MIN,latestUsefulDeadline);
   const incident={
-    id:'INC'+state.nextIncident++,type,flightId:flight.id,aircraftId:flight.aircraftId,
+    id,type,flightId:flight.id,aircraftId:flight.aircraftId,
     airport:incidentAirport(type,flight),
     detectedAt,deadline,status:'open',severity:definition.severity,blocking:true,
     training:Boolean(training),selectedAction:'',resolvedAt:0,outcome:'',automaticResolution:false,
-    technicalContext:['mel_defect','postflight_technical_defect'].includes(type)?OperationalIntelligence.melFinding(`INC${state.nextIncident-1}`,detectedAt):null,
+    technicalContext:['mel_defect','postflight_technical_defect'].includes(type)?OperationalIntelligence.melFinding(id,detectedAt):null,
     classification:OperationalWorkflows.WORKFLOWS[type]?.classification||'incident',workflowCreatedAt:0,overdue:false,
     affectedRole:type==='crew_sick'?crewSickRoleForFlight(flight):'',
-    recoveryPlan:'',recoveryPlanAt:0,source,sourceKey,context,lastDetectedAt:detectedAt,impacts:[]
+    recoveryPlan:'',recoveryPlanAt:0,source,sourceKey,context,lastDetectedAt:detectedAt,impacts:[],
+    caseId:parent?.caseId||parent?.id||id,
+    rootIncidentId:parent?.rootIncidentId||parent?.id||id,
+    triggeredByIncidentId:parent?.id||'',
+    chainReason:incidentChainReason(type,parent,flight,context)
   };
   if(type==='crew_fatigue_report') incident.affectedRole=crewSickRoleForFlight(flight);
   if(['no_legal_crew','crew_fatigue_mid_rotation'].includes(type)) incident.affectedRole=context?.role||'captains';
-  if(type==='bird_strike') incident.technicalContext=OperationalIntelligence.melFinding(`INC${state.nextIncident-1}:bird`,detectedAt);
+  if(type==='bird_strike') incident.technicalContext=OperationalIntelligence.melFinding(`${id}:bird`,detectedAt);
   if(type==='crew_misconnect') incident.affectedRole=context?.role||'captains';
   state.incidents.push(incident);
   ensureIncidentWorkflow(incident);
@@ -2717,6 +2810,12 @@ function processMelConstraints(t=simNow()){
 function processEvents(){
   let changed=false;
   let needsRecalc=false;
+  if(!state.ops?.caseLinksRepaired){
+    if(repairIncidentCaseLinks()) changed=true;
+    state.ops??={automaticDisruptions:true};
+    state.ops.caseLinksRepaired=true;
+    changed=true;
+  }
   if(ensureRecurringFlights()){ changed=true; needsRecalc=true; }
   const t=simNow();
   if(processOperationalWorkflows(t)){ changed=true; needsRecalc=true; }
