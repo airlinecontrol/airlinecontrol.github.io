@@ -1097,6 +1097,8 @@ function migrateState(parsed){
     if(f.nightRestrictionConflictLabel===undefined) f.nightRestrictionConflictLabel='';
     if(f.nightRecoveryDecision===undefined) f.nightRecoveryDecision='';
     if(f.nightRecoverySourceKey===undefined) f.nightRecoverySourceKey='';
+    if(f.arrivalCurfewCoordinatedKey===undefined) f.arrivalCurfewCoordinatedKey='';
+    if(f.arrivalCurfewCoordinatedAt===undefined) f.arrivalCurfewCoordinatedAt=0;
     if(f.constraintChecked===undefined) f.constraintChecked=Boolean(f.departureLogged);
     if(f.airportConstraintLabel===undefined) f.airportConstraintLabel='';
     if(f.airspaceConstraintLabel===undefined) f.airspaceConstraintLabel='';

@@ -543,6 +543,28 @@ function nightCurfewConflictContextForFlight(flight,proposedDeparture=flightActu
   };
 }
 
+function arrivalCurfewContextForFlight(flight,t=simNow()){
+  if(!flight||flight.cancelled||flight.settled||!flight.departureLogged||!flightIsAirborne(flight,t)) return null;
+  const destination=flightOperationalDestination(flight);
+  const expectedArrival=flightActualArrival(flight);
+  const status=airportNightStatus(destination,expectedArrival);
+  if(status.status!=='closed') return null;
+  const sourceKey=`arrival-curfew:${flight.id}:${destination}:${Math.floor(status.nextOpenAt/DAY)}`;
+  if(flight.arrivalCurfewCoordinatedKey===sourceKey) return null;
+  return {
+    sourceId:flight.id,
+    sourceKey,
+    active:true,
+    delayMin:Math.max(0,Math.ceil((status.nextOpenAt-expectedArrival)/MIN)),
+    expectedArrival,
+    plannedArrival:flight.arrival,
+    affectedAirport:destination,
+    affectedPhase:'arrival',
+    nextOpenAt:status.nextOpenAt,
+    reason:`Expected arrival inside ${destination} night curfew`
+  };
+}
+
 function dispatchBriefingForFlight(flight){
   const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
   if(!aircraft) return null;
@@ -663,6 +685,11 @@ function recalculateOperations(){
       f.taxiInDelayMin=taxiProfile.taxiInDelayMin;
       f.taxiDelayCauses=taxiProfile.causes;
       f.actualArrival=preliminaryArrival+(f.taxiOutDelayMin+f.taxiInDelayMin)*MIN;
+      const arrivalCurfew=arrivalCurfewContextForFlight(f,now);
+      if(arrivalCurfew){
+        f.nightRestrictionConflictDelayMin=arrivalCurfew.delayMin;
+        f.nightRestrictionConflictLabel=arrivalCurfew.reason;
+      }
       prev=f;
     }
   }
@@ -680,7 +707,7 @@ const INCIDENT_TYPE_ORDER=[
   'crew_sick','mel_defect','atc_restriction','gate_conflict','destination_closure_ground','destination_closure',
   'aircraft_out_of_position','aircraft_misposition_after_diversion','postflight_technical_defect',
   'crew_misconnect','crew_misposition_after_diversion','crew_report_delayed','no_legal_crew','crew_duty_extension',
-  'airport_capacity_reduction','atc_ground_stop','night_curfew_conflict','performance_limited','destination_handling_unavailable',
+  'airport_capacity_reduction','atc_ground_stop','night_curfew_conflict','arrival_curfew_coordination','performance_limited','destination_handling_unavailable',
   'fueling_issue','fuel_supplier_outage','deicing_required','deicing_capacity_collapse','security_screening','crew_fatigue_report','bird_strike'
 ];
 const INCIDENT_DEFINITIONS={
@@ -711,6 +738,7 @@ const INCIDENT_DEFINITIONS={
   airport_capacity_reduction:{title:'Airport capacity reduction',severity:'warning',decisionMin:35,summary:'A temporary airport capacity reduction is affecting departure flow.'},
   atc_ground_stop:{title:'ATC ground stop',severity:'critical',decisionMin:25,summary:'A destination or airspace ground stop prevents normal departure release.'},
   night_curfew_conflict:{title:'Night curfew conflict',severity:'critical',decisionMin:30,summary:'A delay now pushes the flight into an airport night curfew and needs an OCC recovery decision.'},
+  arrival_curfew_coordination:{title:'Arrival curfew coordination',severity:'critical',decisionMin:18,summary:'The airborne flight is projected to arrive inside a hard night curfew and needs arrival acceptance coordination.',allowAirborne:true,airborneOnly:true},
   performance_limited:{title:'Performance limited',severity:'critical',decisionMin:35,summary:'Route, fuel, weather, or MEL limits erode dispatch performance margin.'},
   destination_handling_unavailable:{title:'Destination handling unavailable',severity:'warning',decisionMin:35,summary:'The destination station cannot currently accept the arriving aircraft.',allowAirborne:true},
   security_screening:{title:'Security offload / manifest issue',severity:'critical',decisionMin:25,summary:'A security irregularity requires passenger, baggage, manifest, or departure coordination.'},
@@ -732,7 +760,7 @@ const RETIRED_INCIDENT_TYPES=new Set(['slot_miss_risk','aircraft_late_inbound'])
 const DERIVED_INCIDENT_TYPES=new Set([
   'aircraft_out_of_position','aircraft_misposition_after_diversion','postflight_technical_defect','crew_duty_risk',
   'crew_fatigue_mid_rotation','crew_misconnect','crew_misposition_after_diversion','no_legal_crew','crew_duty_extension',
-  'deicing_required','deicing_capacity_collapse','holdover_expired','airport_capacity_reduction','atc_ground_stop','night_curfew_conflict','performance_limited',
+  'deicing_required','deicing_capacity_collapse','holdover_expired','airport_capacity_reduction','atc_ground_stop','night_curfew_conflict','arrival_curfew_coordination','performance_limited',
   'destination_handling_unavailable','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute','destination_weather_deterioration',
   'destination_below_minima','alternate_unsuitable','diversion_airport_unavailable','lightning_strike'
 ]);
@@ -760,7 +788,7 @@ function crewSickRoleForFlight(flight){
 function incidentAirport(type,flight){
   if(['destination_closure','destination_closure_ground'].includes(type)) return flight.to;
   if(['destination_handling_unavailable'].includes(type)) return flightOperationalDestination(flight);
-  if(type==='night_curfew_conflict') return flightOperationalDestination(flight);
+  if(['night_curfew_conflict','arrival_curfew_coordination'].includes(type)) return flightOperationalDestination(flight);
   if(['onboard_medical','inflight_technical_fault','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute','unruly_passenger','destination_weather_deterioration','destination_below_minima','alternate_unsuitable','diversion_airport_unavailable','lightning_strike','pressurization_issue','crew_duty_extension'].includes(type)) return flightOperationalDestination(flight);
   return flight.from;
 }
@@ -858,6 +886,11 @@ function createIncident(type,flight,{training=false,detectedAt=simNow(),source='
     const destination=flightOperationalDestination(flight);
     const weather=Management.weatherAt(destination,flightActualArrival(flight));
     context={sourceId:flight.id,airport:destination,conditions:weather.conditions,capacityFactor:weather.capacityFactor,delayMin:Math.max(60,weather.delayMin||90),reason:'Destination unavailable before departure'};
+  }
+  if(type==='arrival_curfew_coordination'&&!context){
+    context=arrivalCurfewContextForFlight(flight,detectedAt);
+    if(!context) return null;
+    sourceKey=context.sourceKey;
   }
   const duplicate=state.incidents.find(incident=>incident.flightId===flight.id&&incident.type===type&&incident.status==='open'&&(!sourceKey||incident.sourceKey===sourceKey));
   if(duplicate){
@@ -1882,6 +1915,8 @@ function processDerivedOperationalIncidents(t=simNow()){
         if(airborneHandlingContext&&updateOpenDerivedIncident('destination_handling_unavailable',flight,Boolean(airborneHandlingContext.active),airborneHandlingContext,t)) changed=true;
         const diversionUnavailableContext=diversionAirportUnavailableContextForFlight(flight,t);
         if(diversionUnavailableContext&&updateOpenDerivedIncident('diversion_airport_unavailable',flight,Boolean(diversionUnavailableContext.active),diversionUnavailableContext,t)) changed=true;
+        const arrivalCurfewContext=arrivalCurfewContextForFlight(flight,t);
+        if(updateOpenDerivedIncident('arrival_curfew_coordination',flight,Boolean(arrivalCurfewContext?.active),arrivalCurfewContext,t)) changed=true;
         const dutyExtensionContext=crewDutyExtensionContextForFlight(flight,t);
         if(updateOpenDerivedIncident('crew_duty_extension',flight,Boolean(dutyExtensionContext?.active),dutyExtensionContext,t)) changed=true;
       }
@@ -2167,6 +2202,12 @@ function finalizeOperationalCase(incident){
     flight.nightRecoverySourceKey=context.sourceKey;
     flight.nightRecoveryApprovedAt=simNow();
     incident.outcome=`${flight.id} rescheduled after ${context.affectedAirport||flightOperationalDestination(flight)} night curfew; first feasible departure ${formatTime(context.nextDeparture)}.`;
+  }else if(incident.type==='arrival_curfew_coordination'){
+    const context=arrivalCurfewContextForFlight(flight,simNow())||incident.context;
+    if(!context?.sourceKey) return false;
+    flight.arrivalCurfewCoordinatedKey=context.sourceKey;
+    flight.arrivalCurfewCoordinatedAt=simNow();
+    incident.outcome=`${context.affectedAirport||flightOperationalDestination(flight)} curfew arrival acceptance coordinated for expected arrival ${formatTime(context.expectedArrival||flightActualArrival(flight))}.`;
   }else if(incident.type==='gate_conflict'){
     applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||30);
     incident.outcome=incident.stationOutcome||'Replacement stand and ground movement coordinated.';
@@ -3916,6 +3957,7 @@ function createFlightRecord({aircraftId,from,to,departure,fare,serviceId=null,se
       deicingCompletedAt:0,deicingHoldoverUntil:0,
       nightRestrictionDelayMin:0,nightRestrictionLabel:'',nightRestrictionConflictDelayMin:0,nightRestrictionConflictLabel:'',
     nightRecoveryDecision:'',nightRecoverySourceKey:'',nightRecoveryApprovedAt:0,
+    arrivalCurfewCoordinatedKey:'',arrivalCurfewCoordinatedAt:0,
     crewDutyId:'',crewDutySplit:false,crewSwappedAt:0,crewRoleSwaps:{},crewAugmentationPlanned:false,crewAugmentationReason:'',
     crewAccommodationArrangedAt:0,crewTransportArrangedAt:0,crewStoodDownAt:0,
     connectionPax:0,connectionCriticalPax:0,connectionAtRiskPax:0,connectionMissedPax:0,

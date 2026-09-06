@@ -496,6 +496,12 @@ body,
   text-align:center;
   box-shadow:0 0 0 1px rgba(241,210,125,.25);
 }
+.flight-night-marker.conflict{
+  min-width:16px;
+  background:#4a1f2b;
+  color:#ffc0cb;
+  box-shadow:0 0 0 1px rgba(255,125,145,.38),0 0 10px rgba(223,94,114,.25);
+}
 .flight-block.late-inbound-risk.has-night-marker .flight-night-marker{right:27px}
 .flight-block.late-inbound-risk.has-night-marker{padding-right:49px}
 .connection-line{top:33px!important}

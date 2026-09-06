@@ -1908,6 +1908,15 @@ function scheduleCrewDutyMarkup(duty,start,end,pxPerHour,lane=0,focusIds=new Set
   return `<div class="crew-duty-bar ${stateClass} ${duty.augmented?'augmented':''} ${focused?'focus':''} ${selected?'selected':''} ${swaps.length?'has-role-swap':''}" data-crew-duty="${esc(duty.id)}" title="${esc(title)}" style="left:${left}px;width:${width}px;--crew-duty-top:${64+lane*17}px"><span style="width:${formatPct(elapsed)}"></span><b>${esc(label)}</b>${swaps.length?`<em>${esc(swaps.length===1?swaps[0]:'roles')}</em>`:''}</div>`;
 }
 function scheduleNightMarkerInfo(flight){
+  const conflict=Number(flight.nightRestrictionConflictDelayMin)||0;
+  if(conflict>0){
+    const reason=flight.nightRestrictionConflictLabel||'Night curfew decision required';
+    return {
+      label:'N!',
+      className:'conflict',
+      title:`${reason} · expected ${shortClock(flightActualDeparture(flight))}-${shortClock(flightActualArrival(flight))} · planned ${shortClock(flight.departure)}-${shortClock(flight.arrival)}`
+    };
+  }
   const delay=Number(flight.nightRestrictionDelayMin)||0;
   if(delay<=0) return null;
   const reason=flight.nightRestrictionLabel||'Night operations restriction';
@@ -2081,7 +2090,7 @@ function refreshScheduleTimeline(force=false){
   const visibleAircraft=operationFilterActive()
     ? state.aircraft.filter(ac=>relevantByAircraft.has(ac.id))
     : state.aircraft;
-  const signature=[Math.floor(start/MIN),scheduleRangeHours,operationFilterSummary(),selectedFlightId||'',selectedAircraftId||'',Array.from(focusIds).sort().join(','),relevant.map(f=>`${f.id}:${flightActualDeparture(f)}:${flightActualArrival(f)}:${f.aircraftId}:${flightSlotImpactState(f,now).state}:${f.assignedSlot||0}:${f.cancelled?1:0}:${f.crewDutyId||''}:${f.crewDutySplit?1:0}:${f.nightRestrictionDelayMin||0}:${f.nightRestrictionLabel||''}:${scheduleFlightHasTimingShift(f)?1:0}:${lateInboundById.get(f.id)?.delayMin||0}:${lateInboundById.get(f.id)?.inboundReadyAt||0}`).join(','),(state.crewDuties||[]).map(d=>`${d.id}:${d.dutyStart}:${d.dutyEnd}:${d.legal?1:0}:${d.status}`).join(','),visibleAircraft.map(a=>a.id).join(',')].join('|');
+  const signature=[Math.floor(start/MIN),scheduleRangeHours,operationFilterSummary(),selectedFlightId||'',selectedAircraftId||'',Array.from(focusIds).sort().join(','),relevant.map(f=>`${f.id}:${flightActualDeparture(f)}:${flightActualArrival(f)}:${f.aircraftId}:${flightSlotImpactState(f,now).state}:${f.assignedSlot||0}:${f.cancelled?1:0}:${f.crewDutyId||''}:${f.crewDutySplit?1:0}:${f.nightRestrictionDelayMin||0}:${f.nightRestrictionLabel||''}:${f.nightRestrictionConflictDelayMin||0}:${f.nightRestrictionConflictLabel||''}:${scheduleFlightHasTimingShift(f)?1:0}:${lateInboundById.get(f.id)?.delayMin||0}:${lateInboundById.get(f.id)?.inboundReadyAt||0}`).join(','),(state.crewDuties||[]).map(d=>`${d.id}:${d.dutyStart}:${d.dutyEnd}:${d.legal?1:0}:${d.status}`).join(','),visibleAircraft.map(a=>a.id).join(',')].join('|');
   if(force||signature!==lastScheduleSignature){
     lastScheduleSignature=signature;
     let html='<div class="sched-header-row"><div class="sched-label"><b>Aircraft</b></div><div class="sched-timearea" style="width:'+timeWidth+'px">';
@@ -2126,7 +2135,7 @@ function refreshScheduleTimeline(force=false){
         const shifted=scheduleFlightHasTimingShift(f);
         if(shifted){
           const plannedStart=Math.max(start,f.departure),plannedEnd=Math.min(end,f.arrival);
-          if(plannedEnd>plannedStart) html+=`<div class="planned-flight-block ${night?'has-night-marker':''} ${focusClass} ${selected?'selected':''}" data-flight-id="${esc(f.id)}" title="${esc(`${f.id} planned ${shortClock(f.departure)}–${shortClock(f.arrival)}${night?` · ${night.title}`:''}`)}" style="left:${(plannedStart-start)/HOUR*pxPerHour}px;width:${Math.max(6,(plannedEnd-plannedStart)/HOUR*pxPerHour)}px"><span class="planned-flight-label">${esc(`${f.id} ${shortClock(f.departure)}`)}</span>${night?`<span class="flight-night-marker" title="${esc(night.title)}">${esc(night.label)}</span>`:''}</div>`;
+          if(plannedEnd>plannedStart) html+=`<div class="planned-flight-block ${night&&!night.className?'has-night-marker':''} ${focusClass} ${selected?'selected':''}" data-flight-id="${esc(f.id)}" title="${esc(`${f.id} planned ${shortClock(f.departure)}–${shortClock(f.arrival)}${night&&!night.className?` · ${night.title}`:''}`)}" style="left:${(plannedStart-start)/HOUR*pxPerHour}px;width:${Math.max(6,(plannedEnd-plannedStart)/HOUR*pxPerHour)}px"><span class="planned-flight-label">${esc(`${f.id} ${shortClock(f.departure)}`)}</span>${night&&!night.className?`<span class="flight-night-marker" title="${esc(night.title)}">${esc(night.label)}</span>`:''}</div>`;
         }
         const delayAnalysis=flightDelayAnalysis(f,index);
         const flightTitle=[
@@ -2134,7 +2143,7 @@ function refreshScheduleTimeline(force=false){
           lateInbound?.title,
           night?.title
         ].filter(Boolean).join('\n');
-        if(clippedEnd>clippedStart) html+=`<div class="flight-block ${st} ${shifted?'shifted':''} ${lateInbound?'late-inbound-risk':''} ${night?'has-night-marker':''} ${focusClass} ${selected?'selected':''}" data-flight-id="${esc(f.id)}" title="${esc(flightTitle)}" style="left:${left}px;width:${width}px"><div class="flight-code">${esc(f.id)}${delay?` <span class="delay-text">+${delay}</span>`:''}</div>${lateInbound?`<span class="flight-late-inbound" title="${esc(lateInbound.title)}">IN</span>`:''}${night?`<span class="flight-night-marker" title="${esc(night.title)}">${esc(night.label)}</span>`:''}<div class="flight-route">${esc(f.from)} → ${esc(destination)}</div><div class="flight-times">${shifted?`<span class="sched">S ${shortClock(f.departure)}</span> · <span class="actual">A ${shortClock(actualDep)}</span>`:`${shortClock(actualDep)}–${shortClock(actualArr)}`}</div></div>`;
+        if(clippedEnd>clippedStart) html+=`<div class="flight-block ${st} ${shifted?'shifted':''} ${lateInbound?'late-inbound-risk':''} ${night?'has-night-marker':''} ${focusClass} ${selected?'selected':''}" data-flight-id="${esc(f.id)}" title="${esc(flightTitle)}" style="left:${left}px;width:${width}px"><div class="flight-code">${esc(f.id)}${delay?` <span class="delay-text">+${delay}</span>`:''}</div>${lateInbound?`<span class="flight-late-inbound" title="${esc(lateInbound.title)}">IN</span>`:''}${night?`<span class="flight-night-marker ${esc(night.className||'')}" title="${esc(night.title)}">${esc(night.label)}</span>`:''}<div class="flight-route">${esc(f.from)} → ${esc(destination)}</div><div class="flight-times">${shifted?`<span class="sched">S ${shortClock(f.departure)}</span> · <span class="actual">A ${shortClock(actualDep)}</span>`:`${shortClock(actualDep)}–${shortClock(actualArr)}`}</div></div>`;
         const next=flights[i+1];
         if(next){
           const nextDep=flightActualDeparture(next),gapMs=nextDep-actualArr,turn=turnaroundGapInfo(f,next,ac);

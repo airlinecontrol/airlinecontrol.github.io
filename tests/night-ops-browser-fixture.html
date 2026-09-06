@@ -75,8 +75,8 @@
     w.alignScheduleWindowToFlight(flight);
     w.refreshAll();
     await wait(100);
-    const block=d.querySelector(`[data-flight-id="${flight.id}"]`);
-    assert(!block?.querySelector('.flight-night-marker'),'pending night curfew conflict should not show an applied night-delay marker');
+    const block=d.querySelector(`.flight-block[data-flight-id="${flight.id}"]`);
+    assert(block?.querySelector('.flight-night-marker.conflict')?.textContent.trim()==='N!','pending night curfew conflict should show a red conflict marker');
     const nightBar=d.querySelector('#schedule-board .night-closure-bar[data-night-airport="FRA"]');
     assert(nightBar,'arrival near curfew did not render a horizontal night closure bar');
     assert(nightBar.textContent.includes('23:00')&&nightBar.textContent.includes('05:00'),'night closure bar does not show local closure times');
@@ -85,6 +85,34 @@
     assert(flight.nightRecoveryDecision==='reschedule_after_curfew','flight did not store the night recovery decision');
     assert(flight.nightRestrictionDelayMin>=300,'reschedule-after-curfew did not apply the night restriction delay');
     assert(w.flightActualDeparture(flight)>=incident.context.nextDeparture,'rescheduled flight did not move to the airport reopening plan');
+
+    const airborneAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'LHR');
+    w.changeStaff('LHR','operations',1);
+    const airborne=w.createFlightRecord({
+      aircraftId:airborneAc.id,
+      from:'LHR',
+      to:'FRA',
+      departure:w.simNow()-35*60_000,
+      fare:{economy:140,business:360,first:700}
+    });
+    airborne.departureLogged=true;
+    airborne.arrival=futureFraStart-10*60_000;
+    airborne.operationalDurationMs=airborne.arrival-airborne.departure;
+    airborne.enrouteDelayMin=30;
+    w.recalculateOperations();
+    assert(airborne.nightRestrictionConflictDelayMin>0,'airborne curfew arrival did not expose a schedule conflict');
+    assert(w.processDerivedOperationalIncidents(w.simNow()),'airborne curfew arrival did not create a derived incident');
+    const airborneIncident=w.eval(`state.incidents.find(item=>item.flightId==='${airborne.id}'&&item.type==='arrival_curfew_coordination'&&item.status==='open')`);
+    assert(airborneIncident,'arrival curfew coordination incident is missing');
+    w.alignScheduleWindowToFlight(airborne);
+    w.refreshAll();
+    await wait(100);
+    const airborneBlock=d.querySelector(`.flight-block[data-flight-id="${airborne.id}"]`);
+    assert(airborneBlock?.querySelector('.flight-night-marker.conflict')?.textContent.trim()==='N!','airborne curfew arrival should show a red conflict marker');
+    const airborneTask=w.incidentTasks(airborneIncident.id).find(item=>item.kind==='flight_watch_coordination');
+    assert(w.performOperationalTask(airborneTask.id),'arrival curfew coordination task did not start');
+    for(let i=0;i<12&&airborneTask.status!=='completed';i++){ w.processOperationalWorkflows(w.simNow()+10*60_000); await wait(10); }
+    assert(airborne.arrivalCurfewCoordinatedKey===airborneIncident.context.sourceKey,'arrival curfew coordination was not acknowledged on the flight');
 
     const reopening=incident.context.nextDeparture;
     const morningAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');

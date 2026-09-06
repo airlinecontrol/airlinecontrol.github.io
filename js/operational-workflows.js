@@ -89,6 +89,9 @@
         {id:'reschedule_after_curfew',label:'Reschedule after curfew',detail:'Publish the first feasible departure after the airport reopens.'}
       ]},
     ])},
+    arrival_curfew_coordination:{classification:'derived',steps:[
+      {key:'dispatch-arrival-curfew-coordinate',department:'dispatch',kind:'flight_watch_coordination',label:'Coordinate curfew arrival exception',detail:'The flight is already airborne and projected to arrive inside a hard night curfew. Coordinate airport, ATC, station, and handling acceptance.'}
+    ]},
     gate_conflict:{classification:'constraint',steps:withCancellation([
       {key:'station-stand-strategy',department:'station',kind:'recovery_strategy',label:'Choose stand recovery',detail:'Select the practical stand or gate recovery path.',options:[
         {id:'remote',label:'Use remote stand',detail:'Accept remote parking and passenger bussing.'},
