@@ -55,8 +55,8 @@
     if(task.key==='crew-misconnect-strategy'&&optionId==='wait_crew') return `${consequenceDelayText(incident.context?.delayMin||25)} · crew transfer becomes the departure driver`;
     if(['crew-duty-strategy','crew-fatigue-strategy'].includes(task.key)&&optionId==='augment') return 'no extra delay if crew is available · extra crew tied up';
 
-    if(['mx-strategy','mx-bird-strategy','mx-postflight-strategy'].includes(task.key)){
-      if(optionId==='defer'||optionId==='release') return 'minimal delay after engineering sign-off · MEL restrictions may remain';
+    if(['mx-strategy','mx-postflight-strategy'].includes(task.key)){
+      if(optionId==='defer') return 'minimal delay after engineering sign-off · MEL restrictions may remain';
       if(optionId==='repair') return `possible +120 min delay · ${rotationRiskText(flight)}`;
       if(optionId==='substitute') return replacementConsequenceText(incident);
     }
@@ -116,6 +116,10 @@
       const next=incident.context?.nextDeparture?formatTime(incident.context.nextDeparture):'after airport reopening';
       return `${consequenceDelayText(delay)} · first feasible departure ${next}`;
     }
+    if(task.key==='dispatch-ground-destination-strategy'){
+      if(optionId==='delay_reopen') return `${consequenceDelayText(incident.context?.delayMin||90)} · aircraft waits on ground for destination acceptance`;
+      if(optionId==='alternate_destination') return `new destination plan · ${diversionConsequenceText(incident)}`;
+    }
     if(task.key==='dispatch-performance-strategy'){
       if(optionId==='payload_reduce') return `possible +20 min delay · about ${incident.context?.payloadReductionPct||12}% payload offload`;
       if(optionId==='delay_conditions') return `${consequenceDelayText(incident.context?.delayMin||45)} · waits for runway/weather performance margin`;
@@ -141,6 +145,7 @@
       if(optionId==='conserve') return 'flight deck reports conservation profile · no planned route delay · fuel margin watched';
       if(optionId==='direct') return 'flight deck requests priority/shortcut · arrival recovery possible if ATC approves';
       if(optionId==='divert') return `fuel diversion requested · ${diversionConsequenceText(incident)}`;
+      if(optionId==='return_origin') return `return requested · ${diversionConsequenceText(incident,{returnOrigin:true})}`;
     }
     if(task.key==='dispatch-holding-fuel-decision'){
       if(optionId==='direct') return 'flight deck requests priority/shortcut · fuel margin may improve if ATC reduces holding';
@@ -178,6 +183,11 @@
     if(task.key==='dispatch-lightning-decision'){
       if(optionId==='continue') return 'flight deck continues · arrival inspection required · aircraft may be held after landing';
       if(optionId==='divert') return `inspection diversion requested · ${diversionConsequenceText(incident)}`;
+    }
+    if(task.key==='dispatch-bird-decision'){
+      if(optionId==='continue') return 'flight deck continues · arrival inspection required · aircraft may be held after landing';
+      if(optionId==='divert') return `inspection diversion requested · ${diversionConsequenceText(incident)}`;
+      if(optionId==='return_origin') return `return requested · ${diversionConsequenceText(incident,{returnOrigin:true})}`;
     }
     if(task.key==='dispatch-pressure-decision'){
       if(optionId==='continue_low') return 'flight deck continues lower · possible +25 min delay · higher fuel burn';

@@ -12,7 +12,7 @@ const assertRecordedAuthorityOptions=task=>{
 };
 assert.deepEqual(Object.keys(workflows.DEPARTMENTS),['dispatch','crew','maintenance','station']);
 assert.deepEqual(Object.keys(workflows.WORKFLOWS),[
-  'crew_sick','mel_defect','atc_restriction','night_curfew_conflict','gate_conflict','destination_closure',
+  'crew_sick','mel_defect','atc_restriction','night_curfew_conflict','gate_conflict','destination_closure','destination_closure_ground',
   'aircraft_out_of_position','postflight_technical_defect',
   'crew_misconnect','crew_duty_risk','crew_fatigue_report','crew_fatigue_mid_rotation',
   'no_legal_crew','baggage_loading_issue','fueling_issue','deicing_required',
@@ -29,10 +29,16 @@ assert.equal(tasks[0].status,'available');
 assert.equal(tasks[1].status,'blocked');
 assert.equal(tasks[0].kind,'flight_watch_assessment');
 assert.equal(tasks[1].kind,'authority_decision');
-assert.deepEqual(tasks[1].strategyOptions.map(option=>option.id),['alternate','return_origin','cancel']);
+assert.deepEqual(tasks[1].strategyOptions.map(option=>option.id),['alternate','return_origin']);
 assertRecordedAuthorityOptions(tasks[1]);
 assert.equal(tasks.some(task=>task.kind==='dispatch_release'),false);
 assert.equal(tasks.some(task=>task.kind==='flight_cancellation'),false);
+
+const groundClosureTasks=workflows.tasksForIncident({id:'INC9B',type:'destination_closure_ground',flightId:'AS9B',aircraftId:'AC9B',detectedAt:1000});
+assert.equal(groundClosureTasks.length,3);
+assert.deepEqual(groundClosureTasks.find(task=>task.key==='dispatch-ground-destination-strategy').strategyOptions.map(option=>option.id),['delay_reopen','alternate_destination','cancel']);
+assert.equal(groundClosureTasks.find(task=>task.key==='dispatch-destination-hold').kind,'inbound_wait');
+assert.equal(groundClosureTasks.find(task=>task.key==='dispatch-alternate').branch,'alternate_destination');
 
 const melTasks=workflows.tasksForIncident({id:'INC10',type:'mel_defect',flightId:'AS10',aircraftId:'AC10',detectedAt:1000});
 assert.equal(melTasks.length,5);
@@ -117,9 +123,10 @@ assert.equal(inflightTechTasks.some(task=>task.kind==='flight_cancellation'),fal
 
 const fuelTasks=workflows.tasksForIncident({id:'INC19',type:'fuel_margin_low',flightId:'AS19',aircraftId:'AC19',detectedAt:1000});
 assert.equal(fuelTasks.find(task=>task.key==='dispatch-fuel-decision').kind,'authority_decision');
-assert.deepEqual(fuelTasks.find(task=>task.key==='dispatch-fuel-decision').strategyOptions.map(option=>option.id),['conserve','direct','divert']);
+assert.deepEqual(fuelTasks.find(task=>task.key==='dispatch-fuel-decision').strategyOptions.map(option=>option.id),['conserve','direct','divert','return_origin']);
 assertRecordedAuthorityOptions(fuelTasks.find(task=>task.key==='dispatch-fuel-decision'));
 assert.equal(fuelTasks.find(task=>task.key==='dispatch-fuel-direct').kind,'reroute_coordination');
+assert.equal(fuelTasks.find(task=>task.key==='dispatch-return-origin').kind,'return_origin_selection');
 
 const holdingFuelTasks=workflows.tasksForIncident({id:'INC19B',type:'atc_holding_fuel_conflict',flightId:'AS19B',aircraftId:'AC19B',detectedAt:1000});
 assert.equal(holdingFuelTasks.find(task=>task.key==='dispatch-holding-fuel-decision').kind,'authority_decision');
@@ -159,6 +166,13 @@ assert.equal(lightningTasks.find(task=>task.key==='dispatch-lightning-decision')
 assert.deepEqual(lightningTasks.find(task=>task.key==='dispatch-lightning-decision').strategyOptions.map(option=>option.id),['continue','divert']);
 assertRecordedAuthorityOptions(lightningTasks.find(task=>task.key==='dispatch-lightning-decision'));
 assert.equal(lightningTasks.find(task=>task.kind==='arrival_maintenance_check').branch,'continue');
+
+const birdTasks=workflows.tasksForIncident({id:'INC23B',type:'bird_strike',flightId:'AS23B',aircraftId:'AC23B',detectedAt:1000});
+assert.equal(birdTasks.find(task=>task.key==='dispatch-bird-decision').kind,'authority_decision');
+assert.deepEqual(birdTasks.find(task=>task.key==='dispatch-bird-decision').strategyOptions.map(option=>option.id),['continue','divert','return_origin']);
+assertRecordedAuthorityOptions(birdTasks.find(task=>task.key==='dispatch-bird-decision'));
+assert.equal(birdTasks.some(task=>task.kind==='maintenance_inspection'),false);
+assert.equal(birdTasks.find(task=>task.kind==='arrival_maintenance_check').branch,'continue');
 
 const pressureTasks=workflows.tasksForIncident({id:'INC24',type:'pressurization_issue',flightId:'AS24',aircraftId:'AC24',detectedAt:1000});
 assert.equal(pressureTasks.find(task=>task.key==='dispatch-pressure-decision').kind,'authority_decision');

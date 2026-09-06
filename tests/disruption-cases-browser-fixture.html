@@ -35,7 +35,7 @@
     w.refreshAll(); await wait(140);
     const group=d.querySelector(`[data-disruption-case="${CSS.escape(root.caseId)}"]`);
     assert(group,'disruption case group was not rendered');
-    assert(group.textContent.includes('Root:')&&group.textContent.includes('MEL technical defect'),'group does not show the root cause');
+    assert(group.textContent.includes('Root:')&&group.textContent.includes('Ground technical defect'),'group does not show the root cause');
     assert(group.textContent.includes('Crew duty risk'),'group does not show the derived effect');
     assert(group.querySelectorAll('[data-incident-case]').length===2,'group should contain both incident cards');
     result.textContent=`PASS\ncase=${root.caseId}\nroot=${root.id}\neffect=${effect.id}`;

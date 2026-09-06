@@ -882,7 +882,7 @@ function newState(){
     resourceRequests:[],
     fuelMarket:{pricePerGallon:FUEL_MARKET_BASE_EUR_GAL,updatedAt:sim},
     personnel:{assignments:{},lastPayrollAt:sim},
-    ops:{automaticDisruptions:true,caseLinksRepaired:true},
+    ops:{automaticDisruptions:true,caseLinksRepaired:true,phaseRealismRepaired:true},
     management:{cycleStart:sim,reviews:[]},
     stats:{revenue:0,costs:0,staffCosts:0,leaseCosts:0,transferCosts:0,cancellationCosts:0,scheduledMaintenanceCosts:0,cancelled:0,pax:0,completed:0},
   };
@@ -984,6 +984,7 @@ function migrateState(parsed){
   if(!parsed.ops) parsed.ops={automaticDisruptions:true};
   parsed.ops.automaticDisruptions=true;
   if(parsed.ops.caseLinksRepaired===undefined) parsed.ops.caseLinksRepaired=false;
+  if(parsed.ops.phaseRealismRepaired===undefined) parsed.ops.phaseRealismRepaired=false;
   for(const ac of parsed.aircraft){
     if(!ac.acquisitionType) ac.acquisitionType='requested';
     if(ac.acquisitionType!=='requested'){

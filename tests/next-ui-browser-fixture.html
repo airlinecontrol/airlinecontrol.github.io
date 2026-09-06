@@ -24,7 +24,7 @@
     frame.src='../index.html?fixture=next-ui&cache='+Date.now();
     await cleanLoaded;
     const w=frame.contentWindow,d=frame.contentDocument;
-    const ac=w.requestAircraft('A320neo');
+    const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
     const departure=w.simNow()+150*60_000;
     const flight=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'LHR',departure,fare:{economy:140,business:360,first:700}});
     flight.weatherChecked=true;
@@ -162,7 +162,7 @@
     assert(d.querySelector('#rail-body-activeFlights').hidden,'active widget did not collapse');
     d.querySelector('[data-toggle-rail="activeFlights"]').click(); await wait(50);
     assert(!d.querySelector('#rail-body-activeFlights').hidden,'active widget did not reopen');
-    assert(!d.querySelector('#aircraftList .list-reason'),'flight-only crew incident was duplicated on the aircraft row');
+    assert(![...d.querySelectorAll('#aircraftList .list-reason')].some(item=>item.textContent.includes('Crew sick')),'flight-only crew incident was duplicated on the aircraft row');
     assert(!d.querySelector('#attentionList'),'a separate attention list exists');
     const activeAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'AMS');
     const activeFlight=w.createFlightRecord({aircraftId:activeAc.id,from:'AMS',to:'CDG',departure:w.simNow()-45*60_000,fare:{economy:140,business:360,first:700}});
@@ -409,6 +409,7 @@
       const personnelEstimate=w.estimateFlight('FRA','AMS',ac2,{economy:140,business:360,first:700},{departure:personnelDeparture});
       w.requestPersonnelDeficitsForFlight(ac2,personnelDeparture,personnelEstimate.duration,'FRA');
       w.createFlightRecord({aircraftId:ac2.id,from:'FRA',to:'AMS',departure:personnelDeparture,fare:{economy:140,business:360,first:700}});
+      w.processResourceRequests(Number.MAX_SAFE_INTEGER);
       w.save();
       const saved=JSON.parse(w.localStorage.getItem('aerosim_mvp_v6'));
       const scheduled=saved.flights.find(item=>item.aircraftId===ac2.id&&item.from==='FRA'&&item.to==='AMS'&&!item.cancelled);

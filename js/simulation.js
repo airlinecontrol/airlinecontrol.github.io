@@ -594,17 +594,18 @@ function getNextGroundFlightForAircraft(acId,t=simNow()){
 function logEvent(){ /* operations log intentionally disabled */ }
 
 const INCIDENT_TYPE_ORDER=[
-  'crew_sick','mel_defect','atc_restriction','gate_conflict','destination_closure',
+  'crew_sick','mel_defect','atc_restriction','gate_conflict','destination_closure_ground','destination_closure',
   'aircraft_out_of_position','postflight_technical_defect','crew_misconnect','no_legal_crew',
   'airport_capacity_reduction','atc_ground_stop','night_curfew_conflict','performance_limited','destination_handling_unavailable',
   'fueling_issue','deicing_required','security_screening','crew_fatigue_report','bird_strike'
 ];
 const INCIDENT_DEFINITIONS={
   crew_sick:{title:'Crew sick call',severity:'critical',decisionMin:30,summary:'A required operating crew member reported unavailable.'},
-  mel_defect:{title:'MEL technical defect',severity:'critical',decisionMin:25,summary:'A defect requires an operational airworthiness decision.'},
+  mel_defect:{title:'Ground technical defect',severity:'critical',decisionMin:25,summary:'A pre-departure aircraft defect requires maintenance-control disposition.'},
   atc_restriction:{title:'ATC flow restriction',severity:'warning',decisionMin:35,summary:'Air traffic control issued a regulated departure window.'},
   gate_conflict:{title:'Gate conflict',severity:'warning',decisionMin:30,summary:'The planned gate is unavailable for this departure.'},
-  destination_closure:{title:'Destination closure',severity:'critical',decisionMin:20,summary:'The destination airport is temporarily unavailable.',allowAirborne:true},
+  destination_closure_ground:{title:'Destination closure',severity:'critical',decisionMin:35,summary:'The destination is unavailable before departure and needs an OCC operating decision.'},
+  destination_closure:{title:'Destination closure',severity:'critical',decisionMin:20,summary:'The destination airport became unavailable while the flight is airborne.',allowAirborne:true,airborneOnly:true},
   aircraft_out_of_position:{title:'Aircraft out of position',severity:'critical',decisionMin:35,summary:'The assigned aircraft is not projected to be at the planned origin in time.'},
   postflight_technical_defect:{title:'Post-flight technical defect',severity:'critical',decisionMin:30,summary:'The inbound aircraft needs engineering disposition before the next sector.'},
   crew_duty_risk:{title:'Crew duty risk',severity:'critical',decisionMin:40,summary:'The planned duty is projected to exceed the crew duty envelope.'},
@@ -623,7 +624,7 @@ const INCIDENT_DEFINITIONS={
   performance_limited:{title:'Performance limited',severity:'critical',decisionMin:35,summary:'Route, fuel, weather, or MEL limits erode dispatch performance margin.'},
   destination_handling_unavailable:{title:'Destination handling unavailable',severity:'warning',decisionMin:35,summary:'The destination station cannot currently accept the arriving aircraft.',allowAirborne:true},
   security_screening:{title:'Security offload / manifest issue',severity:'critical',decisionMin:25,summary:'A security irregularity requires passenger, baggage, manifest, or departure coordination.'},
-  bird_strike:{title:'Suspected bird strike',severity:'critical',decisionMin:25,summary:'A suspected bird strike requires engineering inspection before dispatch.'},
+  bird_strike:{title:'Suspected bird strike',severity:'critical',decisionMin:18,summary:'The flight deck reports a suspected bird strike while airborne.',allowAirborne:true,airborneOnly:true},
   onboard_medical:{title:'Onboard medical case',severity:'critical',decisionMin:20,summary:'The flight deck reports a medical case requiring OCC coordination.',allowAirborne:true,airborneOnly:true},
   inflight_technical_fault:{title:'Inflight technical fault',severity:'critical',decisionMin:20,summary:'The flight deck reports a technical abnormality requiring flight-watch coordination.',allowAirborne:true,airborneOnly:true},
   fuel_margin_low:{title:'Fuel margin low',severity:'critical',decisionMin:18,summary:'Projected landing fuel is below the planned operational margin.',allowAirborne:true,airborneOnly:true},
@@ -666,7 +667,7 @@ function crewSickRoleForFlight(flight){
 }
 
 function incidentAirport(type,flight){
-  if(type==='destination_closure') return flight.to;
+  if(['destination_closure','destination_closure_ground'].includes(type)) return flight.to;
   if(['destination_handling_unavailable'].includes(type)) return flightOperationalDestination(flight);
   if(type==='night_curfew_conflict') return flightOperationalDestination(flight);
   if(['onboard_medical','inflight_technical_fault','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute','unruly_passenger','destination_weather_deterioration','destination_below_minima','alternate_unsuitable','diversion_airport_unavailable','lightning_strike','pressurization_issue'].includes(type)) return flightOperationalDestination(flight);
@@ -753,10 +754,20 @@ function repairIncidentCaseLinks(){
 }
 
 function createIncident(type,flight,{training=false,detectedAt=simNow(),source='random',sourceKey='',context=null}={}){
+  if(type==='destination_closure'&&flight&&!flightIsAirborne(flight,detectedAt)) type='destination_closure_ground';
   const definition=INCIDENT_DEFINITIONS[type];
   if(RETIRED_INCIDENT_TYPES.has(type)||!definition||!flight||flight.cancelled||flight.settled) return null;
+  if(!training&&!flight.departureLogged&&!definition.airborneOnly){
+    const leadMin=definition.maxAutoLeadMin||(source==='derived'?360:180);
+    if(detectedAt<flightActualDeparture(flight)-leadMin*MIN) return null;
+  }
   if(flight.departureLogged&&!definition.allowAirborne) return null;
   if(definition.airborneOnly&&!flightIsAirborne(flight,detectedAt)) return null;
+  if(type==='destination_closure_ground'&&!context){
+    const destination=flightOperationalDestination(flight);
+    const weather=Management.weatherAt(destination,flightActualArrival(flight));
+    context={sourceId:flight.id,airport:destination,conditions:weather.conditions,capacityFactor:weather.capacityFactor,delayMin:Math.max(60,weather.delayMin||90),reason:'Destination unavailable before departure'};
+  }
   const duplicate=state.incidents.find(incident=>incident.flightId===flight.id&&incident.type===type&&incident.status==='open'&&(!sourceKey||incident.sourceKey===sourceKey));
   if(duplicate){
     const parent=duplicate.triggeredByIncidentId?null:findIncidentCaseParent(type,flight,context,detectedAt,source,sourceKey);
@@ -806,11 +817,10 @@ const PRE_DEPARTURE_INCIDENT_GENERATORS=[
   {type:'mel_defect',weight:.9,eligible:(f,t)=>Management.maintenanceStatus(state.aircraft.find(a=>a.id===f.aircraftId),t)?.due||Math.random()<.45},
   {type:'atc_restriction',weight:1},
   {type:'gate_conflict',weight:.85},
-  {type:'destination_closure',weight:.5,eligible:f=>distanceKm(AIRPORTS[f.from],AIRPORTS[f.to])>250},
+  {type:'destination_closure_ground',weight:.5,eligible:f=>distanceKm(AIRPORTS[f.from],AIRPORTS[f.to])>250},
   {type:'fueling_issue',weight:.75},
   {type:'security_screening',weight:.55,eligible:f=>f.flightType!=='ferry'},
-  {type:'crew_fatigue_report',weight:.55,eligible:f=>flightUsesLocalCrew(f)},
-  {type:'bird_strike',weight:.45}
+  {type:'crew_fatigue_report',weight:.55,eligible:f=>flightUsesLocalCrew(f)}
 ];
 
 const GROUND_DELAY_CAUSES=[
@@ -1689,6 +1699,37 @@ function ensureOperationalWorkflows(){
   return changed;
 }
 
+function repairIncidentPhaseRealism(t=simNow()){
+  let changed=false;
+  for(const incident of state.incidents||[]){
+    if(incident.status!=='open') continue;
+    const flight=state.flights.find(item=>item.id===incident.flightId);
+    if(!flight) continue;
+    const started=incidentTasks(incident.id).some(task=>['completed','in_progress','waiting_external'].includes(task.status));
+    if(started) continue;
+    if(incident.type==='destination_closure'&&!flightIsAirborne(flight,t)){
+      incident.type='destination_closure_ground';
+      incident.summary=INCIDENT_DEFINITIONS.destination_closure_ground.summary;
+      incident.context??={sourceId:flight.id,airport:flightOperationalDestination(flight),delayMin:90,reason:'Destination unavailable before departure'};
+      incident.classification=OperationalWorkflows.WORKFLOWS.destination_closure_ground.classification;
+      incident.selectedStrategy='';
+      ensureIncidentWorkflow(incident);
+      changed=true;
+    }else if(incident.type==='bird_strike'&&!flightIsAirborne(flight,t)){
+      incident.type='mel_defect';
+      incident.summary=INCIDENT_DEFINITIONS.mel_defect.summary;
+      incident.context={...(incident.context||{}),phaseRepair:'Ground bird-strike report reframed as a ground technical defect'};
+      incident.technicalContext=incident.technicalContext||OperationalIntelligence.melFinding(`${incident.id}:ground`,incident.detectedAt||t);
+      incident.classification=OperationalWorkflows.WORKFLOWS.mel_defect.classification;
+      incident.selectedStrategy='';
+      ensureIncidentWorkflow(incident);
+      changed=true;
+    }
+  }
+  if(changed) invalidateOperationalIndex();
+  return changed;
+}
+
 function openDepartmentTasks(department){
   return (state.coordinationTasks||[]).filter(task=>{
     const incident=state.incidents.find(item=>item.id===task.incidentId);
@@ -1801,6 +1842,18 @@ function finalizeOperationalCase(incident){
     incident.outcome=alternate===flight.from
       ? `Captain and ATC accepted return to ${alternate}; handling confirmed and the diversion plan was updated.`
       : `Captain and ATC accepted ${alternate}; alternate handling confirmed and the diversion plan was updated.`;
+  }else if(incident.type==='destination_closure_ground'){
+    if(incident.selectedStrategy==='alternate_destination'){
+      const alternate=incident.selectedAlternate;
+      if(!alternate||!aircraft) return false;
+      flight.diversionAirport=alternate;
+      flight.operationalDurationMs=incident.diversionDurationMs||flightDurationMs(AIRPORTS[flight.from],AIRPORTS[alternate],MODELS[aircraft.model]);
+      flight.weatherChecked=false;
+      incident.outcome=`OCC re-planned ${flight.id} to ${alternate} before departure because ${incident.context?.airport||flight.to} was unavailable.`;
+    }else{
+      applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||incident.context?.delayMin||90);
+      incident.outcome=`OCC held ${flight.id} on the ground until ${incident.context?.airport||flight.to} can accept the flight.`;
+    }
   }else if(incident.type==='aircraft_out_of_position'){
     if(incident.selectedStrategy==='substitute'){
       incident.outcome=`Replacement aircraft ${incident.replacementAircraftTail||''} assigned to protect the out-of-position departure.`;
@@ -1866,10 +1919,6 @@ function finalizeOperationalCase(incident){
       ? `${flightOperationalDestination(flight)} handling acceptance secured.`
       : 'Departure held until destination handling can accept the aircraft.';
     }
-  }else if(incident.type==='bird_strike'){
-    if(incident.selectedStrategy==='substitute') incident.outcome=`Replacement aircraft ${incident.replacementAircraftTail||''} assigned after bird-strike inspection.`;
-    else if(incident.selectedStrategy==='repair') incident.outcome='Bird-strike damage repaired and aircraft returned to service.';
-    else incident.outcome='Engineering found no dispatch-limiting damage and released the aircraft.';
   }else if(incident.type==='onboard_medical'){
     if(incident.selectedStrategy==='divert'){
       const alternate=incident.selectedAlternate;
@@ -1881,7 +1930,7 @@ function finalizeOperationalCase(incident){
       flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||20);
       incident.outcome='Flight continued with medical advice and arrival assistance confirmed.';
     }
-  }else if(['inflight_technical_fault','fuel_margin_low','atc_holding_fuel_conflict','unruly_passenger','destination_weather_deterioration','destination_below_minima','alternate_unsuitable','diversion_airport_unavailable','lightning_strike','pressurization_issue'].includes(incident.type)){
+  }else if(['inflight_technical_fault','fuel_margin_low','atc_holding_fuel_conflict','unruly_passenger','destination_weather_deterioration','destination_below_minima','alternate_unsuitable','diversion_airport_unavailable','lightning_strike','bird_strike','pressurization_issue'].includes(incident.type)){
     if(['divert','return_origin','reselect'].includes(incident.selectedStrategy)){
       const alternate=incident.selectedAlternate;
       if(!alternate||!aircraft) return false;
@@ -1913,7 +1962,7 @@ function finalizeOperationalCase(incident){
     }else if(incident.type==='diversion_airport_unavailable'){
       flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||20);
       incident.outcome='Diversion-airport holding plan and next decision trigger coordinated with flight deck.';
-    }else if(incident.type==='lightning_strike'){
+    }else if(['lightning_strike','bird_strike'].includes(incident.type)){
       const destination=flightOperationalDestination(flight);
       flight.arrivalInspectionRequired=true;
       incident.outcome=`Flight continued with ${destination} arrival inspection arranged.`;
@@ -2066,7 +2115,7 @@ function authorityDecisionForIncident(task,incident,flight){
       strategy=hasAlternate&&(poorCondition||roll<.32||progress<.25)?'divert':'continue';
       break;
     case 'fuel_margin_low':
-      strategy=hasAlternate&&(poorFuel||roll<.35)?'divert':roll<.72?'direct':'conserve';
+      strategy=hasReturn&&progress<.45&&(poorFuel||!hasAlternate||roll<.22)?'return_origin':hasAlternate&&(poorFuel||roll<.35)?'divert':roll<.72?'direct':'conserve';
       break;
     case 'atc_holding_fuel_conflict':
       strategy=hasAlternate&&(poorFuel||Number(context.holdingDelayMin||0)>=35||roll<.42)?'divert':'direct';
@@ -2088,6 +2137,9 @@ function authorityDecisionForIncident(task,incident,flight){
       break;
     case 'lightning_strike':
       strategy=hasAlternate&&(context.severity==='severe'||poorCondition||roll<.28)?'divert':'continue';
+      break;
+    case 'bird_strike':
+      strategy=hasReturn&&progress<.35&&(poorCondition||roll<.4)?'return_origin':hasAlternate&&(poorCondition||roll<.58)?'divert':'continue';
       break;
     case 'pressurization_issue':
       strategy=hasAlternate&&(progress<.78||poorFuel||roll<.72)?'divert':'continue_low';
@@ -2585,6 +2637,11 @@ function maybeGenerateEnrouteIssue(f,t){
   const passengerFlight=f.flightType!=='ferry'&&(f.pax||0)>0;
   const roll=OperationalIntelligence.stableUnit(`${f.id}:${Math.floor(t/HOUR)}:airborne-report`);
   const context={...airborneContextForFlight(f,t),aircraftCondition:Math.round(condition),maintenanceDue:Boolean(maintenance?.due),phase:'cruise'};
+  const nearAirport=progress<.2||progress>.82;
+  if(nearAirport){
+    const birdRoll=OperationalIntelligence.stableUnit(`${f.id}:${Math.floor(t/(15*MIN))}:bird-strike`);
+    if(birdRoll<.018) return Boolean(createIncident('bird_strike',f,{detectedAt:t,source:'flight-deck-report',sourceKey:`bird:${f.id}`,context:{...context,phase:progress<.2?'climb':'descent',trigger:'Suspected bird strike reported by flight deck'}}));
+  }
   let cursor=.018+conditionRisk*.10;
   if(roll<cursor){
     return Boolean(createIncident('pressurization_issue',f,{detectedAt:t,source:'condition',sourceKey:`pressurization:${f.id}`,context:{...context,trigger:'Aircraft condition / pneumatic system risk'}}));
@@ -2810,14 +2867,20 @@ function processMelConstraints(t=simNow()){
 function processEvents(){
   let changed=false;
   let needsRecalc=false;
+  const t=simNow();
   if(!state.ops?.caseLinksRepaired){
     if(repairIncidentCaseLinks()) changed=true;
     state.ops??={automaticDisruptions:true};
     state.ops.caseLinksRepaired=true;
     changed=true;
   }
+  if(!state.ops?.phaseRealismRepaired){
+    if(repairIncidentPhaseRealism(t)) changed=true;
+    state.ops??={automaticDisruptions:true};
+    state.ops.phaseRealismRepaired=true;
+    changed=true;
+  }
   if(ensureRecurringFlights()){ changed=true; needsRecalc=true; }
-  const t=simNow();
   if(processOperationalWorkflows(t)){ changed=true; needsRecalc=true; }
   if(Management.processMaintenance(state,t,postTransaction)){ changed=true; needsRecalc=true; }
   if(Management.processWeeklyReviews(state,t)) changed=true;

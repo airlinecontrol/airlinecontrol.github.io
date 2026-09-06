@@ -45,6 +45,21 @@
       assert(incident,`${type} incident was not created`);
       return {aircraft,flight,incident};
     };
+    const makeAirborneCase=(type,to='LHR',context=null)=>{
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const departure=now-(45+leg)*60_000;
+      leg++;
+      const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to,departure,fare:{economy:150,business:390,first:750}});
+      flight.departureLogged=true;
+      flight.actualDeparture=departure;
+      flight.actualArrival=now+90*60_000;
+      flight.fueled=true;
+      flight.fuelOnboardAtDeparture=Math.max(w.flightFuelPlan('FRA',to,aircraft).requiredGal*1.8,aircraft.fuelGallons||0);
+      aircraft.fuelGallons=flight.fuelOnboardAtDeparture;
+      const incident=w.createIncident(type,flight,{training:true,detectedAt:now,context});
+      assert(incident,`${type} airborne incident was not created`);
+      return {aircraft,flight,incident};
+    };
     const completeWaits=()=>w.processOperationalWorkflows(Number.MAX_SAFE_INTEGER);
     const resolveCrew=(role)=>{
       const {flight,incident}=makeCase('crew_sick');
@@ -74,13 +89,13 @@
       assert(!w.performOperationalTask(`${incident.id}:crew-allocate`,'',{optionId:'AMS:captains'}),'remote sick-call crew allocation should require manual relocation first');
       w.changeStaff('AMS','captains',-2);
       w.changeQualification('AMS','captains','Airbus A320 family',-2);
-      w.changeStaff('FRA','captains',2);
-      w.changeQualification('FRA','captains','Airbus A320 family',2);
+      w.changeStaff('FRA','captains',6);
+      w.changeQualification('FRA','captains','Airbus A320 family',6);
       assert(w.performOperationalTask(`${incident.id}:crew-allocate`,'',{optionId:'FRA:captains'}),'moved sick-call crew could not be allocated locally');
       completeWaits();
       assert(incident.status==='resolved','moved sick-call crew incident did not resolve');
-      w.changeStaff('FRA','captains',fraCaptains-2);
-      w.changeQualification('FRA','captains','Airbus A320 family',fraCaptainRatings-2);
+      w.changeStaff('FRA','captains',fraCaptains-6);
+      w.changeQualification('FRA','captains','Airbus A320 family',fraCaptainRatings-6);
     }
 
     {
@@ -179,11 +194,19 @@
       assert(flight.incidentDelayMin>0,`Gate ${action} did not apply a delay`);
     }
 
-    const {flight:closureFlight,incident:closure}=makeCase('destination_closure','LHR',{authorityDecision:'alternate'});
+    const {flight:groundClosureFlight,incident:groundClosure}=makeCase('destination_closure','LHR');
+    assert(groundClosure.type==='destination_closure_ground','Ground destination closure did not use the OCC ground workflow');
+    assert(w.performOperationalTask(`${groundClosure.id}:dispatch-ground-destination-strategy`,'delay_reopen'),'Ground destination closure delay strategy was rejected');
+    assert(w.performOperationalTask(`${groundClosure.id}:dispatch-destination-hold`),'Ground destination closure hold task was rejected');
+    assert(groundClosure.status==='resolved','Ground destination closure did not resolve after hold');
+    assert(groundClosureFlight.incidentDelayMin>=60,'Ground destination closure did not apply a departure delay');
+
+    const {flight:closureFlight,incident:closure}=makeAirborneCase('destination_closure','LHR',{authorityDecision:'alternate'});
     assert(w.performOperationalTask(`${closure.id}:dispatch-diversion-assess`),'Destination closure assessment was rejected');
     completeWaits();
     const closureDecision=w.incidentTasks(closure.id).find(task=>task.key==='dispatch-flightdeck-decision');
     assert(closureDecision.strategyOptions.find(option=>option.id==='alternate')?.label.startsWith('Record '),'Destination closure decision option is not framed as a recorded flight-deck plan');
+    assert(!closureDecision.strategyOptions.some(option=>option.id==='cancel'),'Airborne destination closure should not offer cancellation');
     assert(w.operationalOptionConsequence(closureDecision,closure,'alternate').includes('flight deck requested'),'Destination closure consequence is not framed as a flight-deck request');
     assert(w.performOperationalTask(`${closure.id}:dispatch-flightdeck-decision`),'Destination closure flight-deck response was rejected');
     completeWaits();
@@ -193,7 +216,7 @@
     assert(closure.status==='resolved','Destination closure incident did not resolve');
     assert(closureFlight.diversionAirport===alternate,'Destination closure did not apply the selected diversion');
 
-    const {flight:returnFlight,incident:returnClosure}=makeCase('destination_closure','LHR',{authorityDecision:'return_origin'});
+    const {flight:returnFlight,incident:returnClosure}=makeAirborneCase('destination_closure','LHR',{authorityDecision:'return_origin'});
     assert(w.performOperationalTask(`${returnClosure.id}:dispatch-diversion-assess`),'Destination closure return-to-origin assessment was rejected');
     completeWaits();
     assert(w.performOperationalTask(`${returnClosure.id}:dispatch-flightdeck-decision`),'Destination closure return-to-origin flight-deck response was rejected');
@@ -205,6 +228,17 @@
     assert(returnClosure.diversionReturnOrigin,'Destination closure return-to-origin selection was not recorded');
     assert(returnClosure.status==='resolved','Destination closure return-to-origin incident did not resolve');
     assert(returnFlight.diversionAirport===returnFlight.from,'Destination closure did not apply return to origin');
+
+    const {flight:fuelReturnFlight,incident:fuelReturn}=makeAirborneCase('fuel_margin_low','LHR',{authorityDecision:'return_origin',projectedLandingFuelGal:1200,reserveGal:1800,marginPct:55});
+    assert(w.performOperationalTask(`${fuelReturn.id}:dispatch-fuel-assess`),'Fuel-margin assessment was rejected');
+    completeWaits();
+    const fuelDecision=w.incidentTasks(fuelReturn.id).find(task=>task.key==='dispatch-fuel-decision');
+    assert(fuelDecision.strategyOptions.some(option=>option.id==='return_origin'),'Fuel-margin decision does not offer return to origin');
+    assert(w.performOperationalTask(`${fuelReturn.id}:dispatch-fuel-decision`),'Fuel-margin return decision was rejected');
+    completeWaits();
+    assert(w.performOperationalTask(`${fuelReturn.id}:dispatch-return-origin`),'Fuel-margin return-to-origin selection was rejected');
+    assert(fuelReturn.status==='resolved','Fuel-margin return-to-origin incident did not resolve');
+    assert(fuelReturnFlight.diversionAirport===fuelReturnFlight.from,'Fuel-margin return-to-origin did not apply return to origin');
 
     result.textContent='PASS incident options validated';
   }catch(error){

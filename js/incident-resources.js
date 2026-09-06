@@ -113,14 +113,14 @@
       if(staffAt(flight.from,'operations')<=0) return `No operations/dispatch personnel are available at ${flight.from}. Add personnel in the Personnel widget.`;
       return '';
     }
-    if(['mx-strategy','mx-postflight-strategy','dispatch-position-strategy','dispatch-performance-strategy','mx-bird-strategy'].includes(task.key)&&optionId==='substitute'&&!incidentAircraftReplacementOptions(incident).length) return 'No suitable replacement aircraft is available. Add or position aircraft in Dispatch & slots, then try again.';
+    if(['mx-strategy','mx-postflight-strategy','dispatch-position-strategy','dispatch-performance-strategy'].includes(task.key)&&optionId==='substitute'&&!incidentAircraftReplacementOptions(incident).length) return 'No suitable replacement aircraft is available. Add or position aircraft in Dispatch & slots, then try again.';
     if(task.key==='crew-legal-strategy'&&optionId==='confirm') return legalCrewConfirmationBlocker(incident);
     if(['crew-duty-strategy','crew-fatigue-strategy'].includes(task.key)&&optionId==='augment'){
       const message=crewAugmentationBlocker(incident);
       if(message) return message;
     }
     const flight=state.flights.find(item=>item.id===incident.flightId);
-    if(['dispatch-flow-strategy','dispatch-capacity-strategy','dispatch-groundstop-strategy','dispatch-night-curfew-strategy'].includes(task.key)&&staffAt(flight?.from,'operations')<=0){
+    if(['dispatch-flow-strategy','dispatch-capacity-strategy','dispatch-groundstop-strategy','dispatch-night-curfew-strategy','dispatch-ground-destination-strategy'].includes(task.key)&&staffAt(flight?.from,'operations')<=0){
       return `No operations/dispatch personnel are available at ${flight?.from||'the origin'}. Add personnel in the Personnel widget.`;
     }
     if(task.key==='station-stand-strategy'&&staffAt(flight?.from,'groundHandling')<=0){
@@ -131,6 +131,7 @@
       if(flight?.departureLogged) return 'The flight is already airborne. Secure destination handling or prepare an alternate instead.';
     }
     if(task.key==='station-destination-handling-strategy'&&optionId==='prepare_alternate'&&!diversionOptionsForIncident(incident,{includeReturnOrigin:false}).length) return 'No suitable alternate is available. Add handling personnel at a candidate airport or request destination handling.';
+    if(task.key==='dispatch-ground-destination-strategy'&&optionId==='alternate_destination'&&!diversionOptionsForIncident(incident,{includeReturnOrigin:false}).length) return 'No suitable alternate destination is available. Add handling personnel at a candidate airport or delay/cancel the flight.';
     return '';
   }
 
