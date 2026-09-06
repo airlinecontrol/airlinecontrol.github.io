@@ -76,6 +76,7 @@
     timings.push(measure('recalculateOperations',()=>w.recalculateOperations()));
     w.save();
     timings.push(measure('refreshAll',()=>w.refreshAll()));
+    for(let i=0;i<60&&!w.__aeroMapReady;i++) await wait(100);
     await wait(150);
     timings.push(measure('refreshScheduleTimeline',()=>w.refreshScheduleTimeline(true)));
     timings.push(measure('renderDeskStack',()=>w.renderDeskStack(true)));
@@ -88,7 +89,7 @@
     assert(w.__perfState.flights.length===aircraftCount*legsPerAircraft,'fixture flights were not created');
     assert(rows>0,'schedule did not render aircraft rows');
     assert(renderedFlights>0,'schedule did not render flights');
-    assert(d.querySelectorAll('.aircraft-marker,.plane-shell').length||d.querySelector('#map.leaflet-container'),'map did not initialize');
+    assert(d.querySelectorAll('.aircraft-marker,.plane-shell').length||d.querySelector('#map.maplibregl-map'),'map did not initialize');
     const slow=timings.filter(item=>item.ms>2500);
     assert(!slow.length,`slow render path: ${slow.map(item=>`${item.label} ${item.ms.toFixed(0)}ms`).join(', ')}`);
 

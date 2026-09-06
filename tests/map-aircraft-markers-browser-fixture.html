@@ -37,8 +37,12 @@
     const incident=w.createIncident('onboard_medical',critical,{training:true,detectedAt:now});
     assert(incident?.severity==='critical','fixture critical incident was not created');
 
+    for(let i=0;i<60&&!w.__aeroMapReady;i++) await wait(100);
     w.updateMapData();
-    await wait(100);
+    for(let i=0;i<30&&d.querySelectorAll('.plane-shell').length<3;i++) await wait(100);
+    assert(d.querySelector('#map.maplibregl-map'),'MapLibre map did not initialize');
+    assert(w.eval(`map.getLayoutProperty('place_state','visibility')==='none'`),'state labels are still visible on the basemap');
+    assert(w.eval(`map.getLayoutProperty('place_city','visibility')!=='none'`),'city labels should remain visible on the basemap');
     const markers=[...d.querySelectorAll('.plane-shell')];
     const groundMarker=markers.find(node=>node.textContent.includes(ground.tail));
     const airborneMarker=markers.find(node=>node.textContent.includes(airborne.id));

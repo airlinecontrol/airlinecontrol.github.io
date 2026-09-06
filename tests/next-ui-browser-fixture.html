@@ -256,7 +256,7 @@
     assert(!d.querySelector('[data-desk-widget="airports"]'),'airports desk should not be shown');
     assert(d.querySelector('#weatherStrip .weather-chip'),'airport weather strip is missing');
     assert(d.querySelector('#weatherStrip .weather-chip')?.getAttribute('title')?.includes('ceiling'),'airport weather strip does not expose rich weather details');
-    assert(d.querySelector('.leaflet-overlay-pane canvas'),'map weather overlay canvas is missing');
+    assert(d.querySelector('#map.maplibregl-map canvas'),'MapLibre map canvas is missing');
     assert(d.querySelectorAll('#deskStack .occ-widget-header .info-tip').length===5,'department widget helper labels are not behind info tooltips');
     assert(!d.querySelector('#deskStack .occ-widget-header>div>span:not(.info-tip)'),'department widget eyebrow labels are still visible');
     const widgetStyle=getComputedStyle(d.querySelector('#deskStack .occ-board-widget'));
@@ -315,6 +315,19 @@
     d.querySelector('[data-desk-panel="planning:aircraft"]').click(); await wait(80);
     assert(d.querySelector('[data-desk-widget="planning"] [data-management-content="aircraft"]')&&!d.querySelector('[data-desk-widget="planning"] [data-management-content="planning"]'),'aircraft request action did not replace the planning panel');
     assert(getComputedStyle(d.querySelector('[data-desk-widget="planning"] [data-occ-page-host="aircraft"] .data-section')).display==='none','fleet inventory is duplicated in resource controls');
+    assert(!d.querySelector('#managementCabinFirst')&&!d.querySelector('#managementCabinBusiness'),'aircraft request form still exposes cabin configuration');
+    assert(d.querySelector('#managementAircraftDelivery'),'aircraft request form does not expose delivery airport');
+    d.querySelector('#managementAircraftDelivery').value='CDG';
+    d.querySelector('#managementAircraftDelivery').dispatchEvent(new Event('input',{bubbles:true}));
+    const aircraftBefore=w.eval('state.aircraft.length'),resourceRequestsBefore=w.eval('state.resourceRequests.length');
+    d.querySelector('#requestAircraftButton').click(); await wait(120);
+    assert(w.eval(`state.aircraft.length>${aircraftBefore} ? state.aircraft[state.aircraft.length-1]?.location==='CDG' : state.resourceRequests.length>${resourceRequestsBefore} && state.resourceRequests[state.resourceRequests.length-1]?.location==='CDG'`),'aircraft request was not routed to the selected delivery airport');
+    assert(d.querySelector('#homeBaseSelect'),'topbar home-base selector is missing');
+    d.querySelector('#homeBaseSelect').value='LHR';
+    d.querySelector('#homeBaseSelect').dispatchEvent(new Event('change',{bubbles:true}));
+    await wait(120);
+    assert(w.eval(`state.home==='LHR'`),'topbar home-base selector did not update state.home');
+    assert(d.querySelector('#managementAircraftDelivery')?.value==='LHR','aircraft delivery default did not follow the new home base');
     assert(!Array.from(d.querySelectorAll('[data-desk-widget="planning"] .desk-section h2')).some(node=>node.textContent.includes('External replies')),'dispatch widget should not show external replies');
     d.querySelector('[data-desk-panel="personnel:personnel"]').click(); await wait(80);
     assert(d.querySelector('[data-desk-widget="personnel"] [data-management-content="personnel"]'),'personnel request controls are not mounted after opening the action');
@@ -361,7 +374,7 @@
     assert(d.querySelector('#aircraftList [data-left-aircraft-details]')?.textContent.includes(ac.tail)||d.querySelector('#aircraftList .list-row.selected')?.textContent.includes(ac.tail),'map-style aircraft selection did not update left-side information');
     assert(d.querySelectorAll('#deskStack .occ-board-widget').length===5,'aircraft selection rebuilt or hid the OCC board');
     assert(d.querySelector('#managementView').hidden,'legacy management workspace became visible');
-    assert(d.querySelector('#map.leaflet-container'),'shared map did not initialize');
+    assert(d.querySelector('#map.maplibregl-map'),'shared map did not initialize');
     assert(d.querySelector('#schedule-board .sched-aircraft-row'),'shared schedule did not initialize');
     const visual=new URLSearchParams(location.search).get('visual');
     if(visual==='board'){

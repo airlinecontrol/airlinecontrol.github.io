@@ -27,7 +27,7 @@
     assert(station.impactRadiusKm>=30,'airport weather impact radius is missing');
     const sampleCell=Array.from({length:12},(_,index)=>w.AeroWeatherEngine.weatherCells(now+index*3*60*60_000)).flat().find(cell=>cell.polygon?.length>=8);
     assert(sampleCell,'weather cells do not expose real polygon geometry');
-    assert(d.querySelector('.leaflet-overlay-pane canvas'),'map weather overlay canvas was not rendered');
+    assert(d.querySelector('#map.maplibregl-map canvas'),'MapLibre map canvas was not rendered');
 
     const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
     const flight=w.createFlightRecord({

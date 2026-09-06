@@ -1637,6 +1637,18 @@ function refreshHeader(){
 }
 function refreshKPIs(){ refreshHeader(); }
 
+function setHomeBase(code){
+  if(!AIRPORTS[code]) return;
+  state.home=code;
+  save();
+  populateManagementControls();
+  refreshAircraftSelect(true);
+  refreshManagement(true);
+  refreshSchedulePreview();
+  markUiDirty('header','desk','left','filter','weather','map');
+  toast(`Home base set to ${code}.`);
+}
+
 function scheduleWindow(){
   const now=simNow(),anchor=new Date(now); anchor.setMinutes(0,0,0);
   const start=anchor.getTime()+scheduleWindowOffsetHours*HOUR;
@@ -1856,10 +1868,12 @@ function refreshSchedulePreview(){
 function optionList(values,label){ return values.map(value=>`<option value="${esc(value)}">${esc(label(value))}</option>`).join(''); }
 function populateManagementControls(){
   const airports=Object.keys(AIRPORTS);
-  [originEl,destEl,document.getElementById('personnelAirport'),document.getElementById('transferPersonnelFrom'),document.getElementById('transferPersonnelTo')].forEach(select=>{
+  [originEl,destEl,document.getElementById('managementAircraftDelivery'),document.getElementById('personnelAirport'),document.getElementById('transferPersonnelFrom'),document.getElementById('transferPersonnelTo'),document.getElementById('homeBaseSelect')].filter(Boolean).forEach(select=>{
     select.innerHTML=optionList(airports,code=>`${code} — ${AIRPORTS[code].name}`);
   });
+  document.getElementById('homeBaseSelect').value=state.home;
   originEl.value=state.home; destEl.value=airports.find(code=>code!==state.home)||airports[0];
+  document.getElementById('managementAircraftDelivery').value=state.home;
   document.getElementById('personnelAirport').value=state.home;
   document.getElementById('transferPersonnelFrom').value=state.home;
   document.getElementById('transferPersonnelTo').value=airports.find(code=>code!==state.home)||airports[0];
@@ -1884,17 +1898,15 @@ function refreshAircraftSelect(force=false){
   refreshScheduleMode();
 }
 
-function aircraftCabinRequest(){
+function aircraftRequest(){
   const modelName=document.getElementById('managementAircraftModel').value,model=MODELS[modelName]; if(!model) return null;
-  let first=clamp(Math.floor(Number(document.getElementById('managementCabinFirst').value)||0),0,Math.floor(model.seats/3));
-  let business=clamp(Math.floor(Number(document.getElementById('managementCabinBusiness').value)||0),0,Math.floor((model.seats-first*3)/2));
-  document.getElementById('managementCabinFirst').value=first; document.getElementById('managementCabinBusiness').value=business;
-  return {modelName,model,cabin:{economy:model.seats-first*3-business*2,business,first}};
+  const deliveryAirport=document.getElementById('managementAircraftDelivery').value;
+  return {modelName,model,deliveryAirport,cabin:defaultCabin(modelName)};
 }
 function refreshAircraftRequestPreview(){
-  const request=aircraftCabinRequest(); if(!request) return;
-  const supply=resourceAvailability('aircraft',request.modelName,state.home);
-  document.getElementById('aircraftRequestPreview').innerHTML=`<b>${esc(request.modelName)} · ${request.cabin.economy+request.cabin.business+request.cabin.first} passenger seats</b><br>${request.cabin.economy} economy · ${request.cabin.business} business · ${request.cabin.first} first · ${request.model.maxRangeKm.toLocaleString()} km range · ${supply.available?'available now':`allocation lead about ${supply.leadMin} min`}`;
+  const request=aircraftRequest(); if(!request) return;
+  const supply=resourceAvailability('aircraft',request.modelName,request.deliveryAirport);
+  document.getElementById('aircraftRequestPreview').innerHTML=`<b>${esc(request.modelName)} · ${request.model.seats} passenger seats · ${esc(request.deliveryAirport)}</b><br>${request.model.maxRangeKm.toLocaleString()} km range · ${supply.available?'available now':`allocation lead about ${supply.leadMin} min`}`;
 }
 function renderManagementAircraft(){
   const list=document.getElementById('managementAircraftList');
@@ -2011,8 +2023,9 @@ scheduleTypeEl.addEventListener('change',refreshScheduleMode);
 [originEl,destEl,departureTimeEl,repeatRuleEl,turnaroundEl].forEach(element=>{element.addEventListener('change',refreshSchedulePreview);element.addEventListener('input',refreshSchedulePreview);});
 aircraftEl.addEventListener('change',()=>{const ac=state.aircraft.find(item=>item.id===aircraftEl.value);if(ac)originEl.value=ac.location;refreshScheduleMode();});
 
-['managementAircraftModel','managementCabinFirst','managementCabinBusiness'].forEach(id=>document.getElementById(id).addEventListener('input',refreshAircraftRequestPreview));
-document.getElementById('requestAircraftButton').addEventListener('click',()=>{const request=aircraftCabinRequest();if(request)requestAircraft(request.modelName,request.cabin);});
+['managementAircraftModel','managementAircraftDelivery'].forEach(id=>document.getElementById(id).addEventListener('input',refreshAircraftRequestPreview));
+document.getElementById('requestAircraftButton').addEventListener('click',()=>{const request=aircraftRequest();if(request)requestAircraft(request.modelName,request.cabin,request.deliveryAirport);});
+document.getElementById('homeBaseSelect').addEventListener('change',event=>setHomeBase(event.target.value));
 ['personnelRole','personnelAirport','personnelQualification','personnelAmount'].forEach(id=>document.getElementById(id).addEventListener('input',refreshPersonnelRequestPreview));
 document.getElementById('requestPersonnelBtn').addEventListener('click',()=>{
   const role=document.getElementById('personnelRole').value,airport=document.getElementById('personnelAirport').value,amount=clamp(Math.floor(Number(document.getElementById('personnelAmount').value)||1),1,50),qualification=document.getElementById('personnelQualification').value;

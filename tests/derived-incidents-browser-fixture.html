@@ -157,18 +157,18 @@
       const liveStatus=liveConnection?.status==='at-risk'?'at risk':liveConnection?.status==='protected'?'ok':liveConnection?.status;
       if(['critical','at-risk'].includes(liveConnection?.status)){
         assert(widgetText.includes(onward.id)&&widgetText.includes(liveStatus),`connections widget does not show the current own-network connection state: selected=${w.eval('selectedFlightId')} beforeRefresh=${JSON.stringify(manifest)} live=${JSON.stringify(liveConnection)} widget=${widgetText}`);
+        frame.contentDocument.querySelector(`[data-connection-flight="${onward.id}"]`)?.click();
+        await wait(120);
+        assert(w.eval(`selectedFlightId==='${onward.id}'`),'clicking an affected connection did not select the onward flight');
+        assert(frame.contentDocument.querySelector('[data-desk-widget="planning"] .occ-actions-section')?.textContent.includes(onward.id),'dispatch widget did not switch to the selected onward flight');
+        frame.contentDocument.querySelector(`[data-connection-flight="${inbound.id}"]`)?.click();
+        await wait(120);
+        assert(w.eval(`selectedFlightId==='${inbound.id}'`),'clicking an inbound connection card did not select the inbound flight');
       }else{
         assert(!widgetText.includes(onward.id),'connections widget should hide protected own-network connections');
       }
       assert(!widgetText.includes('ok'),'connections widget should not show protected/ok connections');
       assert(!frame.contentDocument.querySelector('[data-protect-connections]'),'connections widget should not expose a hold-onward action');
-      frame.contentDocument.querySelector(`[data-connection-flight="${onward.id}"]`)?.click();
-      await wait(120);
-      assert(w.eval(`selectedFlightId==='${onward.id}'`),'clicking an affected connection did not select the onward flight');
-      assert(frame.contentDocument.querySelector('[data-desk-widget="planning"] .occ-actions-section')?.textContent.includes(onward.id),'dispatch widget did not switch to the selected onward flight');
-      frame.contentDocument.querySelector(`[data-connection-flight="${inbound.id}"]`)?.click();
-      await wait(120);
-      assert(w.eval(`selectedFlightId==='${inbound.id}'`),'clicking an inbound connection card did not select the inbound flight');
     }
 
     {

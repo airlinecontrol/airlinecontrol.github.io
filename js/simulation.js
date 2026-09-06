@@ -3737,15 +3737,16 @@ function removeScheduleSelection(selection){
   return toast('Choose a schedule to remove.');
 }
 
-function requestAircraft(modelName,cabin=defaultCabin(modelName)){
+function requestAircraft(modelName,cabin=defaultCabin(modelName),location=state.home){
   if(!MODELS[modelName]) return;
-  const supply=resourceAvailability('aircraft',modelName,state.home);
+  const deliveryAirport=AIRPORTS[location]?location:state.home;
+  const supply=resourceAvailability('aircraft',modelName,deliveryAirport);
   if(!supply.available){
-    const request=queueResourceRequest('aircraft',{key:modelName,location:state.home,model:modelName,cabin},supply);
-    requestUiRefresh('all'); toast(`${modelName} requested. Allocation expected ${formatTime(request.readyAt)}.`); return request;
+    const request=queueResourceRequest('aircraft',{key:modelName,location:deliveryAirport,model:modelName,cabin},supply);
+    requestUiRefresh('all'); toast(`${modelName} requested for ${deliveryAirport}. Allocation expected ${formatTime(request.readyAt)}.`); return request;
   }
-  const ac=assignRequestedAircraft(modelName,cabin,state.home);
-  AeroServices.commit(); toast(`${ac.tail} assigned from the operations pool at ${state.home}.`); return ac;
+  const ac=assignRequestedAircraft(modelName,cabin,deliveryAirport);
+  AeroServices.commit(); toast(`${ac.tail} assigned from the operations pool at ${deliveryAirport}.`); return ac;
 }
 
 function aircraftHasAssignments(acId,t=simNow()){

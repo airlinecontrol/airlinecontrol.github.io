@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>AeroSim — Operations</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
-  <link rel="stylesheet" href="aerosim-next.css?v=1.8.14" />
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="aerosim-next.css?v=1.8.15" />
 </head>
 <body>
 <div id="app">
@@ -15,6 +15,7 @@
     <div class="top-stat"><span>On time</span><b id="headerOnTime">—</b></div>
     <div class="top-stat"><span>Active</span><b id="headerActive">0</b></div>
     <div class="top-stat"><span>Upcoming</span><b id="headerUpcoming">0</b></div>
+    <label class="topbar-control"><span>Home base</span><select id="homeBaseSelect" aria-label="Home base"></select></label>
     <div class="sim-clock"><span id="simClock">—</span><select id="speed" aria-label="Simulation speed"><option value="1">1× real time</option><option value="10">10×</option><option value="60">60×</option><option value="300">300×</option></select></div>
     <button id="resetTopbarBtn" class="topbar-icon-button reset-state-button" type="button" title="Reset local state" aria-label="Reset local state">&#128465;</button>
   </header>
@@ -95,11 +96,10 @@
       </section>
 
       <section class="management-page" data-management-content="aircraft" hidden>
-        <header class="page-heading"><span>Resources</span><h1>Aircraft</h1><p>Request an aircraft from the operations pool and configure its cabin.</p></header>
+        <header class="page-heading"><span>Resources</span><h1>Aircraft</h1><p>Request an aircraft from the operations pool.</p></header>
         <div class="form-grid compact-form">
           <label>Aircraft type<select id="managementAircraftModel"></select></label>
-          <label>First-class seats<input id="managementCabinFirst" type="number" min="0" value="0" /></label>
-          <label>Business seats<input id="managementCabinBusiness" type="number" min="0" value="0" /></label>
+          <label>Deliver to<select id="managementAircraftDelivery"></select></label>
         </div>
         <div id="aircraftRequestPreview" class="form-feedback"></div>
         <div class="form-actions"><button id="requestAircraftButton" class="primary-button" type="button">Request aircraft</button></div>
@@ -145,7 +145,7 @@
   </main>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
 <script src="js/management.js?v=14.3.3"></script>
 <script src="js/core.js?v=14.4.5"></script>
 <script src="js/app-services.js?v=14.2.1"></script>
@@ -153,10 +153,10 @@
 <script src="js/ground-operations.js?v=14.0.0"></script>
 <script src="js/operational-intelligence.js?v=14.0.2"></script>
 <script src="js/operational-workflows.js?v=14.1.12"></script>
-<script src="js/simulation.js?v=14.6.11"></script>
+<script src="js/simulation.js?v=14.6.12"></script>
 <script src="js/incident-resources.js?v=14.2.10"></script>
 <script src="js/incident-consequences.js?v=14.2.8"></script>
-<script src="js/ui-next.js?v=1.10.26"></script>
-<script src="js/map.js?v=14.3.7"></script>
+<script src="js/ui-next.js?v=1.10.27"></script>
+<script src="js/map.js?v=15.0.1"></script>
 </body>
 </html>
