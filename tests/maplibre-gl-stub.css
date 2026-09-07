@@ -1,0 +1,4 @@
+.maplibregl-map{position:relative;overflow:hidden}
+.maplibregl-marker{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)}
+.maplibregl-popup{position:absolute;left:50%;top:50%;z-index:1000}
+.maplibregl-popup-content{background:#081219;color:#dff6ff;border:1px solid #284a56;border-radius:6px;padding:6px 8px;white-space:pre-line}

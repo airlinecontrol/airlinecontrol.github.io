@@ -152,23 +152,20 @@
       w.settleSelectedFlight(inbound.id);
       w.refreshAll();
       await wait(120);
-      const widgetText=frame.contentDocument.querySelector('[data-desk-widget="connections"]')?.textContent||'';
+      const widgetText=frame.contentDocument.querySelector('[data-desk-widget="warnings"]')?.textContent||'';
       const liveConnection=w.connectionStatusForFlight(inbound).connections.find(item=>item.flightId===onward.id);
       const liveStatus=liveConnection?.status==='at-risk'?'at risk':liveConnection?.status==='protected'?'ok':liveConnection?.status;
       if(['critical','at-risk'].includes(liveConnection?.status)){
-        assert(widgetText.includes(onward.id)&&widgetText.includes(liveStatus),`connections widget does not show the current own-network connection state: selected=${w.eval('selectedFlightId')} beforeRefresh=${JSON.stringify(manifest)} live=${JSON.stringify(liveConnection)} widget=${widgetText}`);
-        frame.contentDocument.querySelector(`[data-connection-flight="${onward.id}"]`)?.click();
+        assert(widgetText.includes(onward.id)&&widgetText.includes(liveStatus),`warnings widget does not show the current own-network connection state: selected=${w.eval('selectedFlightId')} beforeRefresh=${JSON.stringify(manifest)} live=${JSON.stringify(liveConnection)} widget=${widgetText}`);
+        assert(!frame.contentDocument.querySelector('[data-desk-widget="connections"]'),'connections widget should be removed from the right rail');
+        frame.contentDocument.querySelector(`[data-warning-flight="${inbound.id}"]`)?.click();
         await wait(120);
-        assert(w.eval(`selectedFlightId==='${onward.id}'`),'clicking an affected connection did not select the onward flight');
-        assert(frame.contentDocument.querySelector('[data-desk-widget="planning"] .occ-actions-section')?.textContent.includes(onward.id),'dispatch widget did not switch to the selected onward flight');
-        frame.contentDocument.querySelector(`[data-connection-flight="${inbound.id}"]`)?.click();
-        await wait(120);
-        assert(w.eval(`selectedFlightId==='${inbound.id}'`),'clicking an inbound connection card did not select the inbound flight');
+        assert(w.eval(`selectedFlightId==='${inbound.id}'`),'clicking a connection warning did not select the inbound flight');
       }else{
-        assert(!widgetText.includes(onward.id),'connections widget should hide protected own-network connections');
+        assert(!widgetText.includes(onward.id),'warnings widget should hide protected own-network connections');
       }
-      assert(!widgetText.includes('ok'),'connections widget should not show protected/ok connections');
-      assert(!frame.contentDocument.querySelector('[data-protect-connections]'),'connections widget should not expose a hold-onward action');
+      assert(!widgetText.includes('ok'),'warnings widget should not show protected/ok connections');
+      assert(!frame.contentDocument.querySelector('[data-protect-connections]'),'connection warning should not expose a hold-onward action');
     }
 
     {
@@ -189,9 +186,9 @@
       w.settleSelectedFlight(inbound.id);
       w.refreshAll();
       await wait(120);
-      const widgetText=frame.contentDocument.querySelector('[data-desk-widget="connections"]')?.textContent||'';
-      assert(!widgetText.includes(onward.id),'connections widget should hide missed onward connections');
-      assert(!widgetText.includes('missed'),'connections widget should not show missed connection copy');
+      const widgetText=frame.contentDocument.querySelector('[data-desk-widget="warnings"]')?.textContent||'';
+      assert(!widgetText.includes(onward.id),'warnings widget should hide missed onward connections');
+      assert(!widgetText.includes('missed'),'warnings widget should not show missed connection copy');
     }
 
     {
@@ -235,6 +232,9 @@
       assert(!strategy.strategyOptions.some(option=>option.id==='cancel'),'airborne crew duty extension should not offer cancellation');
       assert(w.operationalOptionConsequence(strategy,incident,'record_extension').includes('duty extension'),'crew extension consequence should explain the duty-extension record');
       assert(w.performOperationalTask(strategy.id,'record_extension'),'crew extension record strategy was rejected');
+      const recordTask=w.incidentTasks(incident.id).find(item=>item.key==='crew-extension-record');
+      assert(recordTask?.status==='available','crew extension record task did not unlock after choosing the record path');
+      assert(w.performOperationalTask(recordTask.id),'crew extension record task was rejected');
       completeWaits();
       assert(incident.status==='resolved','crew duty extension record path did not resolve');
       assert(outbound.crewDutyExtensionRecordedAt,'crew duty extension was not recorded on the flight');

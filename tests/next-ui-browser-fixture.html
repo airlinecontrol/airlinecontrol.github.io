@@ -114,6 +114,14 @@
     assert(w.lateInboundStatusForFlight(lateOutbound).active,'controlled rotation did not derive a late inbound warning');
     assert(d.querySelector('#schedule-board .connection-line.late-inbound'),'late-inbound connector is not highlighted');
     assert(d.querySelector('#schedule-board .connection-label.late-inbound'),'late-inbound connector label is not highlighted');
+    if(!d.querySelector('#schedule-board .connection-line.short-turn')){
+      const shortTurnAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'CDG');
+      const shortFirst=w.createFlightRecord({aircraftId:shortTurnAc.id,from:'CDG',to:'AMS',departure:w.simNow()+6*60*60_000,fare:{economy:120,business:300,first:600}});
+      w.recalculateOperations();
+      w.createFlightRecord({aircraftId:shortTurnAc.id,from:'AMS',to:'CDG',departure:w.flightActualArrival(shortFirst)+10*60_000,fare:{economy:120,business:300,first:600}});
+      w.recalculateOperations();
+      w.refreshAll(); await wait(120);
+    }
     assert(d.querySelector('#schedule-board .connection-line.short-turn'),'under-minimum turnaround connector is not highlighted');
     w.eval('state.ops.automaticDisruptions=false');
     const weatherAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'DXB');
@@ -156,9 +164,10 @@
     w.refreshAll(); await wait(80);
     assert(!d.querySelector('[data-rail-widget="upcomingFlights"]'),'upcoming flight widget should be removed from the left rail');
     assert(d.querySelector(`#schedule-board [data-flight-id="${flight.id}"]`),'upcoming flight was not rendered in schedule');
-    assert(d.querySelectorAll('.operations-rail [data-rail-widget]').length===2,'left rail should only show active flights and aircraft widgets');
+    assert(d.querySelectorAll('.operations-rail [data-rail-widget]').length===3,'left rail should show active flights, aircraft, and maintenance widgets');
     assert(d.querySelector('[data-toggle-rail="activeFlights"]'),'active flight widget header is not collapsible');
     assert(d.querySelector('[data-toggle-rail="aircraft"]'),'aircraft widget header is not collapsible');
+    assert(d.querySelector('[data-toggle-rail="maintenance"]'),'maintenance widget header is not collapsible');
     d.querySelector('[data-toggle-rail="activeFlights"]').click(); await wait(50);
     assert(d.querySelector('#rail-body-activeFlights').hidden,'active widget did not collapse');
     d.querySelector('[data-toggle-rail="activeFlights"]').click(); await wait(50);
@@ -264,17 +273,20 @@
     assert(!Array.from(d.querySelectorAll('[data-desk-widget="incidents"] .case-console-section h2')).some(node=>node.textContent.includes('Required gates')),'incident case still shows required gates');
     assert(d.querySelector('[data-desk-widget="incidents"] .case-active-task [data-inline-task] .inline-task-action'),'incident case does not expose the active task controls');
     assert(d.querySelector('[data-desk-widget="incidents"] .case-active-task [data-task-action="replace"]'),'incident case does not expose crew recovery as the active branch decision');
-    assert(d.querySelector('[data-desk-widget="incidents"] .case-active-task .choice-consequence')?.textContent.includes('local replacement'),'incident option consequences are not shown in the active task');
+    assert(d.querySelector('[data-desk-widget="incidents"] .case-active-task .choice-consequence')?.textContent.includes('reserve response'),'incident option consequences are not shown in the active task');
     assert(d.querySelector('[data-desk-widget="incidents"] .case-step-list'),'incident case coordination chain is missing');
     assert(!d.querySelector('[data-desk-widget="incidents"] .case-log-row'),'incident case log should not be shown');
     assert(!d.querySelector('[data-desk-widget="incidents"] .case-current-task'),'incident case still sends work to another department');
+    assert(d.querySelector('[data-desk-widget="warnings"]'),'warnings desk is missing');
+    assert(d.querySelector('[data-desk-widget="warnings"] .warning-group'),'warnings desk does not group repeated warning types');
+    assert(d.querySelector('[data-desk-widget="warnings"] .warning-row'),'warnings desk does not show derived warning rows');
+    assert(d.querySelectorAll('[data-desk-widget="warnings"] .warning-summary-section .warning-row').length<=6,'warnings desk is too noisy by default');
     assert(!d.querySelector('[data-task-link-action]'),'incident-only desk action links should not be rendered');
     assert(!d.querySelector('[data-desk-widget="personnel"] .desk-active-task-section'),'personnel widget should not duplicate incident tasks');
-    assert(!d.querySelector('[data-desk-widget="maintenance"] .desk-active-task-section'),'maintenance widget should not duplicate incident tasks');
-    assert(d.querySelector('[data-desk-widget="maintenance"] .maintenance-condition .progress-track'),'maintenance widget does not show aircraft condition as a progress bar');
-    assert(d.querySelector('[data-desk-widget="maintenance"]'),'maintenance desk is missing');
+    assert(d.querySelector('[data-rail-widget="maintenance"] .maintenance-rail-row .progress-track'),'left maintenance widget does not show aircraft condition as a progress bar');
+    assert(!d.querySelector('[data-desk-widget="maintenance"]'),'maintenance desk should not be shown in the right rail');
     assert(!d.querySelector('[data-desk-widget="communications"]'),'communications desk should not be shown as a standalone widget');
-    assert(d.querySelector('[data-desk-widget="connections"]'),'connections desk is missing');
+    assert(!d.querySelector('[data-desk-widget="connections"]'),'connections desk should not be shown as a standalone widget');
     assert(!d.querySelector('[data-desk-widget="airports"]'),'airports desk should not be shown');
     assert(d.querySelector('#weatherStrip .weather-chip'),'airport weather strip is missing');
     assert(d.querySelector('#weatherStrip .weather-chip')?.getAttribute('title')?.includes('ceiling'),'airport weather strip does not expose rich weather details');
@@ -301,7 +313,7 @@
     assert(d.querySelector('[data-desk-panel="planning:remove-schedule"]'),'remove-schedule action link is missing');
     assert(!d.querySelector('[data-desk-panel="planning:slots"]'),'dispatch should not expose manual slot request action');
     assert(d.querySelector('[data-desk-panel="personnel:personnel"]'),'request-personnel action button is missing');
-    assert(d.querySelector('[data-desk-panel="maintenance:maintenance"]'),'schedule-maintenance action button is missing');
+    assert(!d.querySelector('[data-desk-panel^="maintenance:"]'),'maintenance desk action links should not exist in the right rail');
     assert(!Array.from(d.querySelectorAll('#deskStack .desk-action-link')).some(node=>/ATC|Diversion|Connection|release|Cancel flight|Crew recovery|Inspect defect|Set disposition|Station recovery|Alternate handling|replacement aircraft/i.test(node.textContent)),'incident-only shortcuts are still shown in widget action bars');
     assert(!d.querySelector('[data-desk-panel="planning:spares"]'),'list-only spare action should not be hidden behind a link');
     assert(!d.querySelector('[data-desk-panel="personnel:stations"]'),'station staffing list should not be hidden behind a link');
@@ -355,8 +367,6 @@
     assert(d.querySelector('[data-desk-widget="personnel"] [data-management-content="personnel"]'),'personnel request controls are not mounted after opening the action');
     d.querySelector('[data-desk-panel="personnel:relocation"]').click(); await wait(80);
     assert(d.querySelector('[data-desk-widget="personnel"] [data-management-content="relocation"]'),'relocation controls are not mounted after opening the action');
-    d.querySelector('[data-desk-panel="maintenance:maintenance"]').click(); await wait(80);
-    assert(d.querySelector('[data-desk-widget="maintenance"] [data-management-content="maintenance"]'),'maintenance controls are not mounted after opening the action');
     const openedTask=d.querySelector('[data-desk-widget="incidents"] .case-active-task [data-inline-task]');
     assert(openedTask?.querySelector('.inline-task-action'),'crew workflow controls are not shown directly in the incident widget');
     const openedTaskId=openedTask?.dataset.inlineTask;
@@ -365,7 +375,7 @@
     resolveControl.click(); await wait(160);
     assert(!d.querySelector(`[data-inline-task="${CSS.escape(openedTaskId)}"]`),'resolved crew workflow task did not close');
     assert(w.eval('workspaceUi.nextActiveIncidentId')===incident.id,'incident queue advanced before the same case exposed its next ready task');
-    assert(d.querySelector('[data-desk-widget="incidents"] .case-active-task')?.textContent.includes('Allocate replacement crew'),'incident case did not advance from crew strategy to crew allocation');
+    assert(d.querySelector('[data-desk-widget="incidents"] .case-active-task')?.textContent.includes('Activate local reserve crew'),'incident case did not advance from crew strategy to crew allocation');
     const allocateControl=d.querySelector('[data-desk-widget="incidents"] .case-active-task [data-task-action="allocate"]');
     assert(allocateControl,'crew allocation action is missing after selecting the recovery branch');
     allocateControl.click(); await wait(160);

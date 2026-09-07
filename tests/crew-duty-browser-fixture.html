@@ -52,12 +52,36 @@
 
     const next=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'LHR',departure:ret.arrival+20*60_000,fare:{economy:150,business:390,first:750},serviceId:'SCD2',serviceLeg:'outbound'});
     w.recalculateOperations();
-    w.refreshAll();
+    w.eval(`state.crewDuties.push({
+      id:'CD-FIXTURE-OVERLAP',
+      flightIds:['${next.id}'],
+      aircraftId:'${ac.id}',
+      airport:'FRA',
+      releaseAirport:'LHR',
+      family:'Airbus A320 family',
+      reportAt:${through.dutyEnd-10*60_000},
+      dutyStart:${through.dutyEnd-10*60_000},
+      dutyEnd:${through.dutyEnd+2*60*60_000},
+      releaseAt:${through.dutyEnd+2*60*60_000},
+      restUntil:${through.dutyEnd+12*60*60_000},
+      sectors:1,
+      augmented:false,
+      legal:true,
+      dutyHours:2,
+      maxHours:11,
+      remainingHours:9,
+      night:false,
+      crew:{captains:1,firstOfficers:1,cabinCrew:4},
+      roleSwaps:[],
+      status:'planned',
+      label:'Fixture overlapping duty'
+    });`);
+    w.refreshScheduleTimeline(true);
     await wait(250);
     const dutyBars=Array.from(d.querySelectorAll('.crew-duty-bar'));
     const dutyTops=new Set(dutyBars.map(element=>Math.round(element.getBoundingClientRect().top)));
     assert(dutyBars.length>=2,'overlap fixture did not draw multiple crew duty bars');
-    assert(dutyTops.size>=2,'overlapping crew duties were rendered in the same schedule lane');
+    assert(dutyTops.size>=2,'overlapping crew duties were rendered in the same schedule lane: '+dutyBars.map(element=>`${Math.round(element.getBoundingClientRect().top)} ${element.getAttribute('title')}`).join(' | '));
     assert(d.querySelector('[data-slot-flight="'+next.id+'"].slot-marker.planned.risk')?.getAttribute('title')?.includes('risk'),'future slot impact should be shown as risk, not missed');
     assert(d.querySelector('[data-slot-flight="'+next.id+'"].slot-marker.planned.risk')?.textContent.includes(next.id),'future slot impact marker should identify the planned item');
     assert(!/RISK|MISSED|NEW/.test(d.querySelector('[data-slot-flight="'+next.id+'"].slot-marker.planned.risk')?.textContent||''),'future slot impact marker should not show loud status text');

@@ -346,7 +346,7 @@ function turnaroundGapInfo(previous,next,aircraft=null){
   const shortageMin=Math.max(0,minimumMin-limitingGapMin);
   const limitingGapLabel=limitingGapMin<0?'overlap':`${limitingGapMin} min`;
   return {
-    sameStation,minimumMin,actualGapMin,plannedGapMin,belowMinimum,shortageMin,
+    sameStation,minimumMin,actualGapMin,plannedGapMin,limitingGapMin,belowMinimum,shortageMin,
     title:belowMinimum
       ? `${previous.id} to ${next.id}: turnaround ${limitingGapLabel}, minimum ${minimumMin} min for ${ac.model} · planned ${plannedGapMin} min · actual ${actualGapMin} min`
       : `${previous.id} to ${next.id}: ground time ${actualGapMin} min, minimum ${minimumMin} min for ${ac.model}`
@@ -1319,6 +1319,7 @@ function destinationWeatherContextForFlight(flight,t=simNow()){
     visibilityKm:weather.visibilityKm,
     ceilingFt:weather.ceilingFt,
     forecastAt,
+    sourceKey:`destination-weather:${flight.id}:${destination}:${Math.floor(forecastAt/(3*HOUR))}`,
     weatherSource:source,
     weatherSummary:weatherSourceText(source)
   };
@@ -1331,6 +1332,7 @@ function destinationBelowMinimaContextForFlight(flight,t=simNow()){
   return {
     ...context,
     sourceId:flight.id,
+    sourceKey:`destination-minima:${flight.id}:${context.airport}:${Math.floor((context.forecastAt||t)/(3*HOUR))}`,
     minima:`visibility ${context.visibilityKm} km / ceiling ${context.ceilingFt} ft`,
     active:Boolean((lowVisibility||lowCeiling)&&context.level!=='normal')
   };
@@ -1347,6 +1349,7 @@ function alternateSuitabilityContextForFlight(flight,t=simNow()){
   return {
     ...airborneContextForFlight(flight,t),
     sourceId:flight.id,
+    sourceKey:`alternate-suitability:${flight.id}:${destination}:${Math.floor((t+45*MIN)/(3*HOUR))}`,
     airport:destination,
     conditions:destinationWeather.conditions,
     level:destinationWeather.level,

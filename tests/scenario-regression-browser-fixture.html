@@ -1,0 +1,143 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Airline OCC scenario regression fixture</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result');
+  const frame=document.getElementById('game');
+  const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const assert=(condition,message)=>{ if(!condition) throw new Error(message); };
+  const loadApp=async()=>{
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=scenario-regression&cache='+Date.now();
+    await loaded;
+  };
+  const setStaff=(w,airport,role,value,qualification='')=>{
+    const current=w.staffAt(airport,role);
+    w.changeStaff(airport,role,value-current);
+    if(qualification){
+      const rated=w.qualifiedStaffAt(airport,role,qualification);
+      w.changeQualification(airport,role,qualification,value-rated);
+    }
+  };
+  try{
+    localStorage.removeItem('aerosim_mvp_v6');
+    localStorage.removeItem('aerosim_occ_ui_v1');
+    await loadApp();
+    const w=frame.contentWindow,d=frame.contentDocument;
+    w.resetLocalSave?.();
+    await wait(150);
+    w.eval(`
+      state.ops.automaticDisruptions=false;
+      state.aircraft=[];
+      state.flights=[];
+      state.incidents=[];
+      state.coordinationTasks=[];
+      state.resourceRequests=[];
+      state.resourceAssignments=[];
+      state.personnelTransfers=[];
+      state.passengerRecoveries=[];
+      state.crewRecoveries=[];
+      selectedFlightId=null;
+      selectedAircraftId=null;
+      workspaceUi.operationFilter={airports:[],activeIncidents:false,delayed:false,weatherCell:null};
+    `);
+
+    const now=w.simNow();
+    for(const airport of ['FRA','AMS','LHR','CDG']){
+      setStaff(w,airport,'groundHandling',30);
+      setStaff(w,airport,'operations',20);
+      setStaff(w,airport,'customerService',20);
+      setStaff(w,airport,'cabinCrew',40);
+      setStaff(w,airport,'firstOfficers',20,'Airbus A320 family');
+      setStaff(w,airport,'captains',20,'Airbus A320 family');
+    }
+
+    const crewAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const crewFlight=w.createFlightRecord({aircraftId:crewAc.id,from:'FRA',to:'AMS',departure:now+3*60*60_000,fare:{economy:120,business:300,first:600}});
+    setStaff(w,'FRA','captains',0,'Airbus A320 family');
+    setStaff(w,'AMS','captains',3,'Airbus A320 family');
+    const crewIncident=w.createIncident('crew_sick',crewFlight,{training:true,detectedAt:now,sourceKey:'scenario:remote-crew'});
+    crewIncident.affectedRole='captains';
+    assert(w.performOperationalTask(`${crewIncident.id}:crew-strategy`,'replace'),'crew sick recovery strategy was rejected');
+    assert(!w.crewPoolOptions(crewIncident).length,'remote-only crew case incorrectly had local crew available');
+    assert(w.remoteCrewPoolOptions(crewIncident).some(option=>option.airport==='AMS'),'remote crew pool is not visible for manual movement');
+    assert(!w.performOperationalTask(`${crewIncident.id}:crew-allocate`,'',{optionId:'AMS:captains'}),'remote crew allocation should not work before personnel is moved');
+
+    d.getElementById('transferPersonnelRole').value='captains';
+    d.getElementById('transferPersonnelAmount').value='1';
+    d.getElementById('transferPersonnelFrom').value='AMS';
+    d.getElementById('transferPersonnelTo').value='FRA';
+    d.getElementById('transferPersonnelMethod').value='external';
+    w.refreshPersonnelTransferOptions();
+    assert(/external booking/i.test(d.getElementById('personnelTransferPreview').textContent),'manual crew move did not show an external booking quote');
+    w.createPersonnelTransfer();
+    const transfer=w.eval('state.personnelTransfers[state.personnelTransfers.length-1]');
+    assert(transfer?.status==='scheduled'&&transfer.to==='FRA','external crew transfer was not scheduled to the disrupted station');
+    w.processPersonnelTransfers(transfer.arrival+60_000);
+    assert(w.staffAt('FRA','captains')===1,'completed crew transfer did not add the captain to FRA');
+    assert(w.performOperationalTask(`${crewIncident.id}:crew-allocate`,'',{optionId:'FRA:captains'}),'moved local reserve crew could not be allocated');
+    w.processOperationalWorkflows(Number.MAX_SAFE_INTEGER);
+    assert(crewIncident.status==='resolved','remote crew recovery did not resolve after manual movement and reserve activation');
+
+    setStaff(w,'FRA','captains',20,'Airbus A320 family');
+    const ferryAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'LHR');
+    const protectedFlight=w.createFlightRecord({aircraftId:ferryAc.id,from:'FRA',to:'CDG',departure:now+5*60*60_000,fare:{economy:130,business:330,first:650}});
+    protectedFlight.positioningBlocked=true;
+    protectedFlight.positioningDelayMin=45;
+    const ferryIncident=w.createIncident('aircraft_out_of_position',protectedFlight,{source:'derived',sourceKey:'scenario:ferry-required',detectedAt:now,context:{
+      sourceId:protectedFlight.id,
+      aircraftId:ferryAc.id,
+      tail:ferryAc.tail,
+      expectedLocation:'LHR',
+      requiredLocation:'FRA',
+      active:true,
+      delayMin:45
+    }});
+    assert(ferryIncident,'aircraft out-of-position scenario was not created');
+    assert(w.performOperationalTask(`${ferryIncident.id}:dispatch-position-strategy`,'position_ferry'),'manual ferry recovery strategy was rejected');
+    const ferryTask=w.incidentTasks(ferryIncident.id).find(task=>task.kind==='manual_ferry_required');
+    assert(ferryTask?.status==='available','manual ferry task did not become available');
+    assert(!w.performOperationalTask(ferryTask.id),'manual ferry task completed before the ferry existed');
+    const ferryDeparture=now+60*60_000;
+    const ferry=w.createFlightRecord({aircraftId:ferryAc.id,from:'LHR',to:'FRA',departure:ferryDeparture,fare:0,flightType:'ferry'});
+    w.recalculateOperations();
+    assert(w.positioningFerryPlanState(ferryIncident).ready,`created ferry ${ferry.id} does not solve aircraft projection`);
+    assert(w.performOperationalTask(ferryTask.id),'manual ferry task did not complete after creating the positioning flight');
+    assert(ferryIncident.status==='resolved','manual ferry recovery did not resolve the out-of-position incident');
+
+    const diversionAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const diverted=w.createFlightRecord({aircraftId:diversionAc.id,from:'FRA',to:'LHR',departure:now+90*60_000,fare:{economy:160,business:420,first:800}});
+    diverted.pax=96;
+    diverted.diversionAirport='AMS';
+    diverted.actualArrival=diverted.arrival+35*60_000;
+    w.recalculateOperations();
+    const paxExposure=w.passengerRecoveryExposures().find(item=>item.flightId===diverted.id);
+    const crewExposure=w.crewAccommodationExposures().find(item=>item.flightId===diverted.id);
+    assert(paxExposure&&!paxExposure.arranged,'diverted flight did not create passenger coordination exposure');
+    assert(crewExposure&&!crewExposure.arranged,'diverted flight did not create crew accommodation exposure');
+    w.refreshAll();
+    await wait(150);
+    assert(d.querySelector(`[data-passenger-recovery="${diverted.id}"][data-passenger-recovery-action="release"]`),'passenger release action is missing for diverted flight');
+    assert(d.querySelector(`[data-crew-recovery="${diverted.id}"][data-crew-recovery-action="transport"]`),'crew transport action is missing for diverted flight');
+    d.querySelector(`[data-passenger-recovery="${diverted.id}"][data-passenger-recovery-action="release"]`).click();
+    d.querySelector(`[data-crew-recovery="${diverted.id}"][data-crew-recovery-action="transport"]`).click();
+    await wait(120);
+    const paxRecord=w.passengerRecoveryRecordsForFlight(diverted.id).find(item=>item.action==='release');
+    const crewRecord=w.crewRecoveryRecordsForFlight(diverted.id).find(item=>item.action==='transport');
+    assert(paxRecord?.status==='requested','passenger release did not enter requested state');
+    assert(crewRecord?.status==='requested','crew transport did not enter requested state');
+    w.processPassengerRecoveries(paxRecord.confirmsAt+60_000);
+    w.processCrewRecoveries(crewRecord.confirmsAt+60_000);
+    assert(w.passengerRecoveryRecordsForFlight(diverted.id).find(item=>item.action==='release')?.status==='confirmed','passenger release did not confirm after response time');
+    assert(w.crewRecoveryRecordsForFlight(diverted.id).find(item=>item.action==='transport')?.status==='confirmed','crew transport did not confirm after response time');
+
+    result.textContent='PASS scenario regressions validated';
+  }catch(error){
+    console.error(error);
+    result.textContent='FAIL\n'+(error?.stack||error);
+  }
+})();
+</script>

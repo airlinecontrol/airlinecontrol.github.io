@@ -135,7 +135,9 @@
     });
     flight.weatherLiveChecks={period:-1,routeApplied:true};
     assert(w.maybeApplyLiveWeatherImpact(flight,now+75*60_000),'destination minima impact was not applied');
-    assert(w.openIncidentsForFlight(flight.id).some(item=>item.type==='destination_below_minima'&&item.context.minima.includes('1.2')),'destination below minima did not open from low visibility/ceiling forecast');
+    const minimaContext=w.destinationBelowMinimaContextForFlight(flight,now+75*60_000);
+    const openWeatherIncidents=w.openIncidentsForFlight(flight.id).map(item=>`${item.type}:${item.context?.minima||item.context?.conditions||''}`);
+    assert(w.openIncidentsForFlight(flight.id).some(item=>item.type==='destination_below_minima'&&item.context.minima.includes('1.2')),`destination below minima did not open from low visibility/ceiling forecast; context=${JSON.stringify(minimaContext)} open=${openWeatherIncidents.join(', ')}`);
     const taxiAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
     const taxiFlight=w.createFlightRecord({aircraftId:taxiAc.id,from:'FRA',to:'LHR',departure:now+2*60*60_000,fare:{economy:120,business:300,first:600}});
     w.recalculateOperations();

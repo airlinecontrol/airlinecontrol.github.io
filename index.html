@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Airline Operations Control Center</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-  <link rel="stylesheet" href="aerosim-next.css?v=1.8.31" />
+  <link rel="stylesheet" href="aerosim-next.css?v=1.8.33" />
 </head>
 <body>
 <div id="app">
@@ -33,6 +33,12 @@
         <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="aircraft" aria-expanded="true" aria-controls="rail-body-aircraft"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Aircraft</h2></span><span class="occ-widget-state"><b id="aircraftListCount">0</b></span></button></header>
         <div id="rail-body-aircraft" class="rail-widget-body">
         <div id="aircraftList" class="plain-list"></div>
+        </div>
+      </section>
+      <section class="rail-section maintenance-section" data-rail-widget="maintenance">
+        <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="maintenance" aria-expanded="true" aria-controls="rail-body-maintenance"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Maintenance</h2></span><span class="occ-widget-state"><b id="maintenanceListCount">0</b></span></button></header>
+        <div id="rail-body-maintenance" class="rail-widget-body">
+        <div id="maintenanceList" class="plain-list"></div>
         </div>
       </section>
     </aside>
@@ -153,10 +159,10 @@
 <script src="js/ground-operations.js?v=14.0.0"></script>
 <script src="js/operational-intelligence.js?v=14.0.2"></script>
 <script src="js/operational-workflows.js?v=14.1.20"></script>
-<script src="js/simulation.js?v=14.6.39"></script>
+<script src="js/simulation.js?v=14.6.40"></script>
 <script src="js/incident-resources.js?v=14.2.15"></script>
 <script src="js/incident-consequences.js?v=14.2.17"></script>
-<script src="js/ui-next.js?v=1.10.54"></script>
+<script src="js/ui-next.js?v=1.10.56"></script>
 <script src="js/map.js?v=15.0.2"></script>
 </body>
 </html>

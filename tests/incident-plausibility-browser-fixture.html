@@ -1,0 +1,137 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Airline OCC incident plausibility fixture</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result');
+  const frame=document.getElementById('game');
+  const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const assert=(condition,message)=>{ if(!condition) throw new Error(message); };
+  const loadApp=async()=>{
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=incident-plausibility&cache='+Date.now();
+    await loaded;
+  };
+  try{
+    localStorage.removeItem('aerosim_mvp_v6');
+    localStorage.removeItem('aerosim_occ_ui_v1');
+    await loadApp();
+    const w=frame.contentWindow;
+    w.resetLocalSave?.();
+    await wait(150);
+    w.eval(`
+      state.ops.automaticDisruptions=false;
+      state.aircraft=[];
+      state.flights=[];
+      state.incidents=[];
+      state.coordinationTasks=[];
+      state.resourceRequests=[];
+      state.personnelTransfers=[];
+    `);
+    for(const airport of ['FRA','LHR','AMS','CDG','MAD','VIE']){
+      w.changeStaff(airport,'captains',30);
+      w.changeStaff(airport,'firstOfficers',30);
+      w.changeStaff(airport,'cabinCrew',60);
+      w.changeStaff(airport,'groundHandling',60);
+      w.changeStaff(airport,'operations',20);
+      w.changeStaff(airport,'customerService',20);
+      w.changeQualification(airport,'captains','Airbus A320 family',30);
+      w.changeQualification(airport,'firstOfficers','Airbus A320 family',30);
+    }
+
+    const definitions=w.eval('INCIDENT_DEFINITIONS');
+    const workflows=w.eval('OperationalWorkflows.WORKFLOWS');
+    const retired=w.eval('Array.from(RETIRED_INCIDENT_TYPES)');
+    const activeTypes=Object.keys(definitions).filter(type=>!retired.includes(type));
+    const missingWorkflows=activeTypes.filter(type=>!workflows[type]);
+    assert(!missingWorkflows.length,'active incident definitions missing workflows: '+missingWorkflows.join(', '));
+    const orphanWorkflows=Object.keys(workflows).filter(type=>!definitions[type]&&!retired.includes(type));
+    assert(!orphanWorkflows.length,'workflow exists without an incident definition: '+orphanWorkflows.join(', '));
+
+    const badLabels=[];
+    for(const [type,workflow] of Object.entries(workflows)){
+      for(const step of workflow.steps||[]){
+        const label=`${type}:${step.key}:${step.label||''}`;
+        if(/\b(resolve issue|issue release|dispatch release)\b/i.test(`${step.kind} ${step.label} ${step.detail}`)) badLabels.push(label);
+        for(const option of step.options||[]){
+          if(/\b(resolve issue|issue release|dispatch release)\b/i.test(`${option.id} ${option.label} ${option.detail}`)) badLabels.push(`${label}:${option.id}`);
+          assert(option.label&&option.detail,`incident option ${type}:${step.key}:${option.id} is missing label/detail`);
+        }
+      }
+    }
+    assert(!badLabels.length,'old magic-resolution wording leaked into workflows: '+badLabels.join(', '));
+
+    const now=w.simNow();
+    const makeGround=type=>{
+      const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      return w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'AMS',departure:now+(4+activeTypes.indexOf(type)%20)*60*60_000,fare:{economy:120,business:300,first:600}});
+    };
+    const makeAirborne=type=>{
+      const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const flight=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'LHR',departure:now-(45+activeTypes.indexOf(type))*60_000,fare:{economy:140,business:360,first:700}});
+      flight.departureLogged=true;
+      flight.actualDeparture=flight.departure;
+      flight.actualArrival=now+120*60_000;
+      flight.fueled=true;
+      return flight;
+    };
+    const retiredCreated=retired.filter(type=>Boolean(w.createIncident(type,makeGround(type),{training:true,detectedAt:now})));
+    assert(!retiredCreated.length,'retired incident types are still creatable: '+retiredCreated.join(', '));
+
+    const groundFailures=[];
+    const airborneFailures=[];
+    for(const type of activeTypes){
+      const definition=definitions[type];
+      if(definition.airborneOnly&&type!=='destination_closure'){
+        const created=w.createIncident(type,makeGround(type),{training:true,detectedAt:now});
+        if(created) groundFailures.push(`${type}->${created.type}`);
+      }
+      if(!definition.airborneOnly&&!definition.allowAirborne){
+        const created=w.createIncident(type,makeAirborne(type),{training:true,detectedAt:now});
+        if(created) airborneFailures.push(`${type}->${created.type}`);
+      }
+    }
+    assert(!groundFailures.length,'airborne-only incidents can be created on ground flights: '+groundFailures.join(', '));
+    assert(!airborneFailures.length,'ground-only incidents can be created on airborne flights: '+airborneFailures.join(', '));
+
+    const groundClosure=w.createIncident('destination_closure',makeGround('destination_closure'),{training:true,detectedAt:now});
+    const airborneClosure=w.createIncident('destination_closure',makeAirborne('destination_closure'),{training:true,detectedAt:now});
+    assert(groundClosure?.type==='destination_closure_ground','ground destination closure did not route to the ground OCC flow');
+    assert(airborneClosure?.type==='destination_closure','airborne destination closure did not remain a flight-watch flow');
+
+    const workflowProblems=[];
+    for(const type of activeTypes){
+      const flight=definitions[type].airborneOnly?makeAirborne(type):makeGround(type);
+      const context=type==='destination_below_minima'
+        ? {sourceId:flight.id,airport:flight.to,conditions:'Low visibility',level:'caution',visibilityKm:1.2,ceilingFt:400,minima:'visibility 1.2 km / ceiling 400 ft',active:true}
+        : type==='aircraft_out_of_position'
+          ? {sourceId:flight.id,aircraftId:flight.aircraftId,expectedLocation:'LHR',requiredLocation:flight.from,active:true}
+          : {sourceId:flight.id,active:true,delayMin:25};
+      const incident=w.createIncident(type,flight,{training:true,detectedAt:now,source:'fixture',sourceKey:`plausibility:${type}`,context});
+      if(!incident){ workflowProblems.push(`${type}: not creatable in expected phase`); continue; }
+      const tasks=w.incidentTasks(incident.id);
+      if(!tasks.length) workflowProblems.push(`${type}: no tasks`);
+      const initial=tasks.filter(task=>task.status==='available');
+      if(!initial.length) workflowProblems.push(`${type}: no initial available task`);
+      for(const task of tasks){
+        if(['technical_strategy','recovery_strategy','authority_decision'].includes(task.kind)){
+          const options=task.strategyOptions||[];
+          if(!options.length) workflowProblems.push(`${type}:${task.key}: no strategy options`);
+          for(const option of options){
+            const consequence=w.operationalOptionConsequence(task,incident,option.id);
+            if(option.id!=='cancel'&&!option.detail&&!consequence) workflowProblems.push(`${type}:${task.key}:${option.id}: no consequence/detail`);
+          }
+        }
+      }
+    }
+    assert(!workflowProblems.length,'workflow plausibility problems: '+workflowProblems.join('; '));
+
+    result.textContent=`PASS incident plausibility matrix validated\nincidents=${activeTypes.length}\nretired=${retired.join(',')}`;
+  }catch(error){
+    console.error(error);
+    result.textContent='FAIL\n'+(error?.stack||error);
+  }
+})();
+</script>

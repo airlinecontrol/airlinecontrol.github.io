@@ -65,7 +65,7 @@
       const {flight,incident}=makeCase('crew_sick');
       incident.affectedRole=role;
       const strategy=w.incidentTasks(incident.id).find(task=>task.key==='crew-strategy');
-      assert(w.operationalOptionConsequence(strategy,incident,'replace').includes('local replacement'),'crew strategy consequence is missing local reporting impact');
+      assert(w.operationalOptionConsequence(strategy,incident,'replace').includes('reserve response'),'crew strategy consequence is missing reserve reporting impact');
       assert(w.performOperationalTask(`${incident.id}:crew-strategy`,'replace'),`${role} crew strategy was rejected`);
       assert(w.performOperationalTask(`${incident.id}:crew-allocate`,'',{optionId:`FRA:${role}`}),`${role} crew allocation was rejected`);
       completeWaits();
@@ -101,7 +101,7 @@
     {
       const {incident}=makeCase('crew_duty_risk');
       const strategy=w.incidentTasks(incident.id).find(task=>task.key==='crew-duty-strategy');
-      assert(w.operationalOptionConsequence(strategy,incident,'replace').includes('local replacement'),'crew duty replacement consequence is missing local reporting impact');
+      assert(w.operationalOptionConsequence(strategy,incident,'replace').includes('reserve response'),'crew duty replacement consequence is missing reserve reporting impact');
       assert(strategy.strategyOptions.some(option=>option.id==='cancel'),'pre-departure cancellation should be available as an incident strategy option');
       assert(w.branchStrategyOptionBlocker(strategy,incident,'cancel')==='','pre-departure cancellation should be eligible through strategy metadata');
     }
