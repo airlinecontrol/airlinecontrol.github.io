@@ -104,7 +104,7 @@
     d.querySelector('[data-desk-panel="personnel:crew-swap"]').click();
     await wait(120);
     assert(d.querySelector('[data-crew-swap-flight="'+ret.id+'"]'),'personnel widget does not expose full crew swap for selected flight');
-    assert(d.querySelector('[data-crew-swap-flight="'+ret.id+'"]')?.textContent.includes('full'),'personnel crew swap action is not clearly marked as full crew');
+    assert(d.querySelector('[data-crew-swap-flight="'+ret.id+'"]')?.textContent.includes('full'),'personnel widget swap action is not clearly marked as full crew');
     assert(!d.querySelector('[data-crew-swap-flight="'+ret.id+'"]').disabled,'crew swap should be available with local LHR reserve crew');
     d.querySelector('[data-crew-swap-flight="'+ret.id+'"]').click();
     await wait(220);

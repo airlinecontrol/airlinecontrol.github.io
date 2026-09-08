@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Airline Operations Control Center</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-  <link rel="stylesheet" href="aerosim-next.css?v=1.8.38" />
+  <link rel="stylesheet" href="aerosim-next.css?v=1.8.43" />
 </head>
 <body>
 <div id="app">
@@ -29,10 +29,10 @@
           <div id="corporateResourcesList"></div>
         </div>
       </section>
-      <section class="rail-section flights-section" data-rail-widget="activeFlights">
-        <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="activeFlights" aria-expanded="true" aria-controls="rail-body-activeFlights"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Active</h2></span><span class="occ-widget-state"><b id="activeFlightCount">0</b></span></button></header>
-        <div id="rail-body-activeFlights" class="rail-widget-body">
-        <div id="activeFlightList" class="plain-list"></div>
+      <section class="rail-section personnel-section" id="occ-desk-personnel" data-rail-widget="personnel">
+        <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="personnel" aria-expanded="true" aria-controls="rail-body-personnel"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Personnel</h2></span><span class="occ-widget-state"><b id="personnelRailCount">0</b></span></button></header>
+        <div id="rail-body-personnel" class="rail-widget-body">
+          <div id="personnelRailList"></div>
         </div>
       </section>
       <section class="rail-section aircraft-section" data-rail-widget="aircraft">
@@ -73,8 +73,8 @@
       </div>
     </section>
 
-    <aside class="context-rail" aria-label="OCC actions and resources">
-      <div id="deskStack" class="desk-stack" aria-label="OCC actions and resources"></div>
+    <aside class="context-rail" aria-label="OCC actions and operational attention">
+      <div id="deskStack" class="desk-stack" aria-label="OCC actions and operational attention"></div>
     </aside>
   </main>
 
@@ -168,7 +168,7 @@
 <script src="js/simulation.js?v=14.6.41"></script>
 <script src="js/incident-resources.js?v=14.2.15"></script>
 <script src="js/incident-consequences.js?v=14.2.17"></script>
-<script src="js/ui-next.js?v=1.10.62"></script>
-<script src="js/map.js?v=15.0.2"></script>
+<script src="js/ui-next.js?v=1.10.66"></script>
+<script src="js/map.js?v=15.0.3"></script>
 </body>
 </html>

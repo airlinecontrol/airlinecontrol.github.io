@@ -118,6 +118,7 @@
     const crewExposure=w.crewAccommodationExposures().find(item=>item.flightId===diverted.id);
     assert(paxExposure&&!paxExposure.arranged,'diverted flight did not create passenger coordination exposure');
     assert(crewExposure&&!crewExposure.arranged,'diverted flight did not create crew accommodation exposure');
+    w.settleSelectedFlight(diverted.id);
     w.refreshAll();
     await wait(150);
     assert(d.querySelector(`[data-passenger-recovery="${diverted.id}"][data-passenger-recovery-action="release"]`),'passenger release action is missing for diverted flight');

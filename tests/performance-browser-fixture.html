@@ -80,7 +80,7 @@
     await wait(150);
     timings.push(measure('refreshScheduleTimeline',()=>w.refreshScheduleTimeline(true)));
     timings.push(measure('renderDeskStack',()=>w.renderDeskStack(true)));
-    timings.push(measure('refreshOccWidgets',()=>w.refreshOccWidgets(true)));
+    timings.push(measure('refreshPersonnelRail',()=>w.refreshPersonnelRail(true)));
     timings.push(measure('updateMapData',()=>w.updateMapData()));
 
     const rows=d.querySelectorAll('#schedule-board .sched-aircraft-row').length;

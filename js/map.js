@@ -492,7 +492,7 @@ function loop(now){
     // routed through dirty flags.
     refreshGroundTaskProgress();
     refreshFleetList();
-    refreshOccWidgets(false);
+    refreshPersonnelRail(false);
     refreshScheduleTimeline(false);
     refreshDepartmentWidgets(false);
 
