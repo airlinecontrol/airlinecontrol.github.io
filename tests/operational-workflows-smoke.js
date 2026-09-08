@@ -12,7 +12,7 @@ const assertRecordedAuthorityOptions=task=>{
 };
 assert.deepEqual(Object.keys(workflows.DEPARTMENTS),['dispatch','crew','maintenance','station']);
 assert.deepEqual(Object.keys(workflows.WORKFLOWS),[
-  'crew_sick','mel_defect','atc_restriction','night_curfew_conflict','arrival_curfew_coordination','gate_conflict','destination_closure','destination_closure_ground',
+  'crew_sick','mel_defect','night_curfew_conflict','arrival_curfew_coordination','gate_conflict','destination_closure','destination_closure_ground',
   'aircraft_out_of_position','aircraft_misposition_after_diversion','postflight_technical_defect',
   'crew_misconnect','crew_misposition_after_diversion','crew_report_delayed','crew_duty_risk','crew_fatigue_report','crew_fatigue_mid_rotation','crew_duty_extension',
   'no_legal_crew','baggage_loading_issue','fueling_issue','fuel_supplier_outage','deicing_required','deicing_capacity_collapse',
@@ -44,14 +44,13 @@ const melTasks=workflows.tasksForIncident({id:'INC10',type:'mel_defect',flightId
 assert.equal(melTasks.length,5);
 assert.equal(melTasks.find(task=>task.key==='mx-strategy').kind,'recovery_strategy');
 assert.equal(melTasks.find(task=>task.key==='mx-strategy').dependsOn[0],'INC10:mx-inspect');
-assert.deepEqual(melTasks.find(task=>task.key==='mx-strategy').strategyOptions.map(option=>option.id),['defer','repair','substitute','cancel']);
+assert.deepEqual(melTasks.find(task=>task.key==='mx-strategy').strategyOptions.map(option=>option.id),['defer','schedule_check','substitute','cancel']);
+assert.equal(melTasks.find(task=>task.kind==='maintenance_check_scheduling').branch,'schedule_check');
 assert.equal(melTasks.find(task=>task.kind==='aircraft_substitution').branch,'substitute');
 assert.equal(melTasks.some(task=>task.kind==='flight_cancellation'),false);
 assert.equal(melTasks.some(task=>task.kind==='dispatch_release'),false);
 
-const atcTasks=workflows.tasksForIncident({id:'INC11',type:'atc_restriction',flightId:'AS11',aircraftId:'AC11',detectedAt:1000});
-assert.deepEqual(atcTasks.find(task=>task.key==='dispatch-flow-strategy').strategyOptions.map(option=>option.id),['accept','priority','cancel']);
-assert.equal(atcTasks.length,1);
+assert.equal(workflows.tasksForIncident({id:'INC11',type:'atc_restriction',flightId:'AS11',aircraftId:'AC11',detectedAt:1000}).length,0);
 
 const nightTasks=workflows.tasksForIncident({id:'INC11B',type:'night_curfew_conflict',flightId:'AS11B',aircraftId:'AC11B',detectedAt:1000});
 assert.deepEqual(nightTasks.find(task=>task.key==='dispatch-night-curfew-strategy').strategyOptions.map(option=>option.id),['change_departure','cancel']);
@@ -78,7 +77,8 @@ assert.deepEqual(diversionPositionTasks.find(task=>task.key==='dispatch-position
 assert.equal(diversionPositionTasks.find(task=>task.key==='dispatch-plan-ferry').kind,'manual_ferry_required');
 
 const postflightTasks=workflows.tasksForIncident({id:'INC14C',type:'postflight_technical_defect',flightId:'AS14C',aircraftId:'AC14C',detectedAt:1000});
-assert.deepEqual(postflightTasks.find(task=>task.key==='mx-postflight-strategy').strategyOptions.map(option=>option.id),['defer','repair','substitute','cancel']);
+assert.deepEqual(postflightTasks.find(task=>task.key==='mx-postflight-strategy').strategyOptions.map(option=>option.id),['defer','schedule_check','substitute','cancel']);
+assert.equal(postflightTasks.find(task=>task.kind==='maintenance_check_scheduling').branch,'schedule_check');
 assert.equal(postflightTasks.find(task=>task.kind==='aircraft_substitution').branch,'substitute');
 
 const misconnectTasks=workflows.tasksForIncident({id:'INC14D',type:'crew_misconnect',flightId:'AS14D',aircraftId:'AC14D',detectedAt:1000});

@@ -113,8 +113,10 @@
       validUntil:t+3*60*60_000
     });
     flight.weatherLiveChecks={period:-1,routeApplied:true};
-    assert(w.maybeApplyLiveWeatherImpact(flight,now+62*60_000),'destination weather deterioration was not applied');
-    assert(w.openIncidentsForFlight(flight.id).some(item=>item.type==='destination_weather_deterioration'&&item.context.capacityPct===76&&item.context.weatherSummary.includes('Destination forecast')),'destination weather deterioration did not open a derived case with forecast provenance');
+    w.maybeApplyLiveWeatherImpact(flight,now+62*60_000);
+    assert(!w.openIncidentsForFlight(flight.id).some(item=>item.type==='destination_weather_deterioration'),'destination weather deterioration should no longer open a derived incident');
+    const destinationWeatherWarning=w.operationWarnings(now+62*60_000).find(item=>item.type==='destination_weather'&&item.flightId===flight.id);
+    assert(destinationWeatherWarning&&destinationWeatherWarning.detail.includes('Rain showers')&&destinationWeatherWarning.detail.includes('possible +22 min'),'destination weather deterioration was not shown as a warning with forecast context');
 
     w.AeroWeatherEngine.weatherAt=(code,t)=>({
       airport:code,
@@ -138,6 +140,7 @@
     const minimaContext=w.destinationBelowMinimaContextForFlight(flight,now+75*60_000);
     const openWeatherIncidents=w.openIncidentsForFlight(flight.id).map(item=>`${item.type}:${item.context?.minima||item.context?.conditions||''}`);
     assert(w.openIncidentsForFlight(flight.id).some(item=>item.type==='destination_below_minima'&&item.context.minima.includes('1.2')),`destination below minima did not open from low visibility/ceiling forecast; context=${JSON.stringify(minimaContext)} open=${openWeatherIncidents.join(', ')}`);
+    assert(!w.operationWarnings(now+75*60_000).some(item=>item.type==='destination_weather'&&item.flightId===flight.id),'destination weather warning should be suppressed while below-minima incident is active');
     const taxiAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
     const taxiFlight=w.createFlightRecord({aircraftId:taxiAc.id,from:'FRA',to:'LHR',departure:now+2*60*60_000,fare:{economy:120,business:300,first:600}});
     w.recalculateOperations();
@@ -163,7 +166,24 @@
     });
     flight.weatherLiveChecks={period:-1,routeApplied:true};
     assert(w.maybeApplyLiveWeatherImpact(flight,now+93*60_000),'destination weather impact was not applied');
-    assert(w.openIncidentsForFlight(flight.id).some(item=>item.type==='destination_closure'),'severe destination weather did not open an airborne closure case');
+    const closure=w.openIncidentsForFlight(flight.id).find(item=>item.type==='destination_closure');
+    assert(closure,'severe destination weather did not open an airborne closure case');
+    flight.weatherLiveChecks={period:-1,routeApplied:true};
+    w.maybeApplyLiveWeatherImpact(flight,now+4*60*60_000);
+    const closuresAfterBucket=w.openIncidentsForFlight(flight.id).filter(item=>item.type==='destination_closure');
+    assert(closuresAfterBucket.length===1&&closuresAfterBucket[0].id===closure.id,'continuous destination closure opened a duplicate case after the weather bucket changed');
+    const duplicateAttempt=w.createIncident('destination_closure',flight,{detectedAt:now+4*60*60_000,source:'weather',sourceKey:`legacy-weather-destination:${flight.id}:next`,context:{airport:flight.to,reason:'fixture duplicate'}});
+    assert(duplicateAttempt.id===closure.id,'same-flight destination closure did not reuse the existing open case');
+    w.eval(`
+      const keeper=state.incidents.find(item=>item.id==='${closure.id}');
+      const duplicate={...keeper,id:'INC_DUP_DEST_FIXTURE',sourceKey:'legacy-weather-destination:${flight.id}:old-bucket',detectedAt:keeper.detectedAt+60000,lastDetectedAt:keeper.detectedAt+60000,selectedStrategy:'',context:{...(keeper.context||{}),reason:'fixture duplicate'}};
+      state.incidents.push(duplicate);
+      state.coordinationTasks.push(...OperationalWorkflows.tasksForIncident(duplicate));
+    `);
+    assert(w.openIncidentsForFlight(flight.id).filter(item=>item.type==='destination_closure').length===2,'fixture failed to create an old duplicate destination closure');
+    assert(w.repairDuplicateOpenIncidents(now+4*60*60_000),'duplicate destination closure repair did not report a change');
+    assert(w.openIncidentsForFlight(flight.id).filter(item=>item.type==='destination_closure').length===1,'duplicate destination closure repair left multiple open cases');
+    assert(w.eval(`state.incidents.find(item=>item.id==='INC_DUP_DEST_FIXTURE')?.selectedAction==='duplicate_case_merged'`),'duplicate destination closure was not marked as merged');
 
     const lightningAircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'AMS');
     const lightningFlight=w.createFlightRecord({

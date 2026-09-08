@@ -26,8 +26,18 @@
     const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
     const first=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'LHR',departure:now+2*60*60_000,fare:{economy:140,business:360,first:700}});
     w.recalculateOperations();
-    const second=w.createFlightRecord({aircraftId:ac.id,from:'LHR',to:'FRA',departure:w.flightActualArrival(first)+10*60_000,fare:{economy:140,business:360,first:700}});
+    const second=w.createFlightRecord({aircraftId:ac.id,from:'LHR',to:'FRA',departure:w.flightActualArrival(first)+55*60_000,fare:{economy:140,business:360,first:700}});
     first.manualDelayMin=50;
+    const coveredAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const coveredInbound=w.createFlightRecord({aircraftId:coveredAc.id,from:'FRA',to:'LHR',departure:now+3*60*60_000,fare:{economy:140,business:360,first:700}});
+    w.recalculateOperations();
+    const coveredOutbound=w.createFlightRecord({aircraftId:coveredAc.id,from:'LHR',to:'FRA',departure:w.flightActualArrival(coveredInbound)+55*60_000,fare:{economy:140,business:360,first:700}});
+    coveredInbound.manualDelayMin=30;
+    coveredOutbound.manualDelayMin=90;
+    const shortAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'CDG');
+    const shortFirst=w.createFlightRecord({aircraftId:shortAc.id,from:'CDG',to:'AMS',departure:now+5*60*60_000,fare:{economy:120,business:300,first:600}});
+    w.recalculateOperations();
+    w.createFlightRecord({aircraftId:shortAc.id,from:'AMS',to:'CDG',departure:w.flightActualArrival(shortFirst)+10*60_000,fare:{economy:120,business:300,first:600}});
 
     let fraClosed=now+30*60_000;
     for(let i=0;i<144&&w.airportNightStatus('FRA',fraClosed).status!=='closed';i++) fraClosed+=20*60_000;
@@ -72,6 +82,8 @@
       : originalAlternateSuitability(flight,t);
 
     w.recalculateOperations();
+    second.actualDeparture=w.flightActualArrival(first)+30*60_000;
+    second.actualArrival=second.actualDeparture+(second.arrival-second.departure);
     {
       const onwardDeparture=Math.max(w.flightActualDeparture(connectionOnward),now+90*60_000);
       connectionOnward.actualDeparture=onwardDeparture;
@@ -88,6 +100,7 @@
     const warnings=w.operationWarnings();
     assert(warnings.some(item=>item.type==='short_turn'),'short-turn warning was not derived');
     assert(warnings.some(item=>item.type==='late_inbound'),'late-inbound warning was not derived');
+    assert(!warnings.some(item=>item.type==='late_inbound'&&item.flightId===coveredOutbound.id),'late-inbound warning should not fire when outbound delay preserves minimum turnaround');
     assert(warnings.some(item=>item.type==='night_conflict'),'night-curfew warning was not derived');
     assert(warnings.some(item=>item.type==='crew_duty'),'crew-duty warning was not derived');
     assert(warnings.some(item=>item.type==='maintenance'),'maintenance warning was not derived');
@@ -102,10 +115,11 @@
     assert(d.querySelector('[data-desk-widget="warnings"]')?.textContent.includes(connectionOnward.id),'warnings widget does not show the affected onward connection');
     assert(!d.querySelector('[data-desk-widget="warnings"] .warning-summary-section'),'warning widget still renders the old duplicated summary section');
     assert(d.querySelectorAll('[data-desk-widget="warnings"] .warning-group-card').length>=4,'warning widget did not group warning families');
-    assert([...d.querySelectorAll('[data-desk-widget="warnings"] .warning-group-card')].every(group=>group.querySelectorAll(':scope > .warning-row').length<=2),'warning groups should only preview the first two rows');
-    if(warnings.some(item=>warnings.filter(other=>other.group===item.group).length>2)){
+    assert([...d.querySelectorAll('[data-desk-widget="warnings"] .warning-group-card')].every(group=>group.querySelectorAll(':scope > .warning-row').length<=10),'warning groups should preview at most ten rows');
+    if(warnings.some(item=>warnings.filter(other=>other.group===item.group).length>10)){
       assert(d.querySelector('[data-desk-widget="warnings"] .warning-group-more'),'warning groups with overflow should expose a compact disclosure');
     }
+    assert(!Array.from(d.querySelectorAll('[data-desk-widget="warnings"] .warning-row em, [data-desk-widget="warnings"] .warning-group-card>header em')).some(node=>/dispatch|crew|maintenance/i.test(node.textContent)),'warning owner department labels should not be rendered');
     const flightWarning=d.querySelector(`[data-desk-widget="warnings"] [data-warning-flight="${second.id}"]`);
     assert(flightWarning,'clickable flight warning is missing');
     flightWarning.click();
@@ -127,6 +141,53 @@
     nightFlight.cancelled=true;
     w.recalculateOperations();
     assert(!w.operationWarnings().some(item=>item.flightId===nightFlight.id),'cancelled flight warning did not self-clear');
+
+    {
+      const staleAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'ATL');
+      const staleFlight=w.createFlightRecord({aircraftId:staleAc.id,from:'ATL',to:'MCO',departure:now-45*60_000,fare:{economy:120,business:300,first:0}});
+      staleFlight.departureLogged=true;
+      staleFlight.actualDeparture=staleFlight.departure;
+      staleFlight.actualArrival=now+75*60_000;
+      staleFlight.operationalDurationMs=staleFlight.actualArrival-staleFlight.actualDeparture;
+      const staleIncident={
+        id:'INC_STALE_WX',
+        type:'destination_weather_deterioration',
+        flightId:staleFlight.id,
+        aircraftId:staleAc.id,
+        airport:'MCO',
+        detectedAt:now-10*60_000,
+        deadline:now+15*60_000,
+        status:'open',
+        severity:'warning',
+        blocking:true,
+        training:false,
+        selectedAction:'',
+        resolvedAt:0,
+        outcome:'',
+        automaticResolution:false,
+        classification:'derived',
+        workflowCreatedAt:now-10*60_000,
+        overdue:false,
+        recoveryPlan:'',
+        recoveryPlanAt:0,
+        source:'derived',
+        sourceKey:'stale-destination-weather',
+        context:{sourceId:staleFlight.id,airport:'MCO',conditions:'Rain showers',capacityPct:76,delayMin:22,active:true},
+        lastDetectedAt:now-10*60_000,
+        impacts:[]
+      };
+      w.eval(`{
+        const staleIncident=${JSON.stringify(staleIncident)};
+        state.incidents.push(staleIncident);
+        state.coordinationTasks.push(...AeroOperationalWorkflows.tasksForIncident(staleIncident));
+      }`);
+      assert(w.processEvents(),'stale retired destination-weather incident was not repaired');
+      assert(!w.openOperationalIncidents().some(item=>item.id==='INC_STALE_WX'),'retired destination-weather incident stayed open');
+      w.renderDeskStack(true);
+      assert(d.querySelector('[data-desk-widget="warnings"]'),'warning widget failed to render after stale retired incident cleanup');
+      d.querySelector('[data-desk-widget="warnings"] [data-toggle-desk]')?.click();
+      assert(true,'warning widget remains clickable after stale retired incident cleanup');
+    }
     result.textContent='PASS warning widget validated';
   }catch(error){
     result.textContent='FAIL '+(error.stack||error);

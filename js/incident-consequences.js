@@ -112,7 +112,7 @@
     }else if(['mx-strategy','mx-postflight-strategy','dispatch-tech-decision','dispatch-lightning-decision','dispatch-bird-decision','dispatch-pressure-decision'].includes(task.key)){
       category='maintenance';
       if(optionId==='defer') add('MEL admin / follow-up',700);
-      if(optionId==='repair') add('unscheduled repair',9_500*aircraftSizeFactor(flight));
+      if(optionId==='schedule_check') add('unscheduled maintenance check',9_500*aircraftSizeFactor(flight));
       if(optionId==='substitute') add('aircraft swap',2_000*aircraftSizeFactor(flight));
       if(['divert','return_origin'].includes(optionId)) add('arrival engineering support',4_500*aircraftSizeFactor(flight));
       if(['continue','continue_low'].includes(optionId)) add('arrival inspection',1_800*aircraftSizeFactor(flight));
@@ -136,7 +136,7 @@
       category='passenger';
       if(['remote','tow','hold_screening','delay_departure','delay_reopen'].includes(optionId)) delay(context.delayMin||currentDelay||30);
       if(['offload_passenger','alternate_destination','prepare_alternate','request_handling'].includes(optionId)) add('passenger / station handling',Math.max(1_000,(flight.pax||0)*28));
-    }else if(['dispatch-flow-strategy','dispatch-capacity-strategy','dispatch-groundstop-strategy','dispatch-night-curfew-strategy','dispatch-reroute-strategy'].includes(task.key)){
+    }else if(['dispatch-capacity-strategy','dispatch-groundstop-strategy','dispatch-night-curfew-strategy','dispatch-reroute-strategy'].includes(task.key)){
       category='dispatch';
       if(['priority','direct'].includes(optionId)) add('priority coordination',1_200*aircraftSizeFactor(flight));
       delay(optionId==='priority'?Math.max(10,(context.delayMin||30)*.55):context.delayMin||currentDelay||30);
@@ -306,15 +306,13 @@
     }
 
     if(['mx-strategy','mx-postflight-strategy'].includes(task.key)){
-      if(optionId==='defer') return 'minimal delay after engineering sign-off · MEL restrictions may remain';
-      if(optionId==='repair') return `possible +120 min delay · ${rotationRiskText(flight)}`;
+      if(optionId==='defer') return incident.technicalContext?.deferAllowed===false
+        ? 'not deferrable under MEL · maintenance check required'
+        : 'minimal delay after engineering sign-off · MEL restrictions may remain';
+      if(optionId==='schedule_check') return `planned maintenance downtime · ${rotationRiskText(flight)}`;
       if(optionId==='substitute') return replacementConsequenceText(incident);
     }
 
-    if(task.key==='dispatch-flow-strategy'){
-      if(optionId==='accept') return 'possible +45 min ground delay';
-      if(optionId==='priority') return 'possible +20 min delay · waits for ATC reply';
-    }
     if(task.key==='station-stand-strategy'){
       if(optionId==='remote') return 'possible +20 min delay · bus boarding required';
       if(optionId==='tow') return 'possible +30 min delay · tow coordination required';

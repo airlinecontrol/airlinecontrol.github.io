@@ -60,6 +60,24 @@
     w.changeStaff('LHR','customerService',20);
     w.changeQualification('LHR','captains',family,20);
     w.changeQualification('LHR','firstOfficers',family,20);
+    let futureLhrRestricted=w.simNow()+60*60_000;
+    for(let i=0;i<96&&w.airportNightStatus('LHR',futureLhrRestricted).status!=='restricted';i++) futureLhrRestricted+=30*60_000;
+    assert(w.airportNightStatus('LHR',futureLhrRestricted).status==='restricted','fixture could not find a future LHR night restriction window');
+    const quotaAircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'LHR');
+    const quotaFlight=w.createFlightRecord({
+      aircraftId:quotaAircraft.id,
+      from:'LHR',
+      to:'AMS',
+      departure:futureLhrRestricted,
+      fare:{economy:140,business:360,first:700}
+    });
+    w.recalculateOperations();
+    w.alignScheduleWindowToFlight(quotaFlight);
+    w.refreshAll();
+    await wait(100);
+    const restrictionBar=d.querySelector(`#schedule-board .night-closure-bar.restriction[data-night-flight="${quotaFlight.id}"][data-night-airport="LHR"]`);
+    assert(restrictionBar,'quota/noise night restriction did not render a lighter schedule bar');
+
     const flight=w.createFlightRecord({
       aircraftId:aircraft.id,
       from:'LHR',
@@ -77,6 +95,7 @@
     assert(w.processDerivedOperationalIncidents(flight.departure-5*60_000),'night curfew conflict did not create a derived incident');
     const incident=w.eval(`state.incidents.find(item=>item.flightId==='${flight.id}'&&item.type==='night_curfew_conflict'&&item.status==='open')`);
     assert(incident,'night curfew conflict incident is missing');
+    incident.deadline=w.simNow()+30*60_000;
     const task=w.incidentTasks(incident.id).find(item=>item.kind==='recovery_strategy');
     assert(task?.strategyOptions?.some(option=>option.id==='change_departure'),'night curfew incident does not offer manual departure change');
     assert(task.strategyOptions.some(option=>option.id==='cancel'),'night curfew incident does not offer cancellation');

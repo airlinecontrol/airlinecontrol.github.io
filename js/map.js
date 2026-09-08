@@ -14,11 +14,27 @@ const HIDDEN_BASEMAP_LABEL_LAYERS=[
   'place_state'
 ];
 
+function homeBaseMapAirport(){
+  return AIRPORTS[state.home]||AIRPORTS.FRA||Object.values(AIRPORTS)[0]||{lon:8.5,lat:49.5};
+}
+
+function homeBaseMapCenter(){
+  const airport=homeBaseMapAirport();
+  return [airport.lon,airport.lat];
+}
+
+function centerMapOnHomeBase({animate=false,zoom=5}={}){
+  if(!mapReady) return;
+  const payload={center:homeBaseMapCenter(),zoom};
+  if(animate) map.easeTo(payload);
+  else map.jumpTo(payload);
+}
+
 const map = new maplibregl.Map({
   container: 'map',
   style: MAP_STYLE_URL,
-  center: [8.5,49.5],
-  zoom: 4,
+  center: homeBaseMapCenter(),
+  zoom: 5,
   attributionControl: true
 });
 
@@ -107,7 +123,6 @@ function aircraftMarkerHtml(ac, p, index=operationalIndex()) {
   const movementClass=p.status==='airborne'?'airborne':p.status==='taxi_out'||p.status==='taxi_in'?'taxi':'ground';
   const statusLabel=p.status==='taxi_out'?'Taxi out':p.status==='taxi_in'?'Taxi in':p.status==='airborne'?'Airborne':'On ground';
   return `<div class="plane-shell ${movementClass} ${incident.level} ${selected ? 'selected' : ''}" title="${esc(incident.label||statusLabel)}">
-    <span class="plane-halo"></span>
     <span class="plane-glyph" style="transform:rotate(${rotation}deg)">&#9992;</span>
     <span class="plane-label-map">${esc(label)}</span>
   </div>`;
@@ -465,7 +480,7 @@ map.on('load', () => {
   initialiseMapLayers();
   createAirportMarkers();
   updateMapData();
-  fitNetwork();
+  centerMapOnHomeBase({animate:false});
   refreshScheduleTimeline(true);
 });
 
@@ -474,35 +489,46 @@ document.getElementById('fitBtn').addEventListener('click',fitNetwork);
 let lastUi=0;
 let lastMapTick=0;
 let lastHeaderTick=0;
+let lastEventTick=0;
+const EVENT_TICK_MS=500;
 function loop(now){
-  const changed=processEvents();
-  if(changed&&typeof markUiDirty==='function') markUiDirty('all');
-  if(typeof checkActionableIncidentDing==='function') checkActionableIncidentDing();
-  if(changed||now-lastMapTick>350){
-    updateMapData();
-    lastMapTick=now;
-  }
-  if(now-lastHeaderTick>250){
-    refreshHeader();
-    lastHeaderTick=now;
-  }
-  updateScheduleNowLine();
-  if(now-lastUi>900){
-    // Passive tickers update lightweight progress surfaces; structural renders are
-    // routed through dirty flags.
-    refreshGroundTaskProgress();
-    refreshFleetList();
-    refreshPersonnelRail(false);
-    refreshScheduleTimeline(false);
-    refreshDepartmentWidgets(false);
+  try{
+    let changed=false;
+    if(now-lastEventTick>EVENT_TICK_MS){
+      changed=processEvents();
+      lastEventTick=now;
+    }
+    if(changed&&typeof markUiDirty==='function') markUiDirty('all');
+    if(typeof checkActionableIncidentDing==='function') checkActionableIncidentDing();
+    if(changed||now-lastMapTick>350){
+      updateMapData();
+      lastMapTick=now;
+    }
+    if(now-lastHeaderTick>250){
+      refreshHeader();
+      lastHeaderTick=now;
+    }
+    updateScheduleNowLine();
+    if(now-lastUi>900){
+      // Passive tickers update lightweight progress surfaces; structural renders are
+      // routed through dirty flags.
+      refreshGroundTaskProgress();
+      refreshFleetList();
+      refreshPersonnelRail(false);
+      refreshScheduleTimeline(false);
+      refreshDepartmentWidgets(false);
 
-    lastUi=now;
+      lastUi=now;
+    }
+    if(typeof flushUiDirty==='function') flushUiDirty();
+  }catch(error){
+    console.error('AOC main loop failed',error);
   }
-  if(typeof flushUiDirty==='function') flushUiDirty();
   requestAnimationFrame(loop);
 }
 applyWorkspaceView(activeWorkspaceView,{restoreWidths:true});
-refreshAll();
+try{ refreshAll(); }
+catch(error){ console.error('AOC initial refresh failed',error); markUiDirty('all'); }
 requestAnimationFrame(loop);
 setInterval(save,5000);
 window.addEventListener('beforeunload',save);

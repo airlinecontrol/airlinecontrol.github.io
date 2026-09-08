@@ -87,7 +87,60 @@
     assert(!singleReturn.cancelled,'single-flight cancellation incorrectly cancelled the paired return leg');
     assert(d.querySelector(`#schedule-board .flight-block.cancelled[data-flight-id="${singleOut.id}"]`),'cancelled single flight is not retained as a red schedule block');
     assert(d.querySelector(`#schedule-board .flight-block:not(.cancelled)[data-flight-id="${singleReturn.id}"]`),'paired return flight is not retained as an active schedule block');
+    assert(!d.querySelector(`#schedule-board [data-slot-flight="${singleOut.id}"]`),'cancelled single flight left a slot/planned marker behind');
     assert(!d.querySelector(`#schedule-board .planned-flight-block[data-flight-id="${singleOut.id}"]`),'cancelled unselected flight should not render a selected-flight ghost box');
+    assert(![...d.querySelectorAll('#schedule-board .crew-duty-bar')].some(node=>(node.getAttribute('title')||'').includes(singleOut.id)),'cancelled single flight stayed in a crew-duty bar');
+    assert(!d.querySelector(`#schedule-board .night-closure-bar[data-night-flight="${singleOut.id}"]`),'cancelled single flight left a night-closure bar behind');
+
+    const taxiCancelAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const taxiCancel=w.createFlightRecord({
+      aircraftId:taxiCancelAc.id,
+      from:'FRA',
+      to:'AMS',
+      departure:now-5*60_000,
+      fare:{economy:120,business:300,first:600}
+    });
+    taxiCancel.departureLogged=true;
+    taxiCancel.actualDeparture=taxiCancel.departure;
+    taxiCancel.actualArrival=now+90*60_000;
+    taxiCancel.fueled=true;
+    w.recalculateOperations();
+    assert(w.statusOfFlight(taxiCancel,now)==='taxi_out','taxi cancellation fixture did not create a taxi-out flight');
+    w.settleSelectedFlight(taxiCancel.id);
+    w.refreshAll();
+    await wait(120);
+    const taxiCancelButton=d.querySelector(`[data-dispatch-occ-flight="${taxiCancel.id}"] [data-occ-cancel-single-flight="${taxiCancel.id}"]`);
+    assert(taxiCancelButton&&!taxiCancelButton.disabled,'taxi-out flight should still be cancellable before becoming airborne');
+    taxiCancelButton.click();
+    await wait(160);
+    assert(taxiCancel.cancelled,'taxi-out flight cancellation did not mark the flight cancelled');
+
+    const staleAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const staleFuture=w.createFlightRecord({
+      aircraftId:staleAc.id,
+      from:'FRA',
+      to:'AMS',
+      departure:now+7*60*60_000,
+      fare:{economy:120,business:300,first:600}
+    });
+    w.recalculateOperations();
+    staleFuture.actualDeparture=now-4*60*60_000;
+    staleFuture.actualArrival=now-2*60*60_000;
+    staleFuture.departureLogged=true;
+    staleFuture.settled=true;
+    assert(w.statusOfFlight(staleFuture,now)==='scheduled','future flight with stale lifecycle flags should still read as scheduled');
+    assert(w.flightCanBeCancelled(staleFuture,now),'future flight with stale lifecycle flags should still be cancellable');
+    assert(!w.flightCancellationUnavailableReason(staleFuture,now),'future flight with stale lifecycle flags should not report a cancellation blocker');
+    w.processEvents();
+    assert(!staleFuture.departureLogged&&!staleFuture.settled,'event loop did not repair impossible future lifecycle flags');
+    w.settleSelectedFlight(staleFuture.id);
+    w.refreshAll();
+    await wait(120);
+    const staleCancelButton=d.querySelector(`[data-dispatch-occ-flight="${staleFuture.id}"] [data-occ-cancel-single-flight="${staleFuture.id}"]`);
+    assert(staleCancelButton&&!staleCancelButton.disabled,`future flight with stale lifecycle flags showed a disabled cancel action: ${staleCancelButton?.outerHTML||'missing'}; can=${w.flightCanBeCancelled(staleFuture)}; blocker=${w.flightCancellationUnavailableReason(staleFuture)||'none'}; status=${w.statusOfFlight(staleFuture)}`);
+    staleCancelButton.click();
+    await wait(160);
+    assert(staleFuture.cancelled,'future flight with stale actual timing was not cancelled');
 
     const turnAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
     const turnOut=w.createFlightRecord({
@@ -129,6 +182,12 @@
     assert(!laterOut.cancelled,'turnaround cancellation incorrectly cancelled a later recurring leg');
     assert(d.querySelector(`#schedule-board .flight-block.cancelled[data-flight-id="${turnOut.id}"]`),'cancelled turnaround outbound leg is not retained as a red schedule block');
     assert(d.querySelector(`#schedule-board .flight-block.cancelled[data-flight-id="${turnReturn.id}"]`),'cancelled turnaround return leg is not retained as a red schedule block');
+    assert(!d.querySelector(`#schedule-board [data-slot-flight="${turnOut.id}"], #schedule-board [data-slot-flight="${turnReturn.id}"]`),'cancelled turnaround left slot/planned markers behind');
+    assert(![...d.querySelectorAll('#schedule-board .crew-duty-bar')].some(node=>{
+      const title=node.getAttribute('title')||'';
+      return title.includes(turnOut.id)||title.includes(turnReturn.id);
+    }),'cancelled turnaround stayed in a crew-duty bar');
+    assert(!d.querySelector(`#schedule-board .night-closure-bar[data-night-flight="${turnOut.id}"], #schedule-board .night-closure-bar[data-night-flight="${turnReturn.id}"]`),'cancelled turnaround left night-closure bars behind');
 
     w.settleSelectedFlight(laterOut.id);
     w.alignScheduleWindowToFlight(laterOut);
@@ -150,6 +209,47 @@
     d.querySelector('#schedule-board').dispatchEvent(new MouseEvent('click',{bubbles:true}));
     await wait(80);
     assert(!d.querySelector(`#schedule-board .planned-flight-block[data-flight-id="${laterOut.id}"]`),'planned ghost box stayed visible after clearing selection');
+
+    const plannerAc=w.assignRequestedAircraft('A220-100',w.defaultCabin('A220-100'),'ATL');
+    const earlyOut=w.createFlightRecord({
+      aircraftId:plannerAc.id,
+      from:'ATL',
+      to:'TPA',
+      departure:now+60*60_000,
+      fare:{economy:110,business:280,first:560},
+      serviceId:'TST-PLANNER',
+      serviceLeg:'outbound'
+    });
+    const earlyReturn=w.createFlightRecord({
+      aircraftId:plannerAc.id,
+      from:'TPA',
+      to:'ATL',
+      departure:w.flightActualArrival(earlyOut)+90*60_000,
+      fare:{economy:110,business:280,first:560},
+      serviceId:'TST-PLANNER',
+      serviceLeg:'return'
+    });
+    const proposedDeparture=w.flightActualArrival(earlyReturn)+2*60*60_000;
+    const proposedOut=w.estimateFlight('ATL','TPA',plannerAc,{economy:110,business:280,first:560},{departure:proposedDeparture});
+    const proposedReturnDeparture=proposedDeparture+proposedOut.duration+90*60_000;
+    const proposedReturn=w.estimateFlight('TPA','ATL',plannerAc,{economy:110,business:280,first:560},{departure:proposedReturnDeparture});
+    const laterCommitted=w.createFlightRecord({
+      aircraftId:plannerAc.id,
+      from:'ATL',
+      to:'MCO',
+      departure:proposedReturnDeparture-20*60_000,
+      fare:{economy:110,business:280,first:560}
+    });
+    const departureCheck=w.aircraftDepartureAvailability(plannerAc,'ATL',proposedDeparture);
+    assert(departureCheck.ok,'planner blocked the requested departure even though the aircraft returns before departure: '+departureCheck.reason);
+    const rotationCheck=w.validateAircraftItinerary(plannerAc,[
+      {from:'ATL',to:'TPA',departure:proposedDeparture,arrival:proposedDeparture+proposedOut.duration,label:'new outbound'},
+      {from:'TPA',to:'ATL',departure:proposedReturnDeparture,arrival:proposedReturnDeparture+proposedReturn.duration,label:'new return'}
+    ]);
+    assert(!rotationCheck.ok&&rotationCheck.code==='position'&&rotationCheck.legLabel===laterCommitted.id,'planner did not identify the later-leg rotation conflict');
+    const rotationMessage=w.aircraftItineraryFailureMessage(plannerAc,rotationCheck,'round trip');
+    assert(rotationMessage.includes('can make the requested departure'),'rotation conflict message does not distinguish departure availability from downstream conflict');
+    assert(rotationMessage.includes(`before ${laterCommitted.id}`),'rotation conflict message does not name the downstream flight');
 
     const groundFlight=w.createFlightRecord({
       aircraftId:w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA').id,

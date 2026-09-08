@@ -22,6 +22,7 @@
 
   const KIND_META={
     aircraft_substitution:{eligibility:{phase:'pre_departure_unfueled'},resources:[{type:'aircraft',mode:'replacement'}]},
+    maintenance_check_scheduling:{resources:[]},
     crew_allocation:{resources:[{type:'crew_pool',location:'origin'}]},
     manual_crew_move_required:{resources:[]},
     crew_augmentation:{resources:[{type:'augmented_crew',location:'origin'}]},
@@ -69,20 +70,14 @@
     ])},
     mel_defect:{classification:'incident',steps:withCancellation([
       {key:'mx-inspect',department:'maintenance',kind:'maintenance_inspection',label:'Inspect reported defect',detail:'Assign an engineering inspection before choosing a technical disposition.'},
-      {key:'mx-strategy',department:'maintenance',kind:'recovery_strategy',label:'Choose ground technical recovery',detail:'Select whether to defer under MEL, repair, or substitute aircraft.',dependsOn:['mx-inspect'],options:[
+      {key:'mx-strategy',department:'maintenance',kind:'recovery_strategy',label:'Choose ground technical recovery',detail:'Select whether to defer under MEL, schedule a maintenance check, or substitute aircraft.',dependsOn:['mx-inspect'],options:[
         {id:'defer',label:'Defer under MEL',detail:'Continue with documented restrictions.'},
-        {id:'repair',label:'Repair aircraft',detail:'Ground the aircraft for engineering sign-off.'},
+        {id:'schedule_check',label:'Schedule maintenance check',detail:'Plan a maintenance check window and hold the aircraft until the check is complete.'},
         {id:'substitute',label:'Use replacement aircraft',detail:'Assign a serviceable spare or borrowed aircraft.'}
       ]},
       {key:'mx-defer',department:'maintenance',kind:'maintenance_defer',label:'Defer defect under MEL',detail:'Document restrictions and confirm the aircraft can continue under MEL.',dependsOn:['mx-strategy'],branch:'defer'},
-      {key:'mx-repair',department:'maintenance',kind:'maintenance_repair',label:'Repair aircraft',detail:'Ground the aircraft while engineering completes the repair and signs it off.',dependsOn:['mx-strategy'],branch:'repair'},
+      {key:'mx-schedule-check',department:'maintenance',kind:'maintenance_check_scheduling',label:'Schedule maintenance check',detail:'Choose a check window for the affected aircraft. The aircraft remains unavailable until the check is complete.',dependsOn:['mx-strategy'],branch:'schedule_check'},
       {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign replacement aircraft',detail:'Use a serviceable spare at origin or position one in before departure.',dependsOn:['mx-strategy'],branch:'substitute'},
-    ])},
-    atc_restriction:{classification:'constraint',steps:withCancellation([
-      {key:'dispatch-flow-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose ATC recovery',detail:'Select whether to accept the regulation or request an earlier opportunity.',options:[
-        {id:'accept',label:'Accept assigned CTOT',detail:'Use the regulated departure slot and plan the delay.'},
-        {id:'priority',label:'Request earlier opportunity',detail:'Ask flow management for a better regulated slot.'}
-      ]},
     ])},
     night_curfew_conflict:{classification:'derived',steps:withCancellation([
       {key:'dispatch-night-curfew-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose night-curfew recovery',detail:'A delay now conflicts with an airport night curfew. Decide whether to protect the flight after reopening or cancel before departure.',options:[
@@ -122,7 +117,7 @@
         {id:'position_ferry',label:'Create positioning ferry',detail:'Manually schedule a ferry / positioning leg that brings the assigned aircraft to the planned origin.'},
         {id:'substitute',label:'Use replacement aircraft',detail:'Assign a serviceable spare or borrowed aircraft at the operating airport.'}
       ]},
-      {key:'dispatch-plan-ferry',department:'dispatch',kind:'manual_ferry_required',label:'Plan positioning ferry',detail:'Create the ferry movement in Dispatch & slots, then return here to confirm the aircraft is projected at origin.',dependsOn:['dispatch-position-strategy'],branch:'position_ferry',action:'check_ferry'},
+      {key:'dispatch-plan-ferry',department:'dispatch',kind:'manual_ferry_required',label:'Plan positioning ferry',detail:'Create the ferry movement in Dispatch, then return here to confirm the aircraft is projected at origin.',dependsOn:['dispatch-position-strategy'],branch:'position_ferry',action:'check_ferry'},
       {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign replacement aircraft',detail:'Use a serviceable spare or borrowed aircraft before the disrupted departure.',dependsOn:['dispatch-position-strategy'],branch:'substitute'},
     ])},
     aircraft_misposition_after_diversion:{classification:'derived',steps:withCancellation([
@@ -130,18 +125,18 @@
         {id:'position_ferry',label:'Create recovery ferry',detail:'Manually schedule a positioning leg from the diversion airport to the next origin.'},
         {id:'substitute',label:'Use replacement aircraft',detail:'Assign a serviceable spare or borrowed aircraft at the next origin.'}
       ]},
-      {key:'dispatch-plan-ferry',department:'dispatch',kind:'manual_ferry_required',label:'Plan recovery ferry',detail:'Create the ferry movement in Dispatch & slots, then return here to confirm the aircraft is projected at origin.',dependsOn:['dispatch-position-strategy'],branch:'position_ferry',action:'check_ferry'},
+      {key:'dispatch-plan-ferry',department:'dispatch',kind:'manual_ferry_required',label:'Plan recovery ferry',detail:'Create the ferry movement in Dispatch, then return here to confirm the aircraft is projected at origin.',dependsOn:['dispatch-position-strategy'],branch:'position_ferry',action:'check_ferry'},
       {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign replacement aircraft',detail:'Use a serviceable spare or borrowed aircraft before the disrupted departure.',dependsOn:['dispatch-position-strategy'],branch:'substitute'},
     ])},
     postflight_technical_defect:{classification:'derived',steps:withCancellation([
       {key:'mx-postflight-inspect',department:'maintenance',kind:'maintenance_inspection',label:'Inspect inbound aircraft',detail:'Engineering checks the aircraft after the previous sector before releasing it for the next departure.'},
-      {key:'mx-postflight-strategy',department:'maintenance',kind:'recovery_strategy',label:'Choose post-flight technical recovery',detail:'Select whether to defer the finding, repair the aircraft, or substitute aircraft.',dependsOn:['mx-postflight-inspect'],options:[
+      {key:'mx-postflight-strategy',department:'maintenance',kind:'recovery_strategy',label:'Choose post-flight technical recovery',detail:'Select whether to defer the finding, schedule a maintenance check, or substitute aircraft.',dependsOn:['mx-postflight-inspect'],options:[
         {id:'defer',label:'Defer under MEL',detail:'Continue with documented restrictions if the finding is deferrable.'},
-        {id:'repair',label:'Repair before departure',detail:'Hold the aircraft for engineering repair and sign-off.'},
+        {id:'schedule_check',label:'Schedule maintenance check',detail:'Plan a maintenance check window before this aircraft is released.'},
         {id:'substitute',label:'Use replacement aircraft',detail:'Assign a serviceable spare or borrowed aircraft.'}
       ]},
       {key:'mx-postflight-defer',department:'maintenance',kind:'maintenance_defer',label:'Defer post-flight finding',detail:'Document restrictions and confirm the aircraft can operate the next sector.',dependsOn:['mx-postflight-strategy'],branch:'defer'},
-      {key:'mx-postflight-repair',department:'maintenance',kind:'maintenance_repair',label:'Repair inbound aircraft',detail:'Hold the aircraft while engineering completes the repair.',dependsOn:['mx-postflight-strategy'],branch:'repair'},
+      {key:'mx-postflight-schedule-check',department:'maintenance',kind:'maintenance_check_scheduling',label:'Schedule maintenance check',detail:'Choose a check window for the inbound aircraft and hold it until the check completes.',dependsOn:['mx-postflight-strategy'],branch:'schedule_check'},
       {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign replacement aircraft',detail:'Use a serviceable spare or borrowed aircraft before departure.',dependsOn:['mx-postflight-strategy'],branch:'substitute'},
     ])},
     crew_misconnect:{classification:'derived',steps:withCancellation([
@@ -280,7 +275,7 @@
       {key:'station-wait-deice-slot',department:'station',kind:'station_recovery',label:'Wait for deicing slot',detail:'Accept station queueing until repeat treatment is available.',dependsOn:['station-holdover-strategy'],branch:'wait_deice_slot',action:'wait_deice_slot'},
     ])},
     airport_capacity_reduction:{classification:'derived',steps:withCancellation([
-      {key:'dispatch-capacity-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose airport flow recovery',detail:'Select how to handle a temporary airport capacity reduction affecting this departure.',options:[
+      {key:'dispatch-capacity-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose airport flow recovery',detail:'Select how to handle a temporary airport or ATC flow restriction affecting this departure.',options:[
         {id:'accept',label:'Accept flow delay',detail:'Use the current airport sequence and plan the delay.'},
         {id:'priority',label:'Request earlier opportunity',detail:'Ask airport/flow control for a better departure opportunity.'}
       ]},

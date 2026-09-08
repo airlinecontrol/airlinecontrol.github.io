@@ -21,6 +21,7 @@
     frame.contentWindow.resetLocalSave();
     await loadApp();
     const w=frame.contentWindow;
+    const d=frame.contentDocument;
     const now=w.simNow();
     w.changeStaff('FRA','captains',30);
     w.changeStaff('FRA','firstOfficers',30);
@@ -29,9 +30,11 @@
     w.changeStaff('FRA','operations',20);
     w.changeStaff('FRA','customerService',20);
     w.changeStaff('LGW','groundHandling',12);
+    w.changeStaff('LHR','groundHandling',12);
     w.changeStaff('AMS','groundHandling',12);
     w.changeStaff('CDG','groundHandling',12);
     w.changeStaff('MUC','groundHandling',12);
+    w.changeStaff('ATL','operations',12);
     w.changeQualification('FRA','captains','Airbus A320 family',30);
     w.changeQualification('FRA','firstOfficers','Airbus A320 family',30);
 
@@ -106,18 +109,29 @@
       assert(w.branchStrategyOptionBlocker(strategy,incident,'cancel')==='','pre-departure cancellation should be eligible through strategy metadata');
     }
 
-    for(const action of ['defer','repair']){
-      const {aircraft,incident}=makeCase('mel_defect');
+    for(const action of ['defer','schedule_check']){
+      const {aircraft,flight,incident}=makeCase('mel_defect','LHR',{technicalDisposition:action==='defer'?'mel_allowed':'maintenance_required'});
       assert(w.performOperationalTask(`${incident.id}:mx-inspect`),`MEL inspection did not start for ${action}`);
       completeWaits();
       const strategy=w.incidentTasks(incident.id).find(task=>task.key==='mx-strategy');
-      assert(w.operationalOptionConsequence(strategy,incident,'repair').includes('+120 min'),'MEL repair consequence is missing repair delay');
+      assert(w.operationalOptionConsequence(strategy,incident,'schedule_check').includes('maintenance downtime'),'MEL maintenance-check consequence is missing downtime impact');
+      if(action==='schedule_check') assert(w.branchStrategyOptionBlocker(strategy,incident,'defer').includes('not deferrable'),'non-MEL finding did not block MEL deferral');
       assert(w.performOperationalTask(`${incident.id}:mx-strategy`,action),`MEL ${action} strategy was rejected`);
-      assert(w.performOperationalTask(`${incident.id}:mx-${action}`,action),`MEL ${action} was rejected`);
-      if(action==='repair') completeWaits();
+      const taskKey=action==='schedule_check'?'mx-schedule-check':`mx-${action}`;
+      assert(w.performOperationalTask(`${incident.id}:${taskKey}`,action),`MEL ${action} was rejected`);
       assert(incident.status==='resolved',`MEL ${action} incident did not resolve`);
       if(action==='defer') assert(aircraft.melItems.some(item=>item.status==='open'),'MEL defer did not create an open MEL item');
-      if(action==='repair') assert(!aircraft.defectReason,'MEL repair did not clear the defect');
+      if(action==='schedule_check'){
+        assert(aircraft.maintenance.scheduled,'MEL maintenance branch did not create a scheduled check');
+        assert(aircraft.defectUntil>=aircraft.maintenance.scheduled.end,'MEL maintenance branch did not hold aircraft until check completion');
+        assert(flight.cancelled,'MEL maintenance branch did not cancel the flight affected by the scheduled check');
+        assert(flight.cancellationReason.includes('Ground technical defect'),'MEL maintenance cancellation did not keep the technical reason');
+        assert(flight.maintenanceDelayMin===0,'MEL maintenance branch should not leave a maintenance delay on a cancelled flight');
+        w.alignScheduleWindowToFlight(flight);
+        w.refreshScheduleTimeline(true);
+        await wait(80);
+        assert(d.querySelector(`#schedule-board .maintenance-schedule-block[data-maintenance-job="${aircraft.id}"]`),'technical-incident maintenance check is not visible in the schedule view');
+      }
     }
 
     {
@@ -170,20 +184,20 @@
     }
 
     {
-      const {flight,incident}=makeCase('atc_restriction');
-      assert(w.performOperationalTask(`${incident.id}:dispatch-flow-strategy`,'cancel'),'generic incident cancellation was rejected');
-      assert(incident.status==='resolved','generic cancellation did not resolve the incident');
-      assert(flight.cancelled,'generic cancellation did not cancel the affected flight');
+      const {flight,incident}=makeCase('airport_capacity_reduction','LHR',{sourceId:'fixture',delayMin:45,reason:'ATC regulated departure window'});
+      assert(w.performOperationalTask(`${incident.id}:dispatch-capacity-strategy`,'cancel'),'airport-flow cancellation was rejected');
+      assert(incident.status==='resolved','airport-flow cancellation did not resolve the incident');
+      assert(flight.cancelled,'airport-flow cancellation did not cancel the affected flight');
     }
 
     for(const action of ['accept','priority']){
-      const {flight,incident}=makeCase('atc_restriction');
-      const strategy=w.incidentTasks(incident.id).find(task=>task.key==='dispatch-flow-strategy');
-      assert(w.operationalOptionConsequence(strategy,incident,action).includes('delay'),`ATC ${action} consequence is missing delay impact`);
-      assert(w.performOperationalTask(`${incident.id}:dispatch-flow-strategy`,action),`ATC ${action} strategy was rejected`);
+      const {flight,incident}=makeCase('airport_capacity_reduction','LHR',{sourceId:'fixture',delayMin:40,reason:'ATC regulated departure window'});
+      const strategy=w.incidentTasks(incident.id).find(task=>task.key==='dispatch-capacity-strategy');
+      assert(w.operationalOptionConsequence(strategy,incident,action).includes('delay'),`Airport-flow ${action} consequence is missing delay impact`);
+      assert(w.performOperationalTask(`${incident.id}:dispatch-capacity-strategy`,action),`Airport-flow ${action} strategy was rejected`);
       if(action==='priority') completeWaits();
-      assert(incident.status==='resolved',`ATC ${action} incident did not resolve`);
-      assert(flight.incidentDelayMin===(action==='priority'?20:45),`ATC ${action} applied the wrong delay`);
+      assert(incident.status==='resolved',`Airport-flow ${action} incident did not resolve`);
+      assert(flight.incidentDelayMin===(action==='priority'?22:40),`Airport-flow ${action} applied the wrong delay`);
     }
 
     for(const action of ['remote','tow','wait_gate']){
@@ -228,6 +242,70 @@
     assert(returnClosure.diversionReturnOrigin,'Destination closure return-to-origin selection was not recorded');
     assert(returnClosure.status==='resolved','Destination closure return-to-origin incident did not resolve');
     assert(returnFlight.diversionAirport===returnFlight.from,'Destination closure did not apply return to origin');
+
+    {
+      const aircraft=w.assignRequestedAircraft('A330-900',w.defaultCabin('A330-900'),'ATL');
+      const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'ATL',to:'FRA',departure:now-7*60*60_000,fare:{economy:260,business:900,first:1800}});
+      flight.departureLogged=true;
+      flight.actualDeparture=now-7*60*60_000;
+      flight.actualArrival=now+90*60_000;
+      flight.operationalDurationMs=flight.actualArrival-flight.actualDeparture;
+      flight.fueled=true;
+      const fuel=w.flightFuelPlan('ATL','FRA',aircraft);
+      flight.tripFuelGallons=fuel.tripBurnGal;
+      flight.fuelReserveGallons=fuel.reserveGal;
+      flight.fuelOnboardAtDeparture=Math.ceil(fuel.requiredGal*1.55);
+      aircraft.fuelGallons=flight.fuelOnboardAtDeparture;
+      const incident=w.createIncident('destination_closure',flight,{training:true,detectedAt:now,context:{authorityDecision:'alternate',airport:'FRA'}});
+      assert(incident,'transatlantic destination closure was not created');
+      const anchor=w.diversionAnchorForIncident(incident,flight,aircraft);
+      assert(anchor.type==='aircraft','airborne diversion options are not anchored to the aircraft position');
+      const options=w.diversionOptionsForIncident(incident,{includeReturnOrigin:false});
+      assert(options.length,'transatlantic closure offered no airborne alternates');
+      assert(options.every(option=>option.anchor?.type==='aircraft'),'airborne alternates did not retain aircraft anchor metadata');
+      assert(options.some(option=>['LHR','LGW','AMS','CDG','MUC'].includes(option.code)),`airborne alternates did not include European nearby airports: ${options.map(option=>option.code).join(', ')}`);
+      const originArea=new Set(['ATL','MCO','TPA','FLL','MIA','CLT','RDU','BNA','MSY','IAD','DCA','BWI','PHL','JFK','BOS','ORD','DTW','DFW','IAH','AUS']);
+      assert(!options.some(option=>originArea.has(option.code)),`airborne alternates still appear origin-centered: ${options.map(option=>option.code).join(', ')}`);
+      const option=options[0];
+      assert(w.performOperationalTask(`${incident.id}:dispatch-diversion-assess`),'Transatlantic closure assessment was rejected');
+      completeWaits();
+      assert(w.performOperationalTask(`${incident.id}:dispatch-flightdeck-decision`),'Transatlantic closure flight-deck response was rejected');
+      completeWaits();
+      assert(w.performOperationalTask(`${incident.id}:dispatch-alternate`,'',{airport:option.code}),'Transatlantic airborne alternate selection was rejected');
+      assert(Math.abs(incident.diversionRouteKm-option.km)<5,'selected airborne alternate did not store aircraft-anchored distance');
+      assert(incident.diversionDurationMode==='remaining_from_anchor','selected airborne alternate did not mark duration as remaining from aircraft');
+      assert(Math.abs(flight.operationalDurationMs-((now-flight.actualDeparture)+option.duration))<2*60_000,'selected airborne alternate did not apply elapsed plus aircraft-anchored duration');
+    }
+
+    {
+      ['EWR','PHL','BOS','IAD','BWI','DCA'].forEach(code=>w.changeStaff(code,'groundHandling',-w.staffAt(code,'groundHandling')));
+      const aircraft=w.assignRequestedAircraft('A220-300',w.defaultCabin('A220-300'),'ATL');
+      const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'ATL',to:'JFK',departure:now-105*60_000,fare:{economy:190,business:520,first:0}});
+      flight.departureLogged=true;
+      flight.actualDeparture=now-105*60_000;
+      flight.actualArrival=now+25*60_000;
+      flight.operationalDurationMs=flight.actualArrival-flight.actualDeparture;
+      flight.fueled=true;
+      const fuel=w.flightFuelPlan('ATL','JFK',aircraft);
+      flight.tripFuelGallons=fuel.tripBurnGal;
+      flight.fuelReserveGallons=fuel.reserveGal;
+      flight.fuelOnboardAtDeparture=Math.ceil(fuel.requiredGal*1.45);
+      aircraft.fuelGallons=flight.fuelOnboardAtDeparture;
+      const incident=w.createIncident('onboard_medical',flight,{training:true,detectedAt:now,context:{authorityDecision:'divert'}});
+      assert(incident,'JFK medical diversion fixture did not create an incident');
+      const options=w.diversionOptionsForIncident(incident,{includeReturnOrigin:false});
+      assert(options.length,`JFK-area diversion offered no contract alternates: ${w.diversionRejectionSummaryForIncident(incident,{includeReturnOrigin:false})}`);
+      assert(options.some(option=>['EWR','PHL','BOS','IAD','BWI','DCA'].includes(option.code)),`JFK-area diversion did not include nearby alternates: ${options.map(option=>option.code).join(', ')}`);
+      assert(options.some(option=>option.handling?.source==='contract'),'JFK-area diversion still requires own station handling instead of modeled contract handling');
+      assert(w.performOperationalTask(`${incident.id}:dispatch-medical-assess`),'JFK-area medical assessment was rejected');
+      completeWaits();
+      assert(w.performOperationalTask(`${incident.id}:dispatch-medical-decision`),'JFK-area medical diversion decision was rejected');
+      completeWaits();
+      w.eval(`workspaceUi.incidentFilter='all'; setActiveIncidentCase('${incident.id}')`);
+      w.refreshAll();
+      await wait(120);
+      assert(d.querySelector(`[data-incident-case="${incident.id}"] [data-task-alternate]`),'JFK-area incident dialog still renders without an alternate selector');
+    }
 
     const {flight:fuelReturnFlight,incident:fuelReturn}=makeAirborneCase('fuel_margin_low','LHR',{authorityDecision:'return_origin',projectedLandingFuelGal:1200,reserveGal:1800,marginPct:55});
     assert(w.performOperationalTask(`${fuelReturn.id}:dispatch-fuel-assess`),'Fuel-margin assessment was rejected');

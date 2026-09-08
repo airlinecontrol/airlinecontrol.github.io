@@ -20,7 +20,18 @@ window.AeroManagement = (() => {
     JFK:{wind:21,risk:.25,climate:'continental'}, MAD:{wind:15,risk:.13,climate:'dry'},
     AMS:{wind:24,risk:.30,climate:'maritime'}, CDG:{wind:18,risk:.22,climate:'continental'},
     FCO:{wind:14,risk:.15,climate:'mediterranean'}, DXB:{wind:12,risk:.10,climate:'desert'},
-    SIN:{wind:13,risk:.28,climate:'tropical'}, HND:{wind:18,risk:.26,climate:'coastal'}
+    SIN:{wind:13,risk:.28,climate:'tropical'}, HND:{wind:18,risk:.26,climate:'coastal'},
+    SEA:{wind:20,risk:.31,climate:'maritime'}, PHX:{wind:13,risk:.12,climate:'desert'},
+    LAS:{wind:15,risk:.13,climate:'desert'}, SLC:{wind:16,risk:.22,climate:'highland'},
+    MSP:{wind:20,risk:.30,climate:'continental'}, DTW:{wind:19,risk:.27,climate:'continental'},
+    CLT:{wind:15,risk:.24,climate:'continental'}, PHL:{wind:19,risk:.26,climate:'continental'},
+    IAH:{wind:17,risk:.31,climate:'tropical'}, MCO:{wind:15,risk:.34,climate:'tropical'},
+    FLL:{wind:17,risk:.35,climate:'tropical'}, SAN:{wind:13,risk:.16,climate:'coastal'},
+    PDX:{wind:19,risk:.30,climate:'maritime'}, BWI:{wind:18,risk:.25,climate:'continental'},
+    DCA:{wind:17,risk:.24,climate:'continental'}, TPA:{wind:15,risk:.33,climate:'tropical'},
+    AUS:{wind:16,risk:.24,climate:'continental'}, BNA:{wind:16,risk:.25,climate:'continental'},
+    RDU:{wind:15,risk:.25,climate:'continental'}, MSY:{wind:17,risk:.32,climate:'tropical'},
+    HNL:{wind:21,risk:.25,climate:'tropical'}, ANC:{wind:18,risk:.31,climate:'nordic'}
   };
 
   function clamp(value,min,max){ return Math.max(min,Math.min(max,value)); }

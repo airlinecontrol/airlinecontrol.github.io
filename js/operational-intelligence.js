@@ -36,7 +36,7 @@ window.AeroOperationalIntelligence = (() => {
     const weatherPenalty=Math.max(0,1-(Number(weather.capacityFactor)||1));
     const constrained=roll<.18+weatherPenalty*.7;
     const severe=constrained&&(roll<.035+weatherPenalty*.25);
-    const reasons=['Runway configuration','Stand congestion','Departure sequencing','Surface movement restriction'];
+    const reasons=['Runway configuration','Stand congestion','Departure sequencing','Surface movement restriction','ATC regulated departure window'];
     const delayMin=severe?30+Math.round(stableUnit(`${airport}:${period}:severe`)*30):constrained?8+Math.round(stableUnit(`${airport}:${period}:delay`)*17):0;
     return {
       airport,level:severe?'severe':constrained?'reduced':'normal',delayMin,

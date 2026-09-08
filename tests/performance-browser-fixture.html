@@ -26,6 +26,10 @@
 
     const MIN=60_000,HOUR=60*MIN;
     const airports=w.eval('Object.keys(AIRPORTS).filter(code=>AIRPORTS[code]?.lat&&AIRPORTS[code]?.lon)');
+    const addedUsAirports=['SEA','PHX','LAS','SLC','MSP','DTW','CLT','PHL','IAH','MCO','FLL','SAN','PDX','BWI','DCA','TPA','AUS','BNA','RDU','MSY','HNL','ANC'];
+    const missingUsAirports=addedUsAirports.filter(code=>!airports.includes(code));
+    assert(!missingUsAirports.length,'US expansion airports missing from catalog: '+missingUsAirports.join(', '));
+    assert(w.eval('validateAirportCatalogs()'),'expanded airport catalogs failed validation');
     const models=['E190','A320neo','A330-900'].filter(model=>w.eval(`Boolean(MODELS[${JSON.stringify(model)}])`));
     assert(airports.length>=20,'performance fixture needs the expanded airport list');
     assert(models.length>=2,'performance fixture needs at least two aircraft models');
@@ -82,6 +86,15 @@
     timings.push(measure('renderDeskStack',()=>w.renderDeskStack(true)));
     timings.push(measure('refreshPersonnelRail',()=>w.refreshPersonnelRail(true)));
     timings.push(measure('updateMapData',()=>w.updateMapData()));
+    let eventCalls=0;
+    const originalProcessEvents=w.processEvents;
+    w.processEvents=function(...args){
+      eventCalls++;
+      return originalProcessEvents.apply(this,args);
+    };
+    await wait(1400);
+    w.processEvents=originalProcessEvents;
+    assert(eventCalls<=4,`main loop processed simulation events too frequently: ${eventCalls} calls in 1.4s`);
 
     const rows=d.querySelectorAll('#schedule-board .sched-aircraft-row').length;
     const renderedFlights=d.querySelectorAll('#schedule-board [data-flight-id]').length;

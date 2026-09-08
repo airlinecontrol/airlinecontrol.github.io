@@ -1,4 +1,4 @@
-/* AeroSim catalogs, shared utilities, state migration, and local persistence. */
+/* Airline Operations Control Center Simulator shared utilities, state migration, and local persistence. */
 
 const VERSION = 6;
 const SAVE_KEY = 'aerosim_mvp_v6';
@@ -7,343 +7,11 @@ const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 const Management = window.AeroManagement;
 
-const AIRPORTS = {
-  FRA:{iata:'FRA',name:'Frankfurt',lat:50.0379,lon:8.5622},
-  LHR:{iata:'LHR',name:'London Heathrow',lat:51.4700,lon:-0.4543},
-  JFK:{iata:'JFK',name:'New York JFK',lat:40.6413,lon:-73.7781},
-  MAD:{iata:'MAD',name:'Madrid',lat:40.4983,lon:-3.5676},
-  AMS:{iata:'AMS',name:'Amsterdam',lat:52.3105,lon:4.7683},
-  CDG:{iata:'CDG',name:'Paris CDG',lat:49.0097,lon:2.5479},
-  FCO:{iata:'FCO',name:'Rome Fiumicino',lat:41.8003,lon:12.2389},
-  DXB:{iata:'DXB',name:'Dubai',lat:25.2532,lon:55.3657},
-  SIN:{iata:'SIN',name:'Singapore',lat:1.3644,lon:103.9915},
-  HND:{iata:'HND',name:'Tokyo Haneda',lat:35.5494,lon:139.7798},
-
-  // Global network expansion.
-  IST:{iata:'IST',name:'Istanbul',lat:41.274874,lon:28.732136},
-  MUC:{iata:'MUC',name:'Munich',lat:48.353802,lon:11.7861},
-  ZRH:{iata:'ZRH',name:'Zurich',lat:47.458056,lon:8.548056},
-  BCN:{iata:'BCN',name:'Barcelona',lat:41.2971,lon:2.07846},
-  DUB:{iata:'DUB',name:'Dublin',lat:53.428713,lon:-6.262121},
-  CPH:{iata:'CPH',name:'Copenhagen',lat:55.618023,lon:12.650762},
-  VIE:{iata:'VIE',name:'Vienna',lat:48.110298,lon:16.5697},
-  LIS:{iata:'LIS',name:'Lisbon',lat:38.7742,lon:-9.1342},
-  OSL:{iata:'OSL',name:'Oslo',lat:60.193901,lon:11.1004},
-  ARN:{iata:'ARN',name:'Stockholm Arlanda',lat:59.651901,lon:17.9186},
-  HEL:{iata:'HEL',name:'Helsinki',lat:60.3172,lon:24.9633},
-  BRU:{iata:'BRU',name:'Brussels',lat:50.901401,lon:4.48444},
-  WAW:{iata:'WAW',name:'Warsaw Chopin',lat:52.165699,lon:20.9671},
-  PRG:{iata:'PRG',name:'Prague',lat:50.1008,lon:14.26},
-  ATH:{iata:'ATH',name:'Athens',lat:37.936401,lon:23.9445},
-  ATL:{iata:'ATL',name:'Atlanta',lat:33.6367,lon:-84.428101},
-  ORD:{iata:'ORD',name:"Chicago O'Hare",lat:41.9786,lon:-87.9048},
-  DFW:{iata:'DFW',name:'Dallas/Fort Worth',lat:32.896801,lon:-97.038002},
-  DEN:{iata:'DEN',name:'Denver',lat:39.8561,lon:-104.6737},
-  LAX:{iata:'LAX',name:'Los Angeles',lat:33.942501,lon:-118.407997},
-  SFO:{iata:'SFO',name:'San Francisco',lat:37.6213,lon:-122.379},
-  BOS:{iata:'BOS',name:'Boston Logan',lat:42.3656,lon:-71.0096},
-  IAD:{iata:'IAD',name:'Washington Dulles',lat:38.9531,lon:-77.4565},
-  MIA:{iata:'MIA',name:'Miami',lat:25.796011,lon:-80.289751},
-  MEX:{iata:'MEX',name:'Mexico City',lat:19.4361,lon:-99.0719},
-  YYZ:{iata:'YYZ',name:'Toronto Pearson',lat:43.675935,lon:-79.629421},
-  ICN:{iata:'ICN',name:'Seoul Incheon',lat:37.469101,lon:126.450996},
-  HKG:{iata:'HKG',name:'Hong Kong',lat:22.31184,lon:113.914862},
-  PVG:{iata:'PVG',name:'Shanghai Pudong',lat:31.1434,lon:121.805},
-  CAN:{iata:'CAN',name:'Guangzhou Baiyun',lat:23.3924,lon:113.2988},
-  DEL:{iata:'DEL',name:'Delhi',lat:28.55563,lon:77.09519},
-  BOM:{iata:'BOM',name:'Mumbai',lat:19.0896,lon:72.8656},
-  BKK:{iata:'BKK',name:'Bangkok Suvarnabhumi',lat:13.6811,lon:100.747002},
-  TPE:{iata:'TPE',name:'Taipei Taoyuan',lat:25.0797,lon:121.2342},
-  DOH:{iata:'DOH',name:'Doha Hamad',lat:25.273056,lon:51.608056},
-  ADD:{iata:'ADD',name:'Addis Ababa',lat:8.9779,lon:38.7993},
-  CAI:{iata:'CAI',name:'Cairo',lat:30.1219,lon:31.4056},
-  NBO:{iata:'NBO',name:'Nairobi Jomo Kenyatta',lat:-1.3192,lon:36.9278},
-  JNB:{iata:'JNB',name:'Johannesburg O.R. Tambo',lat:-26.140081,lon:28.246801},
-  CPT:{iata:'CPT',name:'Cape Town',lat:-33.9715,lon:18.6021},
-  BOG:{iata:'BOG',name:'Bogota El Dorado',lat:4.7016,lon:-74.1469},
-  EZE:{iata:'EZE',name:'Buenos Aires Ezeiza',lat:-34.8222,lon:-58.5358},
-  SCL:{iata:'SCL',name:'Santiago',lat:-33.3928,lon:-70.7858},
-  GRU:{iata:'GRU',name:'São Paulo Guarulhos',lat:-23.431274,lon:-46.469954},
-  SYD:{iata:'SYD',name:'Sydney',lat:-33.946098,lon:151.177002},
-  MEL:{iata:'MEL',name:'Melbourne',lat:-37.6733,lon:144.8433},
-  AKL:{iata:'AKL',name:'Auckland',lat:-37.0082,lon:174.785},
-
-  // Operational alternates for diversion and recovery gameplay.
-  EWR:{iata:'EWR',name:'Newark Liberty',lat:40.6894,lon:-74.170545},
-  LGW:{iata:'LGW',name:'London Gatwick',lat:51.148744,lon:-0.185739},
-  ORY:{iata:'ORY',name:'Paris Orly',lat:48.729499,lon:2.358963},
-  NRT:{iata:'NRT',name:'Tokyo Narita',lat:35.76858,lon:140.388714},
-  AUH:{iata:'AUH',name:'Abu Dhabi',lat:24.440966,lon:54.649237},
-  MXP:{iata:'MXP',name:'Milan Malpensa',lat:45.6306,lon:8.72811},
-  DUS:{iata:'DUS',name:'Düsseldorf',lat:51.289501,lon:6.76678},
-  KUL:{iata:'KUL',name:'Kuala Lumpur',lat:2.74558,lon:101.709999}
-};
-
-// Local synthetic market profiles, normalized to 0–1. They describe the metropolitan market,
-// not live airport statistics, and keep demand explainable and deterministic offline.
-const AIRPORT_MARKETS = {
-  FRA:{size:.92,business:.94,tourism:.62,wealth:.86,hub:.98,region:'Europe',season:'summer'},
-  LHR:{size:1.00,business:.98,tourism:.82,wealth:.92,hub:.96,region:'Europe',season:'summer'},
-  JFK:{size:1.00,business:.94,tourism:.90,wealth:.92,hub:.91,region:'North America',season:'summer'},
-  MAD:{size:.78,business:.68,tourism:.91,wealth:.73,hub:.68,region:'Europe',season:'summer'},
-  AMS:{size:.82,business:.87,tourism:.84,wealth:.87,hub:.84,region:'Europe',season:'summer'},
-  CDG:{size:.96,business:.90,tourism:.97,wealth:.86,hub:.92,region:'Europe',season:'summer'},
-  FCO:{size:.76,business:.58,tourism:1.00,wealth:.72,hub:.58,region:'Europe',season:'summer'},
-  DXB:{size:.93,business:.90,tourism:.96,wealth:.91,hub:1.00,region:'Middle East',season:'winter'},
-  SIN:{size:.89,business:.97,tourism:.86,wealth:.96,hub:.97,region:'Asia',season:'winter'},
-  HND:{size:1.00,business:1.00,tourism:.84,wealth:.96,hub:.94,region:'Asia',season:'spring'},
-  IST:{size:.94,business:.85,tourism:.88,wealth:.76,hub:.99,region:'Europe',season:'summer'},
-  MUC:{size:.78,business:.91,tourism:.72,wealth:.90,hub:.83,region:'Europe',season:'summer'},
-  ZRH:{size:.70,business:.96,tourism:.70,wealth:.98,hub:.79,region:'Europe',season:'summer'},
-  BCN:{size:.82,business:.68,tourism:.98,wealth:.77,hub:.65,region:'Europe',season:'summer'},
-  DUB:{size:.68,business:.82,tourism:.78,wealth:.87,hub:.70,region:'Europe',season:'summer'},
-  CPH:{size:.72,business:.88,tourism:.78,wealth:.92,hub:.82,region:'Europe',season:'summer'},
-  VIE:{size:.76,business:.84,tourism:.88,wealth:.86,hub:.78,region:'Europe',season:'summer'},
-  LIS:{size:.72,business:.70,tourism:.96,wealth:.73,hub:.72,region:'Europe',season:'summer'},
-  OSL:{size:.64,business:.82,tourism:.78,wealth:.95,hub:.69,region:'Europe',season:'summer'},
-  ARN:{size:.74,business:.89,tourism:.76,wealth:.93,hub:.78,region:'Europe',season:'summer'},
-  HEL:{size:.62,business:.82,tourism:.68,wealth:.90,hub:.74,region:'Europe',season:'summer'},
-  BRU:{size:.72,business:.90,tourism:.74,wealth:.88,hub:.62,region:'Europe',season:'summer'},
-  WAW:{size:.78,business:.80,tourism:.70,wealth:.70,hub:.82,region:'Europe',season:'summer'},
-  PRG:{size:.66,business:.66,tourism:.94,wealth:.72,hub:.55,region:'Europe',season:'summer'},
-  ATH:{size:.70,business:.60,tourism:1.00,wealth:.66,hub:.62,region:'Europe',season:'summer'},
-  ATL:{size:.99,business:.90,tourism:.62,wealth:.87,hub:1.00,region:'North America',season:'summer'},
-  ORD:{size:.96,business:.93,tourism:.72,wealth:.91,hub:.98,region:'North America',season:'summer'},
-  DFW:{size:.95,business:.90,tourism:.64,wealth:.89,hub:.99,region:'North America',season:'summer'},
-  DEN:{size:.88,business:.86,tourism:.78,wealth:.90,hub:.94,region:'North America',season:'winter'},
-  LAX:{size:.99,business:.92,tourism:.98,wealth:.95,hub:.94,region:'North America',season:'summer'},
-  SFO:{size:.90,business:.98,tourism:.86,wealth:.98,hub:.82,region:'North America',season:'summer'},
-  BOS:{size:.82,business:.94,tourism:.82,wealth:.95,hub:.78,region:'North America',season:'summer'},
-  IAD:{size:.80,business:.94,tourism:.72,wealth:.94,hub:.83,region:'North America',season:'summer'},
-  MIA:{size:.85,business:.82,tourism:.99,wealth:.90,hub:.76,region:'North America',season:'winter'},
-  MEX:{size:.96,business:.88,tourism:.86,wealth:.68,hub:.92,region:'North America',season:'winter'},
-  YYZ:{size:.90,business:.95,tourism:.80,wealth:.93,hub:.91,region:'North America',season:'summer'},
-  ICN:{size:.93,business:.95,tourism:.81,wealth:.95,hub:.98,region:'Asia',season:'spring'},
-  HKG:{size:.92,business:.97,tourism:.91,wealth:.96,hub:.98,region:'Asia',season:'winter'},
-  PVG:{size:.98,business:.96,tourism:.80,wealth:.91,hub:.96,region:'Asia',season:'spring'},
-  CAN:{size:.97,business:.92,tourism:.78,wealth:.84,hub:.95,region:'Asia',season:'spring'},
-  DEL:{size:.98,business:.89,tourism:.87,wealth:.75,hub:.95,region:'Asia',season:'winter'},
-  BOM:{size:.96,business:.94,tourism:.82,wealth:.78,hub:.91,region:'Asia',season:'winter'},
-  BKK:{size:.91,business:.72,tourism:1.00,wealth:.74,hub:.91,region:'Asia',season:'winter'},
-  TPE:{size:.84,business:.92,tourism:.84,wealth:.91,hub:.88,region:'Asia',season:'spring'},
-  DOH:{size:.82,business:.91,tourism:.88,wealth:.94,hub:.98,region:'Middle East',season:'winter'},
-  ADD:{size:.72,business:.76,tourism:.68,wealth:.54,hub:.89,region:'Africa',season:'winter'},
-  CAI:{size:.82,business:.72,tourism:.96,wealth:.62,hub:.76,region:'Africa',season:'winter'},
-  NBO:{size:.68,business:.76,tourism:.82,wealth:.58,hub:.76,region:'Africa',season:'winter'},
-  JNB:{size:.76,business:.84,tourism:.76,wealth:.71,hub:.79,region:'Africa',season:'summer'},
-  CPT:{size:.66,business:.72,tourism:1.00,wealth:.70,hub:.55,region:'Africa',season:'summer'},
-  BOG:{size:.82,business:.82,tourism:.74,wealth:.63,hub:.86,region:'South America',season:'winter'},
-  EZE:{size:.78,business:.78,tourism:.88,wealth:.64,hub:.70,region:'South America',season:'summer'},
-  SCL:{size:.76,business:.84,tourism:.82,wealth:.73,hub:.78,region:'South America',season:'summer'},
-  GRU:{size:.96,business:.91,tourism:.88,wealth:.77,hub:.93,region:'South America',season:'winter'},
-  SYD:{size:.91,business:.94,tourism:.96,wealth:.95,hub:.88,region:'Oceania',season:'winter'},
-  MEL:{size:.87,business:.90,tourism:.94,wealth:.93,hub:.78,region:'Oceania',season:'winter'},
-  AKL:{size:.66,business:.80,tourism:.98,wealth:.89,hub:.73,region:'Oceania',season:'summer'},
-  EWR:{size:.91,business:.91,tourism:.72,wealth:.92,hub:.89,region:'North America',season:'summer'},
-  LGW:{size:.78,business:.70,tourism:.90,wealth:.85,hub:.68,region:'Europe',season:'summer'},
-  ORY:{size:.73,business:.72,tourism:.92,wealth:.84,hub:.58,region:'Europe',season:'summer'},
-  NRT:{size:.87,business:.90,tourism:.86,wealth:.93,hub:.91,region:'Asia',season:'spring'},
-  AUH:{size:.73,business:.90,tourism:.86,wealth:.95,hub:.89,region:'Middle East',season:'winter'},
-  MXP:{size:.76,business:.86,tourism:.87,wealth:.86,hub:.73,region:'Europe',season:'summer'},
-  DUS:{size:.68,business:.88,tourism:.57,wealth:.89,hub:.66,region:'Europe',season:'summer'},
-  KUL:{size:.84,business:.85,tourism:.92,wealth:.82,hub:.91,region:'Asia',season:'winter'}
-};
-
-const AIRPORT_OPS = {
-  FRA:{slotIntervalMin:15,graceMin:10}, LHR:{slotIntervalMin:10,graceMin:8},
-  JFK:{slotIntervalMin:15,graceMin:10}, MAD:{slotIntervalMin:15,graceMin:10},
-  AMS:{slotIntervalMin:10,graceMin:8}, CDG:{slotIntervalMin:10,graceMin:8},
-  FCO:{slotIntervalMin:15,graceMin:10}, DXB:{slotIntervalMin:15,graceMin:10},
-  SIN:{slotIntervalMin:10,graceMin:8}, HND:{slotIntervalMin:10,graceMin:8},
-  IST:{slotIntervalMin:10,graceMin:8}, MUC:{slotIntervalMin:15,graceMin:10},
-  ZRH:{slotIntervalMin:15,graceMin:10}, BCN:{slotIntervalMin:15,graceMin:10},
-  DUB:{slotIntervalMin:15,graceMin:10}, CPH:{slotIntervalMin:15,graceMin:10},
-  VIE:{slotIntervalMin:15,graceMin:10}, LIS:{slotIntervalMin:15,graceMin:10},
-  OSL:{slotIntervalMin:15,graceMin:10}, ARN:{slotIntervalMin:15,graceMin:10},
-  HEL:{slotIntervalMin:15,graceMin:10}, BRU:{slotIntervalMin:15,graceMin:10},
-  WAW:{slotIntervalMin:15,graceMin:10}, PRG:{slotIntervalMin:15,graceMin:10},
-  ATH:{slotIntervalMin:15,graceMin:10}, ATL:{slotIntervalMin:10,graceMin:8},
-  ORD:{slotIntervalMin:10,graceMin:8}, DFW:{slotIntervalMin:10,graceMin:8},
-  DEN:{slotIntervalMin:10,graceMin:8}, LAX:{slotIntervalMin:10,graceMin:8},
-  SFO:{slotIntervalMin:10,graceMin:8}, BOS:{slotIntervalMin:15,graceMin:10},
-  IAD:{slotIntervalMin:15,graceMin:10}, MIA:{slotIntervalMin:15,graceMin:10},
-  MEX:{slotIntervalMin:10,graceMin:8}, YYZ:{slotIntervalMin:10,graceMin:8},
-  ICN:{slotIntervalMin:10,graceMin:8}, HKG:{slotIntervalMin:10,graceMin:8},
-  PVG:{slotIntervalMin:10,graceMin:8}, CAN:{slotIntervalMin:10,graceMin:8},
-  DEL:{slotIntervalMin:10,graceMin:8}, BOM:{slotIntervalMin:10,graceMin:8},
-  BKK:{slotIntervalMin:10,graceMin:8}, TPE:{slotIntervalMin:15,graceMin:10},
-  DOH:{slotIntervalMin:10,graceMin:8}, ADD:{slotIntervalMin:15,graceMin:10},
-  CAI:{slotIntervalMin:15,graceMin:10}, NBO:{slotIntervalMin:15,graceMin:10},
-  JNB:{slotIntervalMin:15,graceMin:10}, CPT:{slotIntervalMin:15,graceMin:10},
-  BOG:{slotIntervalMin:15,graceMin:10}, EZE:{slotIntervalMin:15,graceMin:10},
-  SCL:{slotIntervalMin:15,graceMin:10}, GRU:{slotIntervalMin:10,graceMin:8},
-  SYD:{slotIntervalMin:10,graceMin:8}, MEL:{slotIntervalMin:15,graceMin:10},
-  AKL:{slotIntervalMin:15,graceMin:10},
-  EWR:{slotIntervalMin:10,graceMin:8}, LGW:{slotIntervalMin:10,graceMin:8},
-  ORY:{slotIntervalMin:15,graceMin:10}, NRT:{slotIntervalMin:10,graceMin:8},
-  AUH:{slotIntervalMin:15,graceMin:10}, MXP:{slotIntervalMin:15,graceMin:10},
-  DUS:{slotIntervalMin:15,graceMin:10}, KUL:{slotIntervalMin:15,graceMin:10}
-};
-const MIN_TURN_MIN = 35;
 const FUEL_MARKET_STEP = 6 * HOUR;
 const FUEL_MARKET_BASE_EUR_GAL = 2.45;
-const PERSONNEL = {
-  captains:{label:'Captains',salary:11_500},
-  firstOfficers:{label:'First officers',salary:7_500},
-  cabinCrew:{label:'Cabin crew',salary:3_500},
-  groundHandling:{label:'Ground handling',salary:3_200},
-  operations:{label:'Operations & dispatch',salary:4_800},
-  customerService:{label:'Customer service',salary:3_600}
-};
 const FUEL_KG_PER_US_GAL = 3.04;
 const CO2_KG_PER_KG_FUEL = 3.16;
 const CARBON_PRICE_EUR_PER_KG = .085;
-
-const AIRPORT_COSTS = {
-  FRA:{landingPerTonne:12.5,passengerFee:25,securityFee:7,handlingBase:2200,handlingPerPax:7,parkingHour:180},
-  LHR:{landingPerTonne:18,passengerFee:38,securityFee:10,handlingBase:3200,handlingPerPax:10,parkingHour:320},
-  JFK:{landingPerTonne:15,passengerFee:31,securityFee:11,handlingBase:3000,handlingPerPax:10,parkingHour:260},
-  MAD:{landingPerTonne:9,passengerFee:18,securityFee:6,handlingBase:1700,handlingPerPax:6,parkingHour:130},
-  AMS:{landingPerTonne:15,passengerFee:29,securityFee:9,handlingBase:2600,handlingPerPax:9,parkingHour:230},
-  CDG:{landingPerTonne:14,passengerFee:27,securityFee:9,handlingBase:2500,handlingPerPax:9,parkingHour:220},
-  FCO:{landingPerTonne:9,passengerFee:20,securityFee:6,handlingBase:1800,handlingPerPax:6,parkingHour:140},
-  DXB:{landingPerTonne:11,passengerFee:23,securityFee:7,handlingBase:2300,handlingPerPax:8,parkingHour:180},
-  SIN:{landingPerTonne:12,passengerFee:24,securityFee:7,handlingBase:2300,handlingPerPax:8,parkingHour:190},
-  HND:{landingPerTonne:16,passengerFee:30,securityFee:9,handlingBase:2800,handlingPerPax:9,parkingHour:250},
-  IST:{landingPerTonne:12,passengerFee:23,securityFee:7,handlingBase:2300,handlingPerPax:8,parkingHour:180},
-  MUC:{landingPerTonne:13.5,passengerFee:26,securityFee:8,handlingBase:2300,handlingPerPax:8,parkingHour:190},
-  ZRH:{landingPerTonne:17,passengerFee:32,securityFee:9,handlingBase:2700,handlingPerPax:9,parkingHour:260},
-  BCN:{landingPerTonne:10,passengerFee:21,securityFee:7,handlingBase:1900,handlingPerPax:7,parkingHour:150},
-  DUB:{landingPerTonne:12,passengerFee:24,securityFee:8,handlingBase:2100,handlingPerPax:8,parkingHour:170},
-  CPH:{landingPerTonne:13,passengerFee:26,securityFee:8,handlingBase:2300,handlingPerPax:8,parkingHour:190},
-  VIE:{landingPerTonne:12,passengerFee:24,securityFee:8,handlingBase:2200,handlingPerPax:8,parkingHour:180},
-  LIS:{landingPerTonne:10,passengerFee:21,securityFee:7,handlingBase:1900,handlingPerPax:7,parkingHour:150},
-  OSL:{landingPerTonne:14,passengerFee:28,securityFee:9,handlingBase:2500,handlingPerPax:9,parkingHour:220},
-  ARN:{landingPerTonne:13,passengerFee:26,securityFee:8,handlingBase:2400,handlingPerPax:8,parkingHour:200},
-  HEL:{landingPerTonne:13,passengerFee:25,securityFee:8,handlingBase:2300,handlingPerPax:8,parkingHour:190},
-  BRU:{landingPerTonne:13,passengerFee:25,securityFee:8,handlingBase:2300,handlingPerPax:8,parkingHour:190},
-  WAW:{landingPerTonne:10,passengerFee:20,securityFee:7,handlingBase:1900,handlingPerPax:7,parkingHour:145},
-  PRG:{landingPerTonne:9,passengerFee:19,securityFee:6,handlingBase:1800,handlingPerPax:6,parkingHour:140},
-  ATH:{landingPerTonne:9,passengerFee:20,securityFee:7,handlingBase:1900,handlingPerPax:7,parkingHour:150},
-  ATL:{landingPerTonne:12,passengerFee:24,securityFee:9,handlingBase:2500,handlingPerPax:8,parkingHour:210},
-  ORD:{landingPerTonne:14,passengerFee:28,securityFee:10,handlingBase:2800,handlingPerPax:9,parkingHour:240},
-  DFW:{landingPerTonne:12,passengerFee:24,securityFee:9,handlingBase:2500,handlingPerPax:8,parkingHour:210},
-  DEN:{landingPerTonne:13,passengerFee:26,securityFee:9,handlingBase:2600,handlingPerPax:8,parkingHour:220},
-  LAX:{landingPerTonne:15,passengerFee:31,securityFee:10,handlingBase:3000,handlingPerPax:10,parkingHour:270},
-  SFO:{landingPerTonne:16,passengerFee:32,securityFee:10,handlingBase:3000,handlingPerPax:10,parkingHour:280},
-  BOS:{landingPerTonne:14,passengerFee:29,securityFee:10,handlingBase:2700,handlingPerPax:9,parkingHour:240},
-  IAD:{landingPerTonne:13,passengerFee:27,securityFee:9,handlingBase:2600,handlingPerPax:9,parkingHour:230},
-  MIA:{landingPerTonne:12,passengerFee:26,securityFee:9,handlingBase:2500,handlingPerPax:8,parkingHour:210},
-  MEX:{landingPerTonne:10,passengerFee:22,securityFee:8,handlingBase:2200,handlingPerPax:8,parkingHour:170},
-  YYZ:{landingPerTonne:14,passengerFee:29,securityFee:9,handlingBase:2700,handlingPerPax:9,parkingHour:230},
-  ICN:{landingPerTonne:14,passengerFee:27,securityFee:8,handlingBase:2600,handlingPerPax:9,parkingHour:220},
-  HKG:{landingPerTonne:16,passengerFee:31,securityFee:9,handlingBase:2900,handlingPerPax:10,parkingHour:270},
-  PVG:{landingPerTonne:13,passengerFee:25,securityFee:8,handlingBase:2500,handlingPerPax:8,parkingHour:210},
-  CAN:{landingPerTonne:12,passengerFee:23,securityFee:8,handlingBase:2400,handlingPerPax:8,parkingHour:200},
-  DEL:{landingPerTonne:10,passengerFee:19,securityFee:7,handlingBase:2000,handlingPerPax:7,parkingHour:150},
-  BOM:{landingPerTonne:10,passengerFee:20,securityFee:7,handlingBase:2100,handlingPerPax:7,parkingHour:155},
-  BKK:{landingPerTonne:9,passengerFee:18,securityFee:6,handlingBase:1900,handlingPerPax:7,parkingHour:140},
-  TPE:{landingPerTonne:12,passengerFee:24,securityFee:8,handlingBase:2300,handlingPerPax:8,parkingHour:190},
-  DOH:{landingPerTonne:12,passengerFee:24,securityFee:7,handlingBase:2400,handlingPerPax:8,parkingHour:190},
-  ADD:{landingPerTonne:8,passengerFee:16,securityFee:6,handlingBase:1700,handlingPerPax:6,parkingHour:120},
-  CAI:{landingPerTonne:8,passengerFee:17,securityFee:6,handlingBase:1800,handlingPerPax:6,parkingHour:130},
-  NBO:{landingPerTonne:8,passengerFee:16,securityFee:6,handlingBase:1700,handlingPerPax:6,parkingHour:120},
-  JNB:{landingPerTonne:9,passengerFee:17,securityFee:6,handlingBase:1800,handlingPerPax:6,parkingHour:130},
-  CPT:{landingPerTonne:8,passengerFee:17,securityFee:6,handlingBase:1800,handlingPerPax:6,parkingHour:130},
-  BOG:{landingPerTonne:9,passengerFee:18,securityFee:6,handlingBase:1900,handlingPerPax:7,parkingHour:140},
-  EZE:{landingPerTonne:9,passengerFee:19,securityFee:6,handlingBase:1900,handlingPerPax:7,parkingHour:145},
-  SCL:{landingPerTonne:10,passengerFee:20,securityFee:7,handlingBase:2000,handlingPerPax:7,parkingHour:150},
-  GRU:{landingPerTonne:10,passengerFee:21,securityFee:7,handlingBase:2200,handlingPerPax:7,parkingHour:170},
-  SYD:{landingPerTonne:15,passengerFee:30,securityFee:9,handlingBase:2800,handlingPerPax:9,parkingHour:240},
-  MEL:{landingPerTonne:14,passengerFee:28,securityFee:9,handlingBase:2600,handlingPerPax:9,parkingHour:220},
-  AKL:{landingPerTonne:12,passengerFee:25,securityFee:8,handlingBase:2300,handlingPerPax:8,parkingHour:180},
-  EWR:{landingPerTonne:15,passengerFee:31,securityFee:11,handlingBase:3000,handlingPerPax:10,parkingHour:260},
-  LGW:{landingPerTonne:14,passengerFee:29,securityFee:9,handlingBase:2600,handlingPerPax:9,parkingHour:230},
-  ORY:{landingPerTonne:11,passengerFee:23,securityFee:8,handlingBase:2100,handlingPerPax:7,parkingHour:170},
-  NRT:{landingPerTonne:15,passengerFee:29,securityFee:9,handlingBase:2700,handlingPerPax:9,parkingHour:240},
-  AUH:{landingPerTonne:11,passengerFee:22,securityFee:7,handlingBase:2200,handlingPerPax:8,parkingHour:175},
-  MXP:{landingPerTonne:11,passengerFee:23,securityFee:7,handlingBase:2100,handlingPerPax:7,parkingHour:170},
-  DUS:{landingPerTonne:12,passengerFee:24,securityFee:8,handlingBase:2200,handlingPerPax:8,parkingHour:180},
-  KUL:{landingPerTonne:10,passengerFee:20,securityFee:6,handlingBase:2100,handlingPerPax:7,parkingHour:160}
-};
-
-function nightRule(timeZone,mode='noise',options={}){
-  const defaults={
-    open:{label:'24h operations',start:'00:00',end:'00:00',capacityFactor:1,delayMin:0,spreadMin:0,detail:'No nightly passenger stop modeled; noise abatement may still apply.'},
-    noise:{label:'Night noise procedures',start:'23:00',end:'06:00',capacityFactor:.94,delayMin:0,spreadMin:6,detail:'Airport remains open with night noise procedures and reduced flexibility.'},
-    quota:{label:'Night quota window',start:'23:00',end:'06:00',capacityFactor:.82,delayMin:8,spreadMin:12,detail:'Night movements are quota or slot controlled; unplanned operations can wait.'},
-    curfew:{label:'Night curfew',start:'23:00',end:'06:00',capacityFactor:.35,delayMin:0,spreadMin:0,detail:'Scheduled passenger movements are not planned in the core curfew window.'}
-  }[mode]||{};
-  return {timeZone,mode,...defaults,...options};
-}
-
-const AIRPORT_NIGHT_RULES = {
-  FRA:nightRule('Europe/Berlin','curfew',{start:'23:00',end:'05:00',shoulderStart:'22:00',shoulderEnd:'06:00',detail:'Core night curfew; late-evening and early-morning shoulder periods are constrained.'}),
-  LHR:nightRule('Europe/London','quota',{start:'23:30',end:'06:00',shoulderStart:'23:00',shoulderEnd:'07:00',detail:'Night quota period with wider night restrictions around it.'}),
-  JFK:nightRule('America/New_York','noise'),
-  MAD:nightRule('Europe/Madrid','noise'),
-  AMS:nightRule('Europe/Amsterdam','quota',{start:'23:00',end:'07:00',delayMin:7,detail:'Night operations require appropriate night-slot capacity.'}),
-  CDG:nightRule('Europe/Paris','quota',{start:'00:00',end:'05:30',delayMin:6,detail:'Night departures and arrivals are constrained by local noise-slot rules.'}),
-  FCO:nightRule('Europe/Rome','noise'),
-  DXB:nightRule('Asia/Dubai','open'),
-  SIN:nightRule('Asia/Singapore','open'),
-  HND:nightRule('Asia/Tokyo','noise',{start:'23:00',end:'06:00',capacityFactor:.90}),
-  IST:nightRule('Europe/Istanbul','open'),
-  MUC:nightRule('Europe/Berlin','quota',{start:'22:00',end:'06:00',delayMin:8,detail:'Night movements are tightly quota controlled.'}),
-  ZRH:nightRule('Europe/Zurich','curfew',{start:'23:30',end:'06:00',shoulderStart:'23:00',shoulderEnd:'23:30',detail:'Strict night curfew; the 23:00-23:30 shoulder is mainly for delay recovery.'}),
-  BCN:nightRule('Europe/Madrid','noise',{start:'23:00',end:'06:00',capacityFactor:.92}),
-  DUB:nightRule('Europe/Dublin','noise'),
-  CPH:nightRule('Europe/Copenhagen','noise',{capacityFactor:.92}),
-  VIE:nightRule('Europe/Vienna','noise'),
-  LIS:nightRule('Europe/Lisbon','noise',{capacityFactor:.91}),
-  OSL:nightRule('Europe/Oslo','noise',{capacityFactor:.90}),
-  ARN:nightRule('Europe/Stockholm','noise',{capacityFactor:.90}),
-  HEL:nightRule('Europe/Helsinki','noise',{capacityFactor:.90}),
-  BRU:nightRule('Europe/Brussels','quota',{start:'23:00',end:'06:00',delayMin:6,detail:'Night movements are noise and slot constrained.'}),
-  WAW:nightRule('Europe/Warsaw','noise'),
-  PRG:nightRule('Europe/Prague','noise'),
-  ATH:nightRule('Europe/Athens','noise',{capacityFactor:.93}),
-  ATL:nightRule('America/New_York','open'),
-  ORD:nightRule('America/Chicago','open'),
-  DFW:nightRule('America/Chicago','open'),
-  DEN:nightRule('America/Denver','open'),
-  LAX:nightRule('America/Los_Angeles','noise',{start:'00:00',end:'06:30',capacityFactor:.88,delayMin:3,spreadMin:8}),
-  SFO:nightRule('America/Los_Angeles','noise',{start:'00:00',end:'06:00',capacityFactor:.86,delayMin:4,spreadMin:10}),
-  BOS:nightRule('America/New_York','noise',{start:'23:30',end:'06:00',capacityFactor:.88,delayMin:3,spreadMin:8}),
-  IAD:nightRule('America/New_York','open'),
-  MIA:nightRule('America/New_York','open'),
-  MEX:nightRule('America/Mexico_City','quota',{start:'23:00',end:'06:00',delayMin:5,detail:'Night movements are congestion and noise constrained.'}),
-  YYZ:nightRule('America/Toronto','noise',{capacityFactor:.90}),
-  ICN:nightRule('Asia/Seoul','open'),
-  HKG:nightRule('Asia/Hong_Kong','open'),
-  PVG:nightRule('Asia/Shanghai','open'),
-  CAN:nightRule('Asia/Shanghai','open'),
-  DEL:nightRule('Asia/Kolkata','open'),
-  BOM:nightRule('Asia/Kolkata','open'),
-  BKK:nightRule('Asia/Bangkok','open'),
-  TPE:nightRule('Asia/Taipei','noise',{capacityFactor:.92}),
-  DOH:nightRule('Asia/Qatar','open'),
-  ADD:nightRule('Africa/Addis_Ababa','open'),
-  CAI:nightRule('Africa/Cairo','open'),
-  NBO:nightRule('Africa/Nairobi','open'),
-  JNB:nightRule('Africa/Johannesburg','open'),
-  CPT:nightRule('Africa/Johannesburg','noise',{capacityFactor:.92}),
-  BOG:nightRule('America/Bogota','noise',{capacityFactor:.90}),
-  EZE:nightRule('America/Argentina/Buenos_Aires','open'),
-  SCL:nightRule('America/Santiago','noise',{capacityFactor:.92}),
-  GRU:nightRule('America/Sao_Paulo','open'),
-  SYD:nightRule('Australia/Sydney','curfew',{start:'23:00',end:'06:00',detail:'Core airport curfew; limited exceptional and shoulder movements only.'}),
-  MEL:nightRule('Australia/Melbourne','open'),
-  AKL:nightRule('Pacific/Auckland','open'),
-  EWR:nightRule('America/New_York','noise'),
-  LGW:nightRule('Europe/London','quota',{start:'23:30',end:'06:00',shoulderStart:'23:00',shoulderEnd:'07:00',detail:'Night quota period with wider night restrictions around it.'}),
-  ORY:nightRule('Europe/Paris','curfew',{start:'23:30',end:'06:00',detail:'Hard overnight curfew modeled for scheduled passenger movements.'}),
-  NRT:nightRule('Asia/Tokyo','curfew',{start:'00:00',end:'06:00',shoulderStart:'23:00',shoulderEnd:'00:00',detail:'Overnight curfew with late-evening shoulder constraints.'}),
-  AUH:nightRule('Asia/Dubai','open'),
-  MXP:nightRule('Europe/Rome','noise'),
-  DUS:nightRule('Europe/Berlin','curfew',{start:'00:00',end:'05:00',shoulderStart:'22:00',shoulderEnd:'06:00',detail:'Core night stop with constrained late-evening and early-morning movements.'}),
-  KUL:nightRule('Asia/Kuala_Lumpur','open')
-};
 
 const nightFormatters=new Map();
 function timeToMinute(value){
@@ -481,88 +149,6 @@ function validateAirportCatalogs(){
 }
 validateAirportCatalogs();
 
-const MODELS = {
-  'ATR 42-600':{manufacturer:'ATR',segment:'Regional turboprop',seats:48,speedKmh:535,maxRangeKm:1345,price:18_000_000,costPerKm:2.6},
-  'ATR 72-600':{manufacturer:'ATR',segment:'Regional turboprop',seats:72,speedKmh:500,maxRangeKm:1370,price:24_000_000,costPerKm:3.2},
-
-  'E170':{manufacturer:'Embraer',segment:'Regional jet · used market',seats:72,speedKmh:870,maxRangeKm:3982,price:18_000_000,costPerKm:4.7},
-  'E175':{manufacturer:'Embraer',segment:'Regional jet',seats:78,speedKmh:870,maxRangeKm:4074,price:32_000_000,costPerKm:4.9},
-  'E190':{manufacturer:'Embraer',segment:'Regional jet · used market',seats:100,speedKmh:870,maxRangeKm:4537,price:24_000_000,costPerKm:5.3},
-  'E195':{manufacturer:'Embraer',segment:'Regional jet · used market',seats:116,speedKmh:870,maxRangeKm:4260,price:27_000_000,costPerKm:5.7},
-  'E190-E2':{manufacturer:'Embraer',segment:'Regional jet',seats:106,speedKmh:870,maxRangeKm:5278,price:42_000_000,costPerKm:5.4},
-  'E195-E2':{manufacturer:'Embraer',segment:'Regional jet',seats:132,speedKmh:870,maxRangeKm:4537,price:45_000_000,costPerKm:5.9},
-
-  'CRJ200':{manufacturer:'Canadair / MHI RJ',segment:'Regional jet · used market',seats:50,speedKmh:785,maxRangeKm:3045,price:7_000_000,costPerKm:4.1},
-  'CRJ700':{manufacturer:'Canadair / MHI RJ',segment:'Regional jet · used market',seats:70,speedKmh:829,maxRangeKm:2553,price:12_000_000,costPerKm:4.7},
-  'CRJ900':{manufacturer:'Canadair / MHI RJ',segment:'Regional jet · used market',seats:90,speedKmh:829,maxRangeKm:2871,price:16_000_000,costPerKm:5.2},
-  'CRJ1000':{manufacturer:'Canadair / MHI RJ',segment:'Regional jet · used market',seats:100,speedKmh:829,maxRangeKm:2761,price:18_000_000,costPerKm:5.5},
-
-  'A220-100':{manufacturer:'Airbus',segment:'Small narrowbody',seats:110,speedKmh:870,maxRangeKm:6670,price:44_000_000,costPerKm:5.8},
-  'A220-300':{manufacturer:'Airbus',segment:'Small narrowbody',seats:145,speedKmh:870,maxRangeKm:6300,price:50_000_000,costPerKm:6.5},
-  'A319neo':{manufacturer:'Airbus',segment:'Narrowbody',seats:140,speedKmh:835,maxRangeKm:6760,price:45_000_000,costPerKm:6.9},
-  'A320neo':{manufacturer:'Airbus',segment:'Narrowbody',seats:180,speedKmh:835,maxRangeKm:6300,price:48_000_000,costPerKm:8.2},
-  'A321neo':{manufacturer:'Airbus',segment:'Large narrowbody',seats:206,speedKmh:835,maxRangeKm:6500,price:62_000_000,costPerKm:9.4},
-  'A321XLR':{manufacturer:'Airbus',segment:'Long-range narrowbody',seats:206,speedKmh:835,maxRangeKm:8700,price:72_000_000,costPerKm:10.1},
-  'A330-800':{manufacturer:'Airbus',segment:'Widebody',seats:248,speedKmh:870,maxRangeKm:15090,price:105_000_000,costPerKm:14.3},
-  'A330-900':{manufacturer:'Airbus',segment:'Widebody',seats:287,speedKmh:870,maxRangeKm:13330,price:110_000_000,costPerKm:15.4},
-  'A350-900':{manufacturer:'Airbus',segment:'Long-range widebody',seats:325,speedKmh:903,maxRangeKm:15370,price:155_000_000,costPerKm:15.8},
-  'A350-1000':{manufacturer:'Airbus',segment:'Large long-range widebody',seats:375,speedKmh:903,maxRangeKm:16100,price:180_000_000,costPerKm:18.1},
-  'A380-800':{manufacturer:'Airbus',segment:'Very large widebody · used market',seats:555,speedKmh:903,maxRangeKm:14800,price:125_000_000,costPerKm:29.0},
-
-  '737-7':{manufacturer:'Boeing',segment:'Narrowbody',seats:150,speedKmh:839,maxRangeKm:7040,price:48_000_000,costPerKm:7.2},
-  '737-8':{manufacturer:'Boeing',segment:'Narrowbody',seats:178,speedKmh:839,maxRangeKm:6480,price:55_000_000,costPerKm:8.4},
-  '737-9':{manufacturer:'Boeing',segment:'Large narrowbody',seats:185,speedKmh:839,maxRangeKm:6110,price:59_000_000,costPerKm:8.9},
-  '737-10':{manufacturer:'Boeing',segment:'Large narrowbody',seats:200,speedKmh:839,maxRangeKm:5740,price:63_000_000,costPerKm:9.3},
-  '787-8':{manufacturer:'Boeing',segment:'Long-range widebody',seats:242,speedKmh:903,maxRangeKm:14820,price:132_000_000,costPerKm:13.8},
-  '787-9':{manufacturer:'Boeing',segment:'Long-range widebody',seats:290,speedKmh:903,maxRangeKm:15370,price:145_000_000,costPerKm:15.1},
-  '787-10':{manufacturer:'Boeing',segment:'Large widebody',seats:330,speedKmh:903,maxRangeKm:13890,price:155_000_000,costPerKm:16.8},
-  '777-200ER':{manufacturer:'Boeing',segment:'Widebody · used market',seats:313,speedKmh:905,maxRangeKm:13080,price:58_000_000,costPerKm:19.5},
-  '777-200LR':{manufacturer:'Boeing',segment:'Ultra-long-range widebody · used market',seats:317,speedKmh:905,maxRangeKm:15843,price:72_000_000,costPerKm:20.6},
-  '777-300ER':{manufacturer:'Boeing',segment:'Large widebody · used market',seats:396,speedKmh:905,maxRangeKm:13650,price:82_000_000,costPerKm:23.2}
-};
-const AIRCRAFT_MODEL_MIN_TURNS = {
-  'ATR 42-600':25,
-  'ATR 72-600':30,
-  'E170':35,
-  'E175':35,
-  'E190':40,
-  'E195':40,
-  'E190-E2':40,
-  'E195-E2':40,
-  'CRJ200':30,
-  'CRJ700':35,
-  'CRJ900':35,
-  'CRJ1000':35,
-  'A220-100':40,
-  'A220-300':40,
-  'A319neo':40,
-  'A320neo':45,
-  'A321neo':50,
-  'A321XLR':55,
-  'A330-800':90,
-  'A330-900':90,
-  'A350-900':105,
-  'A350-1000':110,
-  'A380-800':120,
-  '737-7':40,
-  '737-8':45,
-  '737-9':50,
-  '737-10':50,
-  '787-8':95,
-  '787-9':100,
-  '787-10':105,
-  '777-200ER':105,
-  '777-200LR':110,
-  '777-300ER':115
-};
-for(const [modelName,minimumTurnMin] of Object.entries(AIRCRAFT_MODEL_MIN_TURNS)){
-  if(MODELS[modelName]) MODELS[modelName].minimumTurnMin=minimumTurnMin;
-}
-const CABIN_CLASSES = {
-  economy:{label:'Economy',space:1,baseFareMultiplier:1,demandScale:1,elasticity:.9},
-  business:{label:'Business',space:2,baseFareMultiplier:2.6,demandScale:.72,elasticity:.55},
-  first:{label:'First',space:3,baseFareMultiplier:5,demandScale:.42,elasticity:.42}
-};
 const AIRCRAFT_FAMILIES=[...new Set(Object.keys(MODELS).map(Management.aircraftFamily))];
 
 const money = n => new Intl.NumberFormat('en-IE',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(n);
@@ -995,6 +581,10 @@ function migrateState(parsed){
     if(incident.classification===undefined) incident.classification='incident';
     if(incident.workflowCreatedAt===undefined) incident.workflowCreatedAt=0;
     if(incident.overdue===undefined) incident.overdue=false;
+    if(incident.defaultApplied===undefined) incident.defaultApplied=false;
+    if(!Number.isFinite(incident.defaultAppliedAt)) incident.defaultAppliedAt=0;
+    if(incident.defaultPolicy===undefined) incident.defaultPolicy='';
+    if(incident.defaultOutcome===undefined) incident.defaultOutcome='';
     if(incident.affectedRole===undefined) incident.affectedRole=incident.type==='crew_sick'?'captains':'';
     if(incident.recoveryPlan===undefined) incident.recoveryPlan='';
     if(!Number.isFinite(incident.recoveryPlanAt)) incident.recoveryPlanAt=0;
@@ -1103,8 +693,11 @@ function migrateState(parsed){
     if(!ac.cabin) ac.cabin=defaultCabin(ac.model);
   }
   for(const f of parsed.flights){
-    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','incidentDelayMin','enrouteDelayMin','liveWeatherDelayMin','propagatedDelayMin','slotDelayMin','turnaroundRecoveryMin','slotPriorityMin','nightRestrictionDelayMin','nightRestrictionConflictDelayMin','taxiOutDelayMin','taxiInDelayMin','deicingCompletedAt','deicingHoldoverUntil','nightRecoveryApprovedAt'])
+    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','incidentDelayMin','enrouteDelayMin','enrouteRecoveryMin','enrouteRecoveryCost','enrouteRecoveryFuelPenaltyGal','liveWeatherDelayMin','propagatedDelayMin','slotDelayMin','turnaroundRecoveryMin','slotPriorityMin','nightRestrictionDelayMin','nightRestrictionConflictDelayMin','taxiOutDelayMin','taxiInDelayMin','deicingCompletedAt','deicingHoldoverUntil','nightRecoveryApprovedAt'])
       if(f[k]===undefined) f[k]=0;
+    if(f.enrouteRecoveryPlan===undefined) f.enrouteRecoveryPlan='';
+    if(f.enrouteRecoveryCause===undefined) f.enrouteRecoveryCause='';
+    if(!f.enrouteRecoveryRequest || typeof f.enrouteRecoveryRequest!=='object') f.enrouteRecoveryRequest=null;
     if(!Array.isArray(f.taxiDelayCauses)) f.taxiDelayCauses=[];
     for(const k of ['airportDelayMin','airspaceDelayMin']) if(f[k]===undefined) f[k]=0;
     if(f.nightRestrictionLabel===undefined) f.nightRestrictionLabel='';
@@ -1128,6 +721,7 @@ function migrateState(parsed){
     if(!Number.isFinite(f.crewStoodDownAt)) f.crewStoodDownAt=0;
     if(!Number.isFinite(f.recoveryCostBooked)) f.recoveryCostBooked=0;
     if(f.cancellationCostBooked===undefined) f.cancellationCostBooked='';
+    if(f.cancellationReason===undefined) f.cancellationReason='';
     if(f.crewAugmented===undefined) f.crewAugmented=false;
     if(f.crewAugmentationPlanned===undefined) f.crewAugmentationPlanned=false;
     if(f.crewAugmentationReason===undefined) f.crewAugmentationReason='';
@@ -1302,7 +896,11 @@ function resetLocalSave(){
     aircraftLayer.clearLayers();
     routeLayer.clearLayers();
     refreshAll();
-    map.setView([49.5,8.5],4,{animate:false});
+    if(typeof centerMapOnHomeBase==='function') centerMapOnHomeBase({animate:false});
+    else{
+      const airport=AIRPORTS[state.home]||AIRPORTS.FRA||Object.values(AIRPORTS)[0];
+      if(airport) map.setView([airport.lat,airport.lon],5,{animate:false});
+    }
   }catch(error){
     // The blank state is already safely stored. A reload is the most reliable
     // recovery if any stale renderer fails while clearing the old UI.

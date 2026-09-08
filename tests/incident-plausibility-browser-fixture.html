@@ -47,6 +47,8 @@
     const activeTypes=Object.keys(definitions).filter(type=>!retired.includes(type));
     const missingWorkflows=activeTypes.filter(type=>!workflows[type]);
     assert(!missingWorkflows.length,'active incident definitions missing workflows: '+missingWorkflows.join(', '));
+    const missingDefaults=w.eval('Object.keys(INCIDENT_DEFINITIONS).filter(type=>!RETIRED_INCIDENT_TYPES.has(type)&&!INCIDENT_DEFAULT_POLICIES[type])');
+    assert(!missingDefaults.length,'active incident definitions missing no-action default policies: '+missingDefaults.join(', '));
     const orphanWorkflows=Object.keys(workflows).filter(type=>!definitions[type]&&!retired.includes(type));
     assert(!orphanWorkflows.length,'workflow exists without an incident definition: '+orphanWorkflows.join(', '));
 
@@ -127,6 +129,57 @@
       }
     }
     assert(!workflowProblems.length,'workflow plausibility problems: '+workflowProblems.join('; '));
+
+    {
+      const staffBefore=w.staffAt('FRA','captains');
+      const aircraftBefore=w.eval('state.aircraft.length');
+      const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const flight=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'AMS',departure:now+60*60_000,fare:{economy:120,business:300,first:600}});
+      const incident=w.createIncident('crew_sick',flight,{training:true,detectedAt:now-30*60_000,source:'fixture',sourceKey:`default-cancel:${flight.id}`});
+      incident.deadline=now-60_000;
+      assert(w.processIncidentDeadlines(now),'crew sick default deadline did not report a change');
+      assert(incident.status==='resolved'&&incident.defaultApplied,'crew sick default did not close the case');
+      assert(flight.cancelled,'crew sick default did not cancel the affected flight');
+      assert(w.staffAt('FRA','captains')===staffBefore,'default cancellation changed personnel resources');
+      assert(w.eval('state.aircraft.length')===aircraftBefore+1,'default cancellation created or removed aircraft resources');
+    }
+
+    {
+      const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const flight=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'AMS',departure:now+70*60_000,fare:{economy:120,business:300,first:600}});
+      const incident=w.createIncident('airport_capacity_reduction',flight,{training:true,detectedAt:now-30*60_000,source:'fixture',sourceKey:`default-delay:${flight.id}`,context:{sourceId:flight.id,delayMin:40,reason:'ATC regulated departure window'}});
+      incident.deadline=now-60_000;
+      assert(w.processIncidentDeadlines(now),'airport-flow default deadline did not report a change');
+      assert(incident.status==='resolved'&&incident.defaultApplied,'airport-flow default did not close the case');
+      assert(!flight.cancelled,'airport-flow accept-delay default cancelled the flight');
+      assert(flight.incidentDelayMin>=40,'airport-flow accept-delay default did not apply the expected delay');
+    }
+
+    {
+      const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const flight=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'AMS',departure:now+80*60_000,fare:{economy:120,business:300,first:600}});
+      const incident=w.createIncident('atc_ground_stop',flight,{training:true,detectedAt:now-30*60_000,source:'fixture',sourceKey:`default-hold:${flight.id}`,context:{sourceId:flight.id,delayMin:70}});
+      incident.deadline=now-60_000;
+      assert(w.processIncidentDeadlines(now),'ground-stop default deadline did not report a change');
+      assert(incident.status==='open'&&incident.defaultApplied,'ground-stop default should keep the incident open');
+      assert(!flight.cancelled,'ground-stop hold default cancelled the flight');
+      assert(flight.incidentDelayMin>=15,'ground-stop hold default did not hold the flight');
+    }
+
+    {
+      const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const flight=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'LHR',departure:now-45*60_000,fare:{economy:120,business:300,first:600}});
+      flight.departureLogged=true;
+      flight.actualDeparture=flight.departure;
+      flight.actualArrival=now+120*60_000;
+      flight.fueled=true;
+      const incident=w.createIncident('onboard_medical',flight,{training:true,detectedAt:now-20*60_000,source:'fixture',sourceKey:`default-flightdeck:${flight.id}`,context:{sourceId:flight.id,authorityDecision:'continue'}});
+      incident.deadline=now-60_000;
+      assert(w.processIncidentDeadlines(now),'airborne flight-deck default deadline did not report a change');
+      assert(incident.status==='resolved'&&incident.defaultApplied,'airborne flight-deck default did not close the case');
+      assert(!flight.cancelled,'airborne default cancelled a departed flight');
+      assert(flight.enrouteDelayMin>=10,'airborne flight-deck default did not record an operational consequence');
+    }
 
     result.textContent=`PASS incident plausibility matrix validated\nincidents=${activeTypes.length}\nretired=${retired.join(',')}`;
   }catch(error){

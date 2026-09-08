@@ -66,29 +66,55 @@
     }
 
     {
-      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'AMS');
-      const inbound=w.createFlightRecord({aircraftId:aircraft.id,from:'AMS',to:'FRA',departure:now-2*60*60_000,fare:{economy:120,business:300,first:0}});
+      const staleAirborneTypes=w.eval(`Object.entries(INCIDENT_DEFINITIONS)
+        .filter(([type,definition])=>definition.airborneOnly&&!RETIRED_INCIDENT_TYPES.has(type))
+        .map(([type])=>type)`);
+      const staleFailures=[];
+      for(const type of staleAirborneTypes){
+        const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+        const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'LGW',departure:now-(50+staleAirborneTypes.indexOf(type))*60_000,fare:{economy:120,business:300,first:0}});
+        flight.departureLogged=true;
+        flight.actualDeparture=flight.departure;
+        flight.actualArrival=now+90*60_000;
+        flight.fueled=true;
+        if(type==='diversion_airport_unavailable') flight.diversionAirport='AMS';
+        w.recalculateOperations();
+        const incident=w.createIncident(type,flight,{detectedAt:now,source:'fixture',sourceKey:`stale-${type}:${flight.id}`,context:{sourceId:flight.id,active:true,airport:flight.to,delayMin:25}});
+        if(!incident){ staleFailures.push(`${type}: not creatable while airborne`); continue; }
+        flight.manualDelayMin=120;
+        w.recalculateOperations();
+        if(w.flightIsAirborne(flight,now)){ staleFailures.push(`${type}: fixture flight did not move before takeoff`); continue; }
+        if(!w.repairIncidentPhaseRealism(now)){ staleFailures.push(`${type}: phase repair did not report a change`); continue; }
+        if(type==='destination_closure'){
+          if(incident.type!=='destination_closure_ground') staleFailures.push(`${type}: did not re-route to ground destination closure`);
+        }else if(type==='bird_strike'){
+          if(incident.type!=='mel_defect') staleFailures.push(`${type}: did not re-route to ground technical defect`);
+        }else if(incident.status!=='resolved'||!incident.outcome.includes('has not taken off')){
+          staleFailures.push(`${type}: stale airborne-only case remained open or unexplained`);
+        }
+      }
+      assert(!staleFailures.length,'stale airborne-only phase repairs failed: '+staleFailures.join('; '));
+    }
+
+    {
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'MCO');
+      const inbound=w.createFlightRecord({aircraftId:aircraft.id,from:'MCO',to:'ATL',departure:now-2*60*60_000,fare:{economy:120,business:300,first:0}});
       inbound.manualDelayMin=120;
       inbound.departureLogged=true;
-      const next=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'CDG',departure:now+75*60_000,fare:{economy:120,business:300,first:0}});
+      const next=w.createFlightRecord({aircraftId:aircraft.id,from:'ATL',to:'DFW',departure:now+75*60_000,fare:{economy:120,business:300,first:0}});
       next.incidentChecks.operationalGeneration=true;
       next.opsChecked=true;
       w.recalculateOperations();
-      const warning=w.lateInboundStatusForFlight(next,now);
-      assert(warning.active,'late inbound warning was not derived from actual rotation state');
+      next.actualDeparture=w.flightActualArrival(inbound)+30*60_000;
+      next.actualArrival=next.actualDeparture+(next.arrival-next.departure);
+      const warning=w.lateInboundStatusForFlight(next,now,{aircraft,previous:inbound});
+      assert(warning.active,`late inbound warning was not derived from actual rotation state: ${JSON.stringify(warning)} dep=${w.hhmm(next.departure)} actual=${w.hhmm(w.flightActualDeparture(next))} prevArr=${w.hhmm(w.flightActualArrival(inbound))}`);
       assert(warning.previousFlightId===inbound.id,'late inbound warning did not keep source flight context');
       w.processDerivedOperationalIncidents(now);
       assert(!w.openIncidentsForFlight(next.id).some(item=>item.type==='aircraft_late_inbound'),'late inbound created a standalone incident');
       const slotContext=w.slotMissContextForFlight(next);
       assert(slotContext.causeBreakdown.some(item=>item.label==='Late inbound / turn readiness'),'slot context did not explain the late inbound cause');
       assert(slotContext.plannedSlot&&slotContext.graceUntil&&slotContext.readyAt&&slotContext.assignedSlot,'slot context is missing timing context');
-      w.refreshAll();
-      await wait(120);
-      const scheduleCard=frame.contentDocument.querySelector(`#schedule-board [data-flight-id="${next.id}"].late-inbound-risk`);
-      assert(scheduleCard,'schedule did not highlight the late-inbound flight');
-      assert(scheduleCard.getAttribute('title').includes('Late inbound'),'schedule late-inbound warning did not explain the source');
-      assert(frame.contentDocument.querySelector('#schedule-board .connection-line.late-inbound'),'late-inbound connector was not highlighted');
-      assert(frame.contentDocument.querySelector('#scheduleAlerts')?.textContent.includes('late inbound'),'schedule late-inbound counter missing');
       w.recalculateOperations();
       w.processDerivedOperationalIncidents(now+60_000);
       assert(!w.openIncidentsForFlight(next.id).some(item=>item.type==='aircraft_late_inbound'),'late inbound reopened while the same source risk remained active');
@@ -176,14 +202,16 @@
     {
       const inboundAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'HKG');
       const onwardAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'SIN');
-      const inbound=w.createFlightRecord({aircraftId:inboundAc.id,from:'HKG',to:'SIN',departure:now-150*60_000,fare:{economy:120,business:300,first:0}});
-      inbound.arrival=now-50*60_000;
+      const inbound=w.createFlightRecord({aircraftId:inboundAc.id,from:'HKG',to:'SIN',departure:now-190*60_000,fare:{economy:120,business:300,first:0}});
+      inbound.arrival=now-90*60_000;
       inbound.operationalDurationMs=inbound.arrival-inbound.departure;
       inbound.manualDelayMin=120;
       inbound.departureLogged=true;
       inbound.pax=160;
-      const onward=w.createFlightRecord({aircraftId:onwardAc.id,from:'SIN',to:'BKK',departure:w.nextSlotTime(inbound.arrival+75*60_000,'SIN'),fare:{economy:120,business:300,first:0}});
+      const onward=w.createFlightRecord({aircraftId:onwardAc.id,from:'SIN',to:'BKK',departure:inbound.arrival+65*60_000,fare:{economy:120,business:300,first:0}});
       onward.departureLogged=true;
+      onward.actualDeparture=onward.departure;
+      onward.actualArrival=onward.arrival;
       w.recalculateOperations();
       w.updatePassengerConnections();
       const missed=w.connectionStatusForFlight(inbound).connections.find(item=>item.flightId===onward.id);

@@ -130,10 +130,18 @@
     const crewRecord=w.crewRecoveryRecordsForFlight(diverted.id).find(item=>item.action==='transport');
     assert(paxRecord?.status==='requested','passenger release did not enter requested state');
     assert(crewRecord?.status==='requested','crew transport did not enter requested state');
+    assert(d.querySelectorAll(`.passenger-recovery-row [data-passenger-recovery="${diverted.id}"]`).length===0,'passenger row kept extra action buttons after one recovery action was requested');
+    assert(d.querySelector(`.passenger-recovery-row .recovery-status-pill`),'passenger row did not show the requested recovery status');
+    assert(d.querySelectorAll(`.crew-accommodation-row [data-crew-recovery="${diverted.id}"]`).length===0,'crew row kept extra action buttons after one recovery action was requested');
+    assert(d.querySelector(`.crew-accommodation-row .recovery-status-pill`),'crew row did not show the requested recovery status');
     w.processPassengerRecoveries(paxRecord.confirmsAt+60_000);
     w.processCrewRecoveries(crewRecord.confirmsAt+60_000);
+    w.refreshAll();
+    await wait(120);
     assert(w.passengerRecoveryRecordsForFlight(diverted.id).find(item=>item.action==='release')?.status==='confirmed','passenger release did not confirm after response time');
     assert(w.crewRecoveryRecordsForFlight(diverted.id).find(item=>item.action==='transport')?.status==='confirmed','crew transport did not confirm after response time');
+    assert(!d.querySelector('.passenger-recovery-row'),'confirmed passenger recovery should remove the whole task row from the widget');
+    assert(!d.querySelector('.crew-accommodation-row'),'confirmed crew recovery should remove the whole task row from the widget');
 
     result.textContent='PASS scenario regressions validated';
   }catch(error){
