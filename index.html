@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Airline Operations Control Center</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-  <link rel="stylesheet" href="aerosim-next.css?v=1.8.34" />
+  <link rel="stylesheet" href="aerosim-next.css?v=1.8.38" />
 </head>
 <body>
 <div id="app">
@@ -23,6 +23,12 @@
   <main id="operationsView" class="operations-shell">
     <aside class="operations-rail" aria-label="Flights, aircraft, and selected details">
       <div id="contextPane" class="context-pane selection-pane" aria-live="polite" hidden></div>
+      <section class="rail-section corporate-resources-section" data-rail-widget="corporateResources">
+        <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="corporateResources" aria-expanded="true" aria-controls="rail-body-corporateResources"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Corporate Resources</h2></span><span class="occ-widget-state"><b id="corporateResourceCount">0</b></span></button></header>
+        <div id="rail-body-corporateResources" class="rail-widget-body">
+          <div id="corporateResourcesList"></div>
+        </div>
+      </section>
       <section class="rail-section flights-section" data-rail-widget="activeFlights">
         <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="activeFlights" aria-expanded="true" aria-controls="rail-body-activeFlights"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Active</h2></span><span class="occ-widget-state"><b id="activeFlightCount">0</b></span></button></header>
         <div id="rail-body-activeFlights" class="rail-widget-body">
@@ -162,7 +168,7 @@
 <script src="js/simulation.js?v=14.6.40"></script>
 <script src="js/incident-resources.js?v=14.2.15"></script>
 <script src="js/incident-consequences.js?v=14.2.17"></script>
-<script src="js/ui-next.js?v=1.10.57"></script>
+<script src="js/ui-next.js?v=1.10.61"></script>
 <script src="js/map.js?v=15.0.2"></script>
 </body>
 </html>

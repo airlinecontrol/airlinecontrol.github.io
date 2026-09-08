@@ -20,7 +20,7 @@
     frame.src='../index.html?fixture=warnings&cache='+Date.now();
     await cleanLoaded;
     const w=frame.contentWindow,d=frame.contentDocument;
-    w.eval('state.ops.automaticDisruptions=false; state.flights=[]; state.aircraft=[]; state.incidents=[]; state.crewDuties=[]; state.services=[]; save();');
+    w.eval('state.ops.automaticDisruptions=false; state.flights=[]; state.aircraft=[]; state.incidents=[]; state.crewDuties=[]; state.services=[]; workspaceUi.dismissedWarnings={}; save(); saveWorkspaceUi();');
 
     const now=w.simNow();
     const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
@@ -71,9 +71,12 @@
     assert(d.querySelector('[data-desk-widget="warnings"]'),'warning widget was not rendered');
     assert(!d.querySelector('[data-desk-widget="connections"]'),'connections widget should not be rendered');
     assert(d.querySelector('[data-desk-widget="warnings"]')?.textContent.includes(connectionOnward.id),'warnings widget does not show the affected onward connection');
-    assert(d.querySelectorAll('[data-desk-widget="warnings"] .warning-summary-section .warning-row').length<=6,'warning widget summary is not compact');
-    assert(d.querySelectorAll('[data-desk-widget="warnings"] .warning-group').length>=4,'warning widget did not group warning families');
-    assert([...d.querySelectorAll('[data-desk-widget="warnings"] .warning-group')].some(group=>!group.open),'warning groups should be collapsed by default');
+    assert(!d.querySelector('[data-desk-widget="warnings"] .warning-summary-section'),'warning widget still renders the old duplicated summary section');
+    assert(d.querySelectorAll('[data-desk-widget="warnings"] .warning-group-card').length>=4,'warning widget did not group warning families');
+    assert([...d.querySelectorAll('[data-desk-widget="warnings"] .warning-group-card')].every(group=>group.querySelectorAll(':scope > .warning-row').length<=2),'warning groups should only preview the first two rows');
+    if(warnings.some(item=>warnings.filter(other=>other.group===item.group).length>2)){
+      assert(d.querySelector('[data-desk-widget="warnings"] .warning-group-more'),'warning groups with overflow should expose a compact disclosure');
+    }
     const flightWarning=d.querySelector(`[data-desk-widget="warnings"] [data-warning-flight="${second.id}"]`);
     assert(flightWarning,'clickable flight warning is missing');
     flightWarning.click();
@@ -85,6 +88,13 @@
     aircraftWarning.click();
     await wait(120);
     assert(w.eval(`selectedAircraftId==='${maintenanceAc.id}'`),'clicking an aircraft warning did not select the affected aircraft');
+    const dismissRow=d.querySelector('[data-desk-widget="warnings"] .warning-row');
+    const dismissKey=dismissRow?.dataset.warningKey;
+    assert(dismissRow?.querySelector('[data-dismiss-warning]'),'warning row does not expose a dismiss button');
+    dismissRow.querySelector('[data-dismiss-warning]').click();
+    await wait(120);
+    assert(!d.querySelector(`[data-warning-key="${CSS.escape(dismissKey)}"]`),'dismissed warning is still visible in the widget');
+    assert(w.operationWarnings().some(item=>w.warningDismissKey(item)===dismissKey),'dismiss should not delete the underlying derived warning');
     nightFlight.cancelled=true;
     w.recalculateOperations();
     assert(!w.operationWarnings().some(item=>item.flightId===nightFlight.id),'cancelled flight warning did not self-clear');
