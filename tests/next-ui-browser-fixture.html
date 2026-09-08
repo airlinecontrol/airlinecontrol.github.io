@@ -103,7 +103,8 @@
     w.recalculateOperations();
     const connectorSecond=w.createFlightRecord({aircraftId:connectorAc.id,from:'LHR',to:'FRA',departure:w.flightActualArrival(connectorFirst)+75*60_000,fare:{economy:120,business:300,first:600}});
     w.refreshAll(); await wait(120);
-    assert([...d.querySelectorAll('#schedule-board .connection-label')].some(item=>item.textContent.trim()==='1h 15m'),'schedule connector does not show ground-time distance');
+    const expectedConnectorGap=w.formatDuration(w.flightActualDeparture(connectorSecond)-w.flightActualArrival(connectorFirst));
+    assert([...d.querySelectorAll('#schedule-board .connection-label')].some(item=>item.textContent.trim()===expectedConnectorGap),'schedule connector does not show ground-time distance');
     const lateConnectorAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'AMS');
     const lateInbound=w.createFlightRecord({aircraftId:lateConnectorAc.id,from:'AMS',to:'FRA',departure:w.simNow()+2*60*60_000,fare:{economy:120,business:300,first:600}});
     w.recalculateOperations();
@@ -284,6 +285,18 @@
     assert(!d.querySelector('[data-task-link-action]'),'incident-only desk action links should not be rendered');
     assert(!d.querySelector('[data-desk-widget="personnel"] .desk-active-task-section'),'personnel widget should not duplicate incident tasks');
     assert(d.querySelector('[data-rail-widget="maintenance"] .maintenance-rail-row .progress-track'),'left maintenance widget does not show aircraft condition as a progress bar');
+    assert(getComputedStyle(d.querySelector('[data-rail-widget="maintenance"] .maintenance-rail-row .progress-track')).display==='block','left maintenance condition bar has broken inline layout');
+    const scheduleCheckButton=d.querySelector('[data-rail-widget="maintenance"] [data-schedule-check]');
+    assert(scheduleCheckButton,'left maintenance widget does not expose schedule-check action');
+    const scheduleCheckAircraft=scheduleCheckButton.dataset.scheduleCheck;
+    w.confirm=()=>true;
+    scheduleCheckButton.click();
+    await wait(160);
+    assert(w.eval(`Boolean(state.aircraft.find(item=>item.id==='${scheduleCheckAircraft}')?.maintenance?.scheduled)`),'left maintenance schedule-check action did not create a scheduled check');
+    assert(d.querySelector(`[data-rail-widget="maintenance"] [data-cancel-check="${scheduleCheckAircraft}"]`),'left maintenance widget did not switch to cancel-check after scheduling');
+    d.querySelector(`[data-rail-widget="maintenance"] [data-cancel-check="${scheduleCheckAircraft}"]`).click();
+    await wait(120);
+    assert(!w.eval(`state.aircraft.find(item=>item.id==='${scheduleCheckAircraft}')?.maintenance?.scheduled`),'left maintenance cancel-check action did not remove the scheduled check');
     assert(!d.querySelector('[data-desk-widget="maintenance"]'),'maintenance desk should not be shown in the right rail');
     assert(!d.querySelector('[data-desk-widget="communications"]'),'communications desk should not be shown as a standalone widget');
     assert(!d.querySelector('[data-desk-widget="connections"]'),'connections desk should not be shown as a standalone widget');

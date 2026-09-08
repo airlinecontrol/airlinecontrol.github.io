@@ -522,14 +522,21 @@ function maintenanceRailItem(aircraft,now=simNow()){
   const tone=condition<50||status.grounding?'critical':condition<75||status.due?'warning':'';
   const selected=selectedAircraftId===aircraft.id&&!selectedFlightId;
   const attention=status.grounding||status.due||status.active||mel.length;
+  const job=status.scheduled;
   const title=`Condition ${condition}% · ${Math.round(status.remainingHours)} h / ${Math.round(status.remainingCycles)} cycles remaining${mel.length?` · ${mel.length} MEL item${mel.length===1?'':'s'}`:''}`;
-  return `<button class="list-row maintenance-rail-row ${tone} ${attention?'needs-attention':''} ${selected?'selected':''}" type="button" data-maintenance-aircraft="${esc(aircraft.id)}" title="${esc(title)}">
-    ${attention?'<i class="attention-marker"></i>':''}
-    <span class="list-primary"><span>${esc(aircraft.tail)}</span><span>${condition}%</span></span>
-    <span class="list-secondary"><span>${esc(status.label)}</span><span>${esc(aircraft.location)}</span></span>
-    <span class="maintenance-limit">${Math.round(status.remainingHours)} h / ${Math.round(status.remainingCycles)} cycles</span>
-    <span class="progress-track"><span style="width:${formatPct(condition/100)}"></span></span>
-  </button>`;
+  const action=job
+    ? `<button class="desk-action-link" type="button" data-cancel-check="${esc(aircraft.id)}" ${status.active?'disabled':''}>${status.active?'Check in progress':'Cancel check'}</button>`
+    : `<button class="desk-action-link" type="button" data-schedule-check="${esc(aircraft.id)}">Schedule check</button>`;
+  return `<article class="left-list-card maintenance-rail-card ${selected?'selected':''} ${attention?'needs-attention':''}">
+    <button class="list-row maintenance-rail-row ${tone} ${attention?'needs-attention':''} ${selected?'selected':''}" type="button" data-maintenance-aircraft="${esc(aircraft.id)}" title="${esc(title)}">
+      ${attention?'<i class="attention-marker"></i>':''}
+      <span class="list-primary"><span>${esc(aircraft.tail)}</span><span>${condition}%</span></span>
+      <span class="list-secondary"><span>${esc(status.label)}</span><span>${esc(aircraft.location)}</span></span>
+      <span class="maintenance-limit">${Math.round(status.remainingHours)} h / ${Math.round(status.remainingCycles)} cycles${job?` · ${shortDay(job.start)} ${shortClock(job.start)}`:''}</span>
+      <span class="progress-track"><span style="width:${formatPct(condition/100)}"></span></span>
+    </button>
+    <div class="maintenance-rail-actions">${action}</div>
+  </article>`;
 }
 
 function refreshMaintenanceRail(force=false){
@@ -562,6 +569,14 @@ function refreshMaintenanceRail(force=false){
   document.querySelectorAll('[data-maintenance-aircraft]').forEach(button=>button.addEventListener('click',()=>{
     if(selectedAircraftId===button.dataset.maintenanceAircraft&&!selectedFlightId){ clearOperationalSelection(); return; }
     contextMode='context'; settleSelected(button.dataset.maintenanceAircraft);
+  }));
+  list?.querySelectorAll('[data-schedule-check]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    scheduleAircraftMaintenance(button.dataset.scheduleCheck);
+  }));
+  list?.querySelectorAll('[data-cancel-check]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    cancelAircraftMaintenance(button.dataset.cancelCheck);
   }));
 }
 

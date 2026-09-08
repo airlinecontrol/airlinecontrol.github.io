@@ -1172,15 +1172,36 @@ body,
   font-size:10px;
 }
 .maintenance-rail-row .progress-track{
+  display:block;
   height:5px;
   margin:7px 0 0;
+  border-radius:999px;
   background:#1b2d36;
+  overflow:hidden;
+}
+.maintenance-rail-row .progress-track>span{
+  display:block;
+  height:100%;
+  background:var(--accent);
 }
 .maintenance-rail-row.warning .progress-track>span{
   background:#e7bd5b;
 }
 .maintenance-rail-row.critical .progress-track>span{
   background:#ff6f8b;
+}
+.maintenance-rail-card{
+  display:block;
+}
+.maintenance-rail-card .maintenance-rail-actions{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  padding:0 11px 9px;
+}
+.maintenance-rail-card .desk-action-link:disabled{
+  color:#728894!important;
+  text-decoration:none;
 }
 .passenger-recovery-row,
 .crew-accommodation-row{

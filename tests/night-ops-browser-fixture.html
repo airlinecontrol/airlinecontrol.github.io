@@ -51,7 +51,15 @@
     let futureFraStart=futureFraLate;
     for(let i=0;i<180&&w.airportNightStatus('FRA',futureFraStart-5*60_000).status==='closed';i++) futureFraStart-=5*60_000;
     const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'LHR');
-    w.changeStaff('LHR','operations',1);
+    const family='Airbus A320 family';
+    w.changeStaff('LHR','captains',20);
+    w.changeStaff('LHR','firstOfficers',20);
+    w.changeStaff('LHR','cabinCrew',60);
+    w.changeStaff('LHR','groundHandling',80);
+    w.changeStaff('LHR','operations',20);
+    w.changeStaff('LHR','customerService',20);
+    w.changeQualification('LHR','captains',family,20);
+    w.changeQualification('LHR','firstOfficers',family,20);
     const flight=w.createFlightRecord({
       aircraftId:aircraft.id,
       from:'LHR',
@@ -94,6 +102,9 @@
 
     const airborneAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'LHR');
     w.changeStaff('LHR','operations',1);
+    let airborneCurfewArrival=w.simNow()+45*60_000;
+    for(let i=0;i<144&&w.airportNightStatus('FRA',airborneCurfewArrival).status!=='closed';i++) airborneCurfewArrival+=20*60_000;
+    assert(w.airportNightStatus('FRA',airborneCurfewArrival).status==='closed','fixture could not find a closed FRA arrival window for the airborne case');
     const airborne=w.createFlightRecord({
       aircraftId:airborneAc.id,
       from:'LHR',
@@ -102,9 +113,9 @@
       fare:{economy:140,business:360,first:700}
     });
     airborne.departureLogged=true;
-    airborne.arrival=futureFraStart-10*60_000;
+    airborne.arrival=airborneCurfewArrival;
     airborne.operationalDurationMs=airborne.arrival-airborne.departure;
-    airborne.enrouteDelayMin=30;
+    airborne.enrouteDelayMin=0;
     w.recalculateOperations();
     assert(airborne.nightRestrictionConflictDelayMin>0,'airborne curfew arrival did not expose a schedule conflict');
     assert(w.processDerivedOperationalIncidents(w.simNow()),'airborne curfew arrival did not create a derived incident');
