@@ -409,17 +409,6 @@
       {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate weather alternate',detail:'Choose a suitable alternate using fuel, weather, range, and handling resources.',dependsOn:['dispatch-minima-decision'],branch:'divert'},
       {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, weather, and handling for a return to the departure airport.',dependsOn:['dispatch-minima-decision'],branch:'return_origin'},
     ]},
-    alternate_unsuitable:{classification:'derived',steps:[
-      {key:'dispatch-alternate-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess alternate suitability',detail:'Review destination trend, current alternate status, fuel state, and replacement alternate options.'},
-      {key:'dispatch-alternate-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck alternate plan',detail:'The captain confirms whether continued flight watch is acceptable or a new plan is required.',dependsOn:['dispatch-alternate-assess'],action:'flightdeck',options:[
-        {id:'reselect',label:'Record new-alternate request',detail:'Flight deck requests a new alternate; OCC chooses another suitable airport.'},
-        {id:'monitor',label:'Record monitored continuation',detail:'Flight deck accepts continued monitoring; OCC keeps destination and alternate trend under watch.'},
-        {id:'return_origin',label:'Record return request',detail:'Flight deck requests return; OCC confirms fuel, weather, ATC, and handling for origin.'}
-      ]},
-      {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate new alternate',detail:'Choose a suitable alternate using fuel, weather, range, and handling resources.',dependsOn:['dispatch-alternate-decision'],branch:'reselect'},
-      {key:'dispatch-alternate-monitor',department:'dispatch',kind:'flight_watch_coordination',label:'Monitor alternate picture',detail:'Track destination and alternate suitability with the flight deck.',dependsOn:['dispatch-alternate-decision'],branch:'monitor',action:'monitor'},
-      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, weather, and handling for a return to the departure airport.',dependsOn:['dispatch-alternate-decision'],branch:'return_origin'},
-    ]},
     diversion_airport_unavailable:{classification:'derived',steps:[
       {key:'dispatch-diversion-airport-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess diversion-airport failure',detail:'Review why the planned diversion airport is unusable and prepare updated fuel/alternate choices.'},
       {key:'dispatch-diversion-airport-decision',department:'dispatch',kind:'authority_decision',label:'Record amended diversion plan',detail:'The captain and ATC decide whether to hold, reselect, or return after OCC updates the picture.',dependsOn:['dispatch-diversion-airport-assess'],action:'flightdeck',options:[

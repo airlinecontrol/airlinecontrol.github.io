@@ -46,12 +46,37 @@
     const connectionInbound=w.createFlightRecord({aircraftId:connectionInboundAc.id,from:'HKG',to:'SIN',departure:now-150*60_000,fare:{economy:120,business:300,first:0}});
     connectionInbound.arrival=now-50*60_000;
     connectionInbound.operationalDurationMs=connectionInbound.arrival-connectionInbound.departure;
-    connectionInbound.manualDelayMin=60;
+    connectionInbound.manualDelayMin=80;
     connectionInbound.departureLogged=true;
     connectionInbound.pax=160;
-    const connectionOnward=w.createFlightRecord({aircraftId:connectionOnwardAc.id,from:'SIN',to:'BKK',departure:w.nextSlotTime(connectionInbound.arrival+75*60_000,'SIN'),fare:{economy:120,business:300,first:0}});
+    const connectionOnward=w.createFlightRecord({aircraftId:connectionOnwardAc.id,from:'SIN',to:'BKK',departure:w.nextSlotTime(connectionInbound.arrival+120*60_000,'SIN'),fare:{economy:120,business:300,first:0}});
+    const alternateAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const alternateFlight=w.createFlightRecord({aircraftId:alternateAc.id,from:'FRA',to:'LHR',departure:now-70*60_000,fare:{economy:120,business:300,first:0}});
+    alternateFlight.departureLogged=true;
+    alternateFlight.arrival=now+95*60_000;
+    alternateFlight.operationalDurationMs=alternateFlight.arrival-alternateFlight.departure;
+    const originalAlternateSuitability=w.alternateSuitabilityContextForFlight;
+    w.alternateSuitabilityContextForFlight=(flight,t)=>flight.id===alternateFlight.id
+      ? {
+        sourceId:flight.id,
+        sourceKey:`alternate-suitability:${flight.id}:fixture`,
+        destination:'LHR',
+        airport:'LHR',
+        conditions:'Thunderstorm cells',
+        level:'caution',
+        capacityPct:74,
+        delayMin:28,
+        availableAlternates:0,
+        active:true
+      }
+      : originalAlternateSuitability(flight,t);
 
     w.recalculateOperations();
+    {
+      const onwardDeparture=Math.max(w.flightActualDeparture(connectionOnward),now+90*60_000);
+      connectionOnward.actualDeparture=onwardDeparture;
+      connectionInbound.actualArrival=onwardDeparture-40*60_000;
+    }
     w.updatePassengerConnections();
     w.eval(`{
       const duty=state.crewDuties.find(item=>item.flightIds.includes('${second.id}'));
@@ -67,6 +92,10 @@
     assert(warnings.some(item=>item.type==='crew_duty'),'crew-duty warning was not derived');
     assert(warnings.some(item=>item.type==='maintenance'),'maintenance warning was not derived');
     assert(warnings.some(item=>item.type==='connection_risk'&&item.detail.includes(connectionOnward.id)),'connection-risk warning was not derived');
+    assert(warnings.some(item=>item.type==='alternate_coverage'&&item.flightId===alternateFlight.id),'alternate suitability should be a warning');
+    assert(!w.createIncident('alternate_unsuitable',alternateFlight,{training:true,detectedAt:now,source:'test'}),'alternate suitability should not be creatable as an incident');
+    w.processDerivedOperationalIncidents(now);
+    assert(!w.openIncidentsForFlight(alternateFlight.id).some(item=>item.type==='alternate_unsuitable'),'alternate suitability warning created an incident');
     w.renderDeskStack(true);
     assert(d.querySelector('[data-desk-widget="warnings"]'),'warning widget was not rendered');
     assert(!d.querySelector('[data-desk-widget="connections"]'),'connections widget should not be rendered');

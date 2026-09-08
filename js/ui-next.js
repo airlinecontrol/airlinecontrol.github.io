@@ -1744,6 +1744,23 @@ function operationWarnings(now=simNow(),index=operationalIndex(now)){
         sortAt:status.time||flightActualDeparture(flight)
       });
     }
+    const alternateContext=typeof alternateSuitabilityContextForFlight==='function'&&flightIsAirborne(flight,now)
+      ? alternateSuitabilityContextForFlight(flight,now)
+      : null;
+    if(alternateContext?.active){
+      add({
+        id:`alternate-coverage:${flight.id}`,
+        type:'alternate_coverage',
+        group:'Alternate coverage',
+        level:alternateContext.availableAlternates>0?'warning':'critical',
+        owner:'Dispatch',
+        flightId:flight.id,
+        aircraftId:flight.aircraftId,
+        title:`Alternate coverage low · ${alternateContext.availableAlternates} suitable`,
+        detail:`${destination} ${alternateContext.conditions||'weather'} · capacity ${alternateContext.capacityPct||0}% · destination delay +${alternateContext.delayMin||0} min`,
+        sortAt:flightActualArrival(flight)
+      });
+    }
   }
   for(const row of connectionRowsForWidget()){
     const manifest=row.manifest;

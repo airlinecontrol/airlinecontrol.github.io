@@ -175,7 +175,7 @@
       .filter(type=>!w.eval(`RETIRED_INCIDENT_TYPES.has(${JSON.stringify(type)})`))
       .filter(type=>!w.eval(`Boolean(OperationalWorkflows.WORKFLOWS[${JSON.stringify(type)}])`));
     assert(!missingWorkflows.length,'incident definitions missing workflows: '+missingWorkflows.join(', '));
-    const retiredFailures=['slot_miss_risk','aircraft_late_inbound']
+    const retiredFailures=['slot_miss_risk','aircraft_late_inbound','alternate_unsuitable']
       .filter(type=>w.createIncident(type,groundFlight,{training:true,detectedAt:now}));
     assert(!retiredFailures.length,'retired incident types are still creatable: '+retiredFailures.join(', '));
     const airborneOnlyFailures=incidentTypes.filter(type=>{

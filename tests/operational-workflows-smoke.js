@@ -20,7 +20,7 @@ assert.deepEqual(Object.keys(workflows.WORKFLOWS),[
   'destination_handling_unavailable','security_screening','bird_strike','onboard_medical',
   'inflight_technical_fault','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute',
   'unruly_passenger','destination_weather_deterioration','destination_below_minima',
-  'alternate_unsuitable','diversion_airport_unavailable','lightning_strike','pressurization_issue'
+  'diversion_airport_unavailable','lightning_strike','pressurization_issue'
 ]);
 
 const tasks=workflows.tasksForIncident({id:'INC9',type:'destination_closure',flightId:'AS9',aircraftId:'AC9',detectedAt:1000});
@@ -180,11 +180,6 @@ const minimaTasks=workflows.tasksForIncident({id:'INC22B',type:'destination_belo
 assert.equal(minimaTasks.find(task=>task.key==='dispatch-minima-decision').kind,'authority_decision');
 assert.deepEqual(minimaTasks.find(task=>task.key==='dispatch-minima-decision').strategyOptions.map(option=>option.id),['hold','divert','return_origin']);
 assertRecordedAuthorityOptions(minimaTasks.find(task=>task.key==='dispatch-minima-decision'));
-
-const alternateTasks=workflows.tasksForIncident({id:'INC22C',type:'alternate_unsuitable',flightId:'AS22C',aircraftId:'AC22C',detectedAt:1000});
-assert.equal(alternateTasks.find(task=>task.key==='dispatch-alternate-decision').kind,'authority_decision');
-assert.deepEqual(alternateTasks.find(task=>task.key==='dispatch-alternate-decision').strategyOptions.map(option=>option.id),['reselect','monitor','return_origin']);
-assertRecordedAuthorityOptions(alternateTasks.find(task=>task.key==='dispatch-alternate-decision'));
 
 const diversionAirportTasks=workflows.tasksForIncident({id:'INC22D',type:'diversion_airport_unavailable',flightId:'AS22D',aircraftId:'AC22D',detectedAt:1000});
 assert.equal(diversionAirportTasks.find(task=>task.key==='dispatch-diversion-airport-decision').kind,'authority_decision');

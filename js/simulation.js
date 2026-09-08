@@ -806,13 +806,13 @@ const INCIDENT_DEFINITIONS={
   lightning_strike:{title:'Lightning strike',severity:'critical',decisionMin:18,summary:'The aircraft crossed convective weather and reports a possible lightning strike.',allowAirborne:true,airborneOnly:true},
   pressurization_issue:{title:'Pressurization issue',severity:'critical',decisionMin:15,summary:'The flight deck reports abnormal pressurization requiring immediate flight-watch support.',allowAirborne:true,airborneOnly:true}
 };
-const RETIRED_INCIDENT_TYPES=new Set(['slot_miss_risk','aircraft_late_inbound']);
+const RETIRED_INCIDENT_TYPES=new Set(['slot_miss_risk','aircraft_late_inbound','alternate_unsuitable']);
 const DERIVED_INCIDENT_TYPES=new Set([
   'aircraft_out_of_position','aircraft_misposition_after_diversion','postflight_technical_defect','crew_duty_risk',
   'crew_fatigue_mid_rotation','crew_misconnect','crew_misposition_after_diversion','no_legal_crew','crew_duty_extension',
   'deicing_required','deicing_capacity_collapse','holdover_expired','airport_capacity_reduction','atc_ground_stop','night_curfew_conflict','arrival_curfew_coordination','performance_limited',
   'destination_handling_unavailable','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute','destination_weather_deterioration',
-  'destination_below_minima','alternate_unsuitable','diversion_airport_unavailable','lightning_strike'
+  'destination_below_minima','diversion_airport_unavailable','lightning_strike'
 ]);
 
 function openIncidentsForFlight(flightId){
@@ -1884,7 +1884,7 @@ function updateOpenDerivedIncident(type,flight,active,context,t){
 
 function retireScheduleTrackedIncidents(t=simNow()){
   let changed=false;
-  for(const incident of state.incidents.filter(item=>['slot_miss_risk','aircraft_late_inbound'].includes(item.type)&&item.status==='open')){
+  for(const incident of state.incidents.filter(item=>['slot_miss_risk','aircraft_late_inbound','alternate_unsuitable'].includes(item.type)&&item.status==='open')){
     incident.status='resolved';
     incident.blocking=false;
     incident.resolvedAt=t;
@@ -1892,7 +1892,9 @@ function retireScheduleTrackedIncidents(t=simNow()){
     incident.selectedAction='tracked_on_schedule';
     incident.outcome=incident.type==='aircraft_late_inbound'
       ? 'Late inbound risk is tracked directly on the schedule instead of as a standalone incident.'
-      : 'Slot risk is tracked on the schedule and as linked disruption context instead of as a standalone incident.';
+      : incident.type==='alternate_unsuitable'
+        ? 'Alternate suitability is tracked as a warning instead of as a standalone incident.'
+        : 'Slot risk is tracked on the schedule and as linked disruption context instead of as a standalone incident.';
     for(const task of incidentTasks(incident.id)){
       if(!['completed','cancelled'].includes(task.status)) task.status='cancelled';
     }
@@ -3114,8 +3116,6 @@ function maybeApplyLiveWeatherImpact(f,t){
   if(updateOpenDerivedIncident('destination_weather_deterioration',f,deteriorationActive,deteriorationContext,t)) changed=true;
   const minimaContext=destinationBelowMinimaContextForFlight(f,t);
   if(updateOpenDerivedIncident('destination_below_minima',f,!closureActive&&Boolean(minimaContext?.active),minimaContext,t)) changed=true;
-  const alternateContext=alternateSuitabilityContextForFlight(f,t);
-  if(updateOpenDerivedIncident('alternate_unsuitable',f,!closureActive&&Boolean(alternateContext?.active),alternateContext,t)) changed=true;
   if(maybeDetectLightningStrike(f,t)) changed=true;
   const routeContext=routeRerouteContextForFlight(f,t);
   const routeActive=Boolean(routeContext&&routeContext.delayMin>=12);

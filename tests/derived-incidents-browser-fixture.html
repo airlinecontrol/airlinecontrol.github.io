@@ -135,13 +135,18 @@
       const inbound=w.createFlightRecord({aircraftId:inboundAc.id,from:'HKG',to:'SIN',departure:now-90*60_000,fare:{economy:120,business:300,first:0}});
       inbound.arrival=now+10*60_000;
       inbound.operationalDurationMs=inbound.arrival-inbound.departure;
-      inbound.manualDelayMin=60;
+      inbound.manualDelayMin=80;
       inbound.departureLogged=true;
       inbound.pax=180;
-      const onward=w.createFlightRecord({aircraftId:onwardAc.id,from:'SIN',to:'BKK',departure:w.nextSlotTime(inbound.arrival+75*60_000,'SIN'),fare:{economy:120,business:300,first:0}});
+      const onward=w.createFlightRecord({aircraftId:onwardAc.id,from:'SIN',to:'BKK',departure:w.nextSlotTime(inbound.arrival+120*60_000,'SIN'),fare:{economy:120,business:300,first:0}});
       onward.incidentChecks.operationalGeneration=true;
       onward.opsChecked=true;
       w.recalculateOperations();
+      {
+        const onwardDeparture=Math.max(w.flightActualDeparture(onward),now+120*60_000);
+        onward.actualDeparture=onwardDeparture;
+        inbound.actualArrival=onwardDeparture-40*60_000;
+      }
       w.updatePassengerConnections();
       assert(inbound.connectionCriticalPax>=10,'fixture did not create own-network critical connection passengers');
       w.processDerivedOperationalIncidents(now);
