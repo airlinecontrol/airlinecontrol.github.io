@@ -163,7 +163,7 @@ function estimateFlight(from,to,ac,fareValue,{departure=simNow(),randomize=false
     const seats=cabin[className]||0;
     const classBaseFare=baseFare*config.baseFareMultiplier;
     const priceFactor=clamp(Math.exp(-config.elasticity*(fares[className]/classBaseFare-1)),.01,1.15);
-    const randomFactor=randomize ? .92+Math.random()*.16 : 1;
+    const randomFactor=randomize ? .92+simulationRandomUnit(`demand:${from}:${to}:${ac.id}:${departure}:${className}`)*.16 : 1;
     const timing=calendar.classes[className];
     const remainingDemand=Math.max(0,market.classDemand[className]-existingBookings[className]);
     const willingPassengers=remainingDemand*priceFactor*timing.weekday*timing.time*timing.season*randomFactor;
@@ -529,6 +529,7 @@ function applyFlightCancellation(flight,reason='',{preserveIncidentId=''}={}){
     incident.selectedAction='cancel';
     incident.outcome=`${flight.id} cancelled${reason?` · ${reason}`:''}.`;
     for(const task of incidentTasks(incident.id)) if(task.status!=='completed') task.status='cancelled';
+    if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'closed',{reason:'flight_cancelled'});
   }
 }
 

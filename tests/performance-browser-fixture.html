@@ -92,9 +92,13 @@
       eventCalls++;
       return originalProcessEvents.apply(this,args);
     };
+    w.__aocRenderStats={};
     await wait(1400);
     w.processEvents=originalProcessEvents;
     assert(eventCalls<=4,`main loop processed simulation events too frequently: ${eventCalls} calls in 1.4s`);
+    const renderStats=w.__aocRenderStats||{};
+    assert((renderStats.schedule?.rendered||0)<=2,`schedule rebuilt too often during passive loop: ${renderStats.schedule?.rendered||0}`);
+    assert((renderStats.desk?.rendered||0)<=2,`desk rebuilt too often during passive loop: ${renderStats.desk?.rendered||0}`);
 
     const rows=d.querySelectorAll('#schedule-board .sched-aircraft-row').length;
     const renderedFlights=d.querySelectorAll('#schedule-board [data-flight-id]').length;

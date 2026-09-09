@@ -159,6 +159,26 @@
     }
 
     {
+      const spare=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'MUC');
+      const {flight,incident}=makeCase('mel_defect');
+      const beforeFerryCount=w.eval(`state.flights.filter(item=>item.aircraftId==='${spare.id}'&&item.flightType==='ferry').length`);
+      const ferry=w.createFlightRecord({aircraftId:spare.id,from:'MUC',to:'FRA',departure:now+25*60_000,fare:0,flightType:'ferry'});
+      ferry.weatherChecked=true; ferry.constraintChecked=true; ferry.opsChecked=true; ferry.enrouteChecked=true;
+      w.recalculateOperations();
+      const plannedOption=w.incidentAircraftReplacementOptions(incident).find(option=>option.mode==='planned'&&option.aircraftId===spare.id&&option.ferryId===ferry.id);
+      assert(plannedOption,`planned ferry replacement option was not offered: ${JSON.stringify(w.incidentAircraftReplacementOptions(incident))}`);
+      assert(/via/.test(plannedOption.label)&&plannedOption.detail.includes(ferry.id),'planned ferry option did not identify the ferry leg');
+      assert(w.performOperationalTask(`${incident.id}:mx-inspect`),'MEL inspection did not start for planned-ferry substitute');
+      completeWaits();
+      assert(w.performOperationalTask(`${incident.id}:mx-strategy`,'substitute'),'MEL planned-ferry substitute strategy was rejected');
+      assert(w.performOperationalTask(`${incident.id}:dispatch-substitute`,'',{optionId:plannedOption.id}),`planned ferry substitute ${spare.id} was rejected`);
+      assert(incident.status==='resolved','MEL planned-ferry substitute incident did not resolve');
+      assert(flight.aircraftId===spare.id,'planned-ferry substitute did not assign the replacement aircraft');
+      assert(incident.replacementFerryId===ferry.id,'incident did not record the reused planned ferry');
+      assert(w.eval(`state.flights.filter(item=>item.aircraftId==='${spare.id}'&&item.flightType==='ferry').length`)===beforeFerryCount+1,'planned-ferry substitute created a duplicate ferry');
+    }
+
+    {
       const borrowed=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
       const {flight,incident}=makeCase('mel_defect','LHR');
       const later=w.createFlightRecord({aircraftId:borrowed.id,from:'LHR',to:'AMS',departure:flight.arrival+3*60*60_000,fare:{economy:150,business:390,first:750}});

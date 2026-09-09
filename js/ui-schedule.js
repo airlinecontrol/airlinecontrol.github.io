@@ -285,11 +285,26 @@ function scheduleConnectionLabel(connection){
   return `${pax}p · ${available}/${mct}m`;
 }
 function renderScheduleConnectionOverlay(board,pairs){
-  board.querySelector('.schedule-connection-overlay')?.remove();
-  if(!pairs.length) return;
   const boardRect=board.getBoundingClientRect();
   const width=Math.max(board.scrollWidth,board.offsetWidth,boardRect.width);
   const height=Math.max(board.scrollHeight,board.offsetHeight,boardRect.height);
+  const signature=[
+    Math.round(width),Math.round(height),selectedFlightId||'',selectedAircraftId||'',
+    pairs.map(pair=>[
+      pair.inbound.id,
+      pair.outbound.id,
+      pair.connection.status,
+      Math.round(pair.connection.availableMin||0),
+      Math.round(pair.connection.mctMin||0),
+      pair.connection.pax||0,
+      pair.focused?1:0,
+      pair.selected?1:0
+    ].join(':')).join('|')
+  ].join('::');
+  if(signature===lastScheduleConnectionOverlaySignature) return;
+  lastScheduleConnectionOverlaySignature=signature;
+  board.querySelector('.schedule-connection-overlay')?.remove();
+  if(!pairs.length) return;
   const paths=[];
   for(const pair of pairs){
     const inboundEl=board.querySelector(`.flight-block[data-flight-id="${CSS.escape(pair.inbound.id)}"]`);
@@ -345,7 +360,10 @@ function scheduleAircraftRowBadges(aircraft,flights,lateInboundById,now=simNow()
     if(openIncidentsForFlight(flight.id).length) incidents++;
     if(lateInboundById.get(flight.id)) lateInbound++;
     if(scheduleNightMarkerInfo(flight)) night++;
-    if(i>0&&turnaroundGapInfo(flights[i-1],flight,aircraft)?.belowMinimum) shortTurns++;
+  }
+  const scheduledFlights=flights.filter(flight=>!flight.cancelled).sort((a,b)=>a.departure-b.departure||a.id.localeCompare(b.id));
+  for(let i=1;i<scheduledFlights.length;i++){
+    if(turnaroundGapInfo(scheduledFlights[i-1],scheduledFlights[i],aircraft)?.plannedBelowMinimum) shortTurns++;
   }
   const badges=[
     delayed?{className:'delayed',label:`${delayed} delayed`}:null,
@@ -399,6 +417,7 @@ function refreshScheduleTimeline(force=false){
   const signature=[Math.floor(start/MIN),scheduleRangeHours,operationFilterSummary(),selectedFlightId||'',selectedAircraftId||'',Array.from(focusIds).sort().join(','),relevant.map(f=>`${f.id}:${flightActualDeparture(f)}:${flightActualArrival(f)}:${f.aircraftId}:${flightSlotImpactState(f,now).state}:${f.assignedSlot||0}:${f.cancelled?1:0}:${f.crewDutyId||''}:${f.crewDutySplit?1:0}:${f.nightRestrictionDelayMin||0}:${f.nightRestrictionLabel||''}:${f.nightRestrictionConflictDelayMin||0}:${f.nightRestrictionConflictLabel||''}:${scheduleFlightHasTimingShift(f)?1:0}:${lateInboundById.get(f.id)?.delayMin||0}:${lateInboundById.get(f.id)?.inboundReadyAt||0}:${openIncidentsForFlight(f.id).length}`).join(','),(state.crewDuties||[]).map(d=>`${d.id}:${d.dutyStart}:${d.dutyEnd}:${d.legal?1:0}:${d.status}`).join(','),visibleAircraft.map(a=>`${a.id}:${a.maintenance?.scheduled?.start||0}:${a.maintenance?.scheduled?.end||0}:${a.maintenance?.scheduled?.status||''}`).join(',')].join('|');
   if(force||signature!==lastScheduleSignature){
     lastScheduleSignature=signature;
+    if(typeof noteRenderSurface==='function') noteRenderSurface('schedule','rendered');
     let html='<div class="sched-header-row"><div class="sched-label"><b>Aircraft</b></div><div class="sched-timearea" style="width:'+timeWidth+'px">';
     for(let h=0;h<=scheduleRangeHours;h++){
       const ts=start+h*HOUR,left=h*pxPerHour,major=new Date(ts).getHours()%6===0;
@@ -455,7 +474,7 @@ function refreshScheduleTimeline(force=false){
         const next=flights[i+1];
         if(next&&!f.cancelled&&!next.cancelled){
           const nextDep=flightActualDeparture(next),gapMs=nextDep-actualArr,turn=turnaroundGapInfo(f,next,ac);
-          const connectorShortTurn=Boolean(turn?.belowMinimum),drawPositiveGap=nextDep>actualArr;
+          const connectorShortTurn=Boolean(turn?.plannedBelowMinimum),drawPositiveGap=nextDep>actualArr;
           if(drawPositiveGap||connectorShortTurn){
             const same=destination===next.from,connectionFocused=focusIds.has(f.id)&&focusIds.has(next.id);
             const connectorLateInbound=Boolean(lateInboundById.get(next.id));
@@ -473,7 +492,7 @@ function refreshScheduleTimeline(force=false){
                 connectorLateInbound?'late inbound rotation warning':null
               ].filter(Boolean);
               const label=connectorShortTurn&&turn
-                ? `${Math.max(0,turn.actualGapMin)}/${turn.minimumMin}m`
+                ? `${Math.max(0,turn.plannedGapMin)}/${turn.minimumMin}m`
                 : formatDuration(gapMs);
               html+=`<span class="connection-label ${connectorLateInbound?'late-inbound':''} ${connectorShortTurn?'short-turn':''} ${connectionFocused?'focus':''}" title="${esc(titleParts.join(' · '))}" style="left:${connLeft+connWidth/2}px">${esc(label)}</span>`;
               html+=`<span class="connection-line ${same?'':'mismatch'} ${connectorLateInbound?'late-inbound':''} ${connectorShortTurn?'short-turn':''} ${connectionFocused?'focus':''}" title="${esc(titleParts.join(' · '))}" style="left:${connLeft}px;width:${connWidth}px"></span>`;
@@ -486,6 +505,7 @@ function refreshScheduleTimeline(force=false){
     if(!state.aircraft.length) html+='<div class="schedule-empty">No aircraft in fleet.</div>';
     else if(!visibleAircraft.length) html+='<div class="schedule-empty">No scheduled flights match the current filter.</div>';
     board.innerHTML=html; board.style.width=(labelWidth+timeWidth)+'px';
+    lastScheduleConnectionOverlaySignature='';
     board.onclick=event=>{
       if(!selectedFlightId) return;
       if(event.target.closest('[data-flight-id],[data-slot-flight],[data-crew-duty]')) return;
@@ -495,6 +515,8 @@ function refreshScheduleTimeline(force=false){
     board.querySelectorAll('[data-slot-flight]').forEach(element=>element.addEventListener('click',event=>{event.stopPropagation();contextMode='context';settleSelectedFlight(element.dataset.slotFlight);}));
     board.querySelectorAll('[data-sched-aircraft]').forEach(row=>row.addEventListener('dblclick',()=>{contextMode='context';settleSelected(row.dataset.schedAircraft);}));
     if(selectedFlightId) requestAnimationFrame(scrollSelectedScheduleFlightIntoView);
+  }else{
+    if(typeof noteRenderSurface==='function') noteRenderSurface('schedule','skipped');
   }
   renderScheduleConnectionOverlay(board,schedulePassengerConnectionPairs(operationalRelevant,focusIds,now));
   updateScheduleNowLine();

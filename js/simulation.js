@@ -339,11 +339,16 @@ function turnaroundGapInfo(previous,next,aircraft=null){
   const actualGapMin=Math.round((flightActualDeparture(next)-flightActualArrival(previous))/MIN);
   const plannedGapMin=Math.round((next.departure-previous.arrival)/MIN);
   const limitingGapMin=Math.min(actualGapMin,plannedGapMin);
-  const belowMinimum=sameStation&&limitingGapMin<minimumMin;
+  const plannedBelowMinimum=sameStation&&plannedGapMin<minimumMin;
+  const actualBelowMinimum=sameStation&&actualGapMin<minimumMin;
+  const belowMinimum=plannedBelowMinimum||actualBelowMinimum;
   const shortageMin=Math.max(0,minimumMin-limitingGapMin);
+  const plannedShortageMin=Math.max(0,minimumMin-plannedGapMin);
+  const actualShortageMin=Math.max(0,minimumMin-actualGapMin);
   const limitingGapLabel=limitingGapMin<0?'overlap':`${limitingGapMin} min`;
   return {
-    sameStation,minimumMin,actualGapMin,plannedGapMin,limitingGapMin,belowMinimum,shortageMin,
+    sameStation,minimumMin,actualGapMin,plannedGapMin,limitingGapMin,
+    belowMinimum,plannedBelowMinimum,actualBelowMinimum,shortageMin,plannedShortageMin,actualShortageMin,
     title:belowMinimum
       ? `${previous.id} to ${next.id}: turnaround ${limitingGapLabel}, minimum ${minimumMin} min for ${ac.model} · planned ${plannedGapMin} min · actual ${actualGapMin} min`
       : `${previous.id} to ${next.id}: ground time ${actualGapMin} min, minimum ${minimumMin} min for ${ac.model}`
@@ -695,7 +700,7 @@ function crewSickRoleForFlight(flight){
     {role:'firstOfficers',weight:1},
     {role:'cabinCrew',weight:Math.min(4,cabinNeed)}
   ];
-  let roll=Math.random()*options.reduce((total,item)=>total+item.weight,0);
+  let roll=simulationRandom(`crew-sick-role:${flight?.id||'unknown'}`)*options.reduce((total,item)=>total+item.weight,0);
   for(const option of options){
     roll-=option.weight;
     if(roll<=0) return option.role;
@@ -847,6 +852,7 @@ function createIncident(type,flight,{training=false,detectedAt=simNow(),source='
     technicalContext:['mel_defect','postflight_technical_defect'].includes(type)?technicalContextForIncident(type,id,detectedAt,context):null,
     classification:OperationalWorkflows.WORKFLOWS[type]?.classification||'incident',workflowCreatedAt:0,overdue:false,
     defaultApplied:false,defaultAppliedAt:0,defaultPolicy:'',defaultOutcome:'',
+    firstVisibleAt:0,autoClosedAt:0,autoCloseReason:'',
     affectedRole:type==='crew_sick'?crewSickRoleForFlight(flight):'',
     recoveryPlan:'',recoveryPlanAt:0,source,sourceKey,context,lastDetectedAt:detectedAt,impacts:[],
     caseId:parent?.caseId||parent?.id||id,
@@ -860,6 +866,7 @@ function createIncident(type,flight,{training=false,detectedAt=simNow(),source='
   if(type==='crew_misconnect') incident.affectedRole=context?.role||'captains';
   state.incidents.push(incident);
   ensureIncidentWorkflow(incident);
+  if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'opened',{deadline,detectedAt,source,reason:context?.reason||context?.trigger||''});
   if(state.incidents.length>250){
     const removable=state.incidents.findIndex(item=>item.status!=='open');
     if(removable>=0) state.incidents.splice(removable,1);
@@ -1873,6 +1880,38 @@ function aircraftReplacementCommitment(ac,excludeServiceId=''){
   };
 }
 
+function plannedReplacementFerryOptions(ac,target,serviceId=''){
+  const now=simNow();
+  return state.flights
+    .filter(ferry=>
+      ferry.aircraftId===ac.id &&
+      ferry.flightType==='ferry' &&
+      !ferry.cancelled &&
+      !ferry.settled &&
+      ferry.id!==target.id &&
+      flightOperationalDestination(ferry)===target.from &&
+      flightActualArrival(ferry)>now &&
+      flightActualArrival(ferry)<=target.departure+8*HOUR
+    )
+    .map(ferry=>{
+      const readyAt=flightActualArrival(ferry)+minimumTurnMinutes(ac,target.from)*MIN;
+      const delayMin=Math.max(0,Math.ceil((readyAt-target.departure)/(15*MIN))*15);
+      const proposed=replacementLegsForFlight(target,ac,delayMin);
+      const itinerary=validateAircraftItinerary(ac,proposed);
+      if(!itinerary.ok) return null;
+      const commitment=aircraftReplacementCommitment(ac,serviceId);
+      const borrowed=commitment.futureFlights.some(item=>item.id!==ferry.id&&item.flightType!=='ferry')||commitment.activeServices.length>0;
+      const impact=borrowed?'Planned ferry, borrowed from later schedule':'Planned ferry';
+      return {
+        id:`planned:${ferry.id}:${ac.id}`,aircraftId:ac.id,tail:ac.tail,model:ac.model,mode:'planned',kind:borrowed?'borrow':'spare',
+        impact,from:ferry.from,delayMin,ferryId:ferry.id,ferryDeparture:flightActualDeparture(ferry),ferryArrival:flightActualArrival(ferry),
+        label:`${ac.tail} · ${ac.model} via ${ferry.id}`,detail:`${impact} ${ferry.id}; arrives ${formatTime(flightActualArrival(ferry))}${delayMin?` · delays departure ${delayMin} min`:' · ready before departure'}.`
+      };
+    })
+    .filter(Boolean)
+    .sort((a,b)=>a.delayMin-b.delayMin||a.ferryArrival-b.ferryArrival||a.tail.localeCompare(b.tail));
+}
+
 function incidentAircraftReplacementOptions(incident){
   const flight=state.flights.find(item=>item.id===incident?.flightId&&!item.cancelled);
   if(!flight||flight.departureLogged||flight.fueled) return [];
@@ -1887,6 +1926,9 @@ function incidentAircraftReplacementOptions(incident){
     const commitment=aircraftReplacementCommitment(ac,service?.id||'');
     const kind=commitment.borrowed?'borrow':'spare';
     const impact=commitment.borrowed?'Borrow from later schedule':'Clean spare';
+
+    const planned=plannedReplacementFerryOptions(ac,target,service?.id||'');
+    if(planned.length) return planned[0];
 
     if(ac.location===target.from){
       const proposed=replacementLegsForFlight(target,ac,0);
@@ -2118,56 +2160,8 @@ function processMelConstraints(t=simNow()){
   return changed;
 }
 
-function processEvents(){
-  let changed=false;
-  let needsRecalc=false;
-  const t=simNow();
-  if(retireTrackedIncidents(t)) changed=true;
-  if(repairDuplicateOpenIncidents(t)) changed=true;
-  if(!state.ops?.caseLinksRepaired){
-    if(repairIncidentCaseLinks()) changed=true;
-    state.ops??={automaticDisruptions:true};
-    state.ops.caseLinksRepaired=true;
-    changed=true;
-  }
-  if(!state.ops?.phaseRealismRepaired){
-    if(repairIncidentPhaseRealism(t)) changed=true;
-    state.ops??={automaticDisruptions:true};
-    state.ops.phaseRealismRepaired=true;
-    changed=true;
-  }
-  if(repairIncidentPhaseRealism(t)) changed=true;
-  if(ensureRecurringFlights()){ changed=true; needsRecalc=true; }
-  if(ensurePlannedCrewAugmentation()){ changed=true; needsRecalc=true; }
-  if(processOperationalWorkflows(t)){ changed=true; needsRecalc=true; }
-  if(Management.processMaintenance(state,t,postTransaction)){ changed=true; needsRecalc=true; }
-  if(Management.processWeeklyReviews(state,t)) changed=true;
-  if(repairFirstFlightFuelAttribution()) changed=true;
-  if(processPersonnelTransfers(t)){ changed=true; needsRecalc=true; }
-  if(processResourceRequests(t)){ changed=true; needsRecalc=true; }
-  if(processEnrouteRecoveryRequests(t)){ changed=true; needsRecalc=true; }
-  if(processPassengerRecoveries(t)) changed=true;
-  if(processCrewRecoveries(t)) changed=true;
-  if(processMelConstraints(t)){ changed=true; needsRecalc=true; }
-
-  for(const f of state.flights){
-    if(maybeApplyWeatherDelay(f,t)){ changed=true; needsRecalc=true; }
-    if(maybeApplyLiveWeatherImpact(f,t)){ changed=true; needsRecalc=true; }
-    if(maybeGenerateEnrouteIssue(f,t)){ changed=true; needsRecalc=true; }
-    if(maybeGeneratePreDepartureIssue(f,t)){ changed=true; needsRecalc=true; }
-    if(maybeGenerateOperationalIncident(f,t)){ changed=true; needsRecalc=true; }
-    if(maybeApplyNetworkConstraints(f,t)){ changed=true; needsRecalc=true; }
-  }
-  if(processIncidentDeadlines(t)){ changed=true; needsRecalc=true; }
-  if(updateIncidentConstraints(t)){ changed=true; needsRecalc=true; }
-  if(needsRecalc){ recalculateOperations(); needsRecalc=false; }
-  if(updateStaffingConstraints(t)){ changed=true; needsRecalc=true; }
-  if(updateMaintenanceConstraints(t)){ changed=true; needsRecalc=true; }
-  if(updatePositioningConstraints(t)){ changed=true; needsRecalc=true; }
-  if(needsRecalc){ recalculateOperations(); needsRecalc=false; }
-  if(updatePassengerConnections()) changed=true;
-  if(processDerivedOperationalIncidents(t)){ changed=true; needsRecalc=true; }
-
+function processFlightLifecycleTransitions(t=simNow()){
+  let changed=false,needsRecalc=false;
   for(const f of state.flights){
     if(f.cancelled) continue;
     if(repairFlightLifecycleFlags(f,t)) changed=true;
@@ -2215,12 +2209,111 @@ function processEvents(){
     const expiredMel=(ac.melItems||[]).some(item=>item.status==='expired');
     if(ac.defectUntil && t>=ac.defectUntil&&!expiredMel){ ac.defectUntil=0; ac.defectReason=''; changed=true; needsRecalc=true; }
   }
-  if(changed){
-    if(needsRecalc) recalculateOperations();
+  return {changed,needsRecalc};
+}
+
+function eventProcessingContext(t){
+  return {
+    t,
+    changed:false,
+    needsRecalc:false,
+    changedSources:[],
+    markChanged(source,recalc=false){
+      this.changed=true;
+      this.changedSources.push(source);
+      if(recalc) this.needsRecalc=true;
+    },
+    flushRecalc(){
+      if(this.needsRecalc){
+        recalculateOperations();
+        this.needsRecalc=false;
+      }
+    }
+  };
+}
+
+function processStateRepairEvents(ctx){
+  const t=ctx.t;
+  if(retireTrackedIncidents(t)) ctx.markChanged('retireTrackedIncidents');
+  if(repairDuplicateOpenIncidents(t)) ctx.markChanged('repairDuplicateOpenIncidents');
+  if(typeof reopenSilentDefaultFlightdeckFollowups==='function'&&reopenSilentDefaultFlightdeckFollowups(t)) ctx.markChanged('reopenSilentDefaultFlightdeckFollowups');
+  if(!state.ops?.caseLinksRepaired){
+    if(repairIncidentCaseLinks()) ctx.markChanged('repairIncidentCaseLinks');
+    state.ops??={automaticDisruptions:true};
+    state.ops.caseLinksRepaired=true;
+    ctx.markChanged('caseLinksRepairedFlag');
+  }
+  if(!state.ops?.phaseRealismRepaired){
+    if(repairIncidentPhaseRealism(t)) ctx.markChanged('repairIncidentPhaseRealismInitial');
+    state.ops??={automaticDisruptions:true};
+    state.ops.phaseRealismRepaired=true;
+    ctx.markChanged('phaseRealismRepairedFlag');
+  }
+  if(repairIncidentPhaseRealism(t)) ctx.markChanged('repairIncidentPhaseRealism');
+}
+
+function processOperationalTimerEvents(ctx){
+  const t=ctx.t;
+  if(ensureRecurringFlights()) ctx.markChanged('ensureRecurringFlights',true);
+  if(ensurePlannedCrewAugmentation()) ctx.markChanged('ensurePlannedCrewAugmentation',true);
+  if(processOperationalWorkflows(t)) ctx.markChanged('processOperationalWorkflows',true);
+  if(Management.processMaintenance(state,t,postTransaction)) ctx.markChanged('processMaintenance',true);
+  if(Management.processWeeklyReviews(state,t)) ctx.markChanged('processWeeklyReviews');
+  if(repairFirstFlightFuelAttribution()) ctx.markChanged('repairFirstFlightFuelAttribution');
+  if(processPersonnelTransfers(t)) ctx.markChanged('processPersonnelTransfers',true);
+  if(processResourceRequests(t)) ctx.markChanged('processResourceRequests',true);
+  if(processEnrouteRecoveryRequests(t)) ctx.markChanged('processEnrouteRecoveryRequests',true);
+  if(processPassengerRecoveries(t)) ctx.markChanged('processPassengerRecoveries');
+  if(processCrewRecoveries(t)) ctx.markChanged('processCrewRecoveries');
+  if(processMelConstraints(t)) ctx.markChanged('processMelConstraints',true);
+}
+
+function processFlightGenerationEvents(ctx){
+  const t=ctx.t;
+  for(const f of state.flights){
+    if(maybeApplyWeatherDelay(f,t)) ctx.markChanged(`maybeApplyWeatherDelay:${f.id}`,true);
+    if(maybeApplyLiveWeatherImpact(f,t)) ctx.markChanged(`maybeApplyLiveWeatherImpact:${f.id}`,true);
+    if(maybeGenerateEnrouteIssue(f,t)) ctx.markChanged(`maybeGenerateEnrouteIssue:${f.id}`,true);
+    if(maybeGeneratePreDepartureIssue(f,t)) ctx.markChanged(`maybeGeneratePreDepartureIssue:${f.id}`,true);
+    if(maybeGenerateOperationalIncident(f,t)) ctx.markChanged(`maybeGenerateOperationalIncident:${f.id}`,true);
+    if(maybeApplyNetworkConstraints(f,t)) ctx.markChanged(`maybeApplyNetworkConstraints:${f.id}`,true);
+  }
+}
+
+function processLifecycleAndConstraintEvents(ctx){
+  const t=ctx.t;
+  if(processIncidentDeadlines(t)) ctx.markChanged('processIncidentDeadlines',true);
+  const lifecycle=processFlightLifecycleTransitions(t);
+  if(lifecycle.changed) ctx.markChanged('processFlightLifecycleTransitions');
+  if(lifecycle.needsRecalc) ctx.needsRecalc=true;
+  if(updateIncidentConstraints(t)) ctx.markChanged('updateIncidentConstraints',true);
+  ctx.flushRecalc();
+  if(updateStaffingConstraints(t)) ctx.markChanged('updateStaffingConstraints',true);
+  if(updateMaintenanceConstraints(t)) ctx.markChanged('updateMaintenanceConstraints',true);
+  if(updatePositioningConstraints(t)) ctx.markChanged('updatePositioningConstraints',true);
+  ctx.flushRecalc();
+  if(updatePassengerConnections()) ctx.markChanged('updatePassengerConnections');
+  if(processDerivedOperationalIncidents(t)) ctx.markChanged('processDerivedOperationalIncidents',true);
+}
+
+function processEvents(){
+  const ctx=eventProcessingContext(simNow());
+  processStateRepairEvents(ctx);
+  processOperationalTimerEvents(ctx);
+  processFlightGenerationEvents(ctx);
+  processLifecycleAndConstraintEvents(ctx);
+  if(ctx.changed){
+    if(ctx.needsRecalc) recalculateOperations();
     else invalidateOperationalIndex();
     save();
+    if(typeof window!=='undefined'){
+      window.__aocLastEventChanges={at:ctx.t,realAt:Date.now(),sources:ctx.changedSources.slice(0,80)};
+      const counts=window.__aocEventChangeCounts??={};
+      for(const source of ctx.changedSources) counts[source]=(counts[source]||0)+1;
+      window.__aocEventChangeCounts=counts;
+    }
   }
-  return changed;
+  return ctx.changed;
 }
 
 function updateMaintenanceConstraints(t=simNow()){

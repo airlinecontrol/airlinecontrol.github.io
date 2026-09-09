@@ -20,6 +20,7 @@ function retireTrackedIncidents(t=simNow()){
     for(const task of incidentTasks(incident.id)){
       if(!['completed','cancelled'].includes(task.status)) task.status='cancelled';
     }
+    if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'auto_closed',{reason:'retired_incident'});
     changed=true;
   }
   return changed;
@@ -59,6 +60,7 @@ function repairDuplicateOpenIncidents(t=simNow()){
       for(const task of incidentTasks(duplicate.id)){
         if(!['completed','cancelled'].includes(task.status)) task.status='cancelled';
       }
+      if(typeof traceIncidentTransition==='function') traceIncidentTransition(duplicate,'auto_closed',{reason:'duplicate_case_merged',mergedInto:keeper.id});
       changed=true;
     }
   }

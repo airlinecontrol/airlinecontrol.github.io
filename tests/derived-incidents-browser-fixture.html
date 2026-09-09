@@ -39,6 +39,25 @@
 
     {
       const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const inbound=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'AMS',departure:now-2*60*60_000,fare:{economy:120,business:300,first:0}});
+      inbound.departureLogged=true;
+      inbound.settled=false;
+      inbound.actualDeparture=now-2*60*60_000;
+      inbound.actualArrival=now-60_000;
+      inbound.weatherChecked=true; inbound.constraintChecked=true; inbound.opsChecked=true; inbound.enrouteChecked=true;
+      const outbound=w.createFlightRecord({aircraftId:aircraft.id,from:'AMS',to:'FRA',departure:now+70*60_000,fare:{economy:120,business:300,first:0}});
+      outbound.weatherChecked=true; outbound.constraintChecked=true; outbound.opsChecked=true; outbound.enrouteChecked=true;
+      aircraft.location='FRA';
+      w.eval(`state.clock={...state.clock,realBase:Date.now(),simBase:${now},speed:0,paused:true};`);
+      w.processEvents();
+      assert(inbound.settled,'arrived inbound was not settled before constraint scanning');
+      assert(aircraft.location==='AMS','arrived inbound did not update aircraft location before outbound positioning check');
+      assert(!outbound.positioningBlocked,'outbound from the arrived airport was falsely marked out of position');
+      assert(!w.openIncidentsForFlight(outbound.id).some(item=>item.type==='aircraft_out_of_position'||item.type==='aircraft_misposition_after_diversion'),'false aircraft-positioning incident opened during arrival settlement tick');
+    }
+
+    {
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
       const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'LGW',departure:now-45*60_000,fare:{economy:120,business:300,first:0}});
       flight.manualDelayMin=120;
       flight.actualDeparture=now+75*60_000;
@@ -136,6 +155,27 @@
       assert(context.readyAt>=context.graceUntil,'slot miss readiness timing is inconsistent');
       const marker=w.flightSlotImpactState(flight);
       assert(marker.impacted,'schedule slot marker did not expose the slot miss context');
+    }
+
+    {
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'LHR');
+      const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'AMS',departure:now+90*60_000,fare:{economy:120,business:300,first:0}});
+      const sourceKey=`fixture-transient-position:${flight.id}`;
+      const incident=w.createIncident('aircraft_out_of_position',flight,{detectedAt:now,source:'derived',sourceKey,context:{
+        sourceId:flight.id,aircraftId:aircraft.id,tail:aircraft.tail,expectedLocation:'LHR',requiredLocation:'FRA',delayMin:30,active:true
+      }});
+      assert(incident,'transient derived incident fixture did not open');
+      incident.firstVisibleAt=now;
+      assert(w.updateOpenDerivedIncident('aircraft_out_of_position',flight,false,null,now+60_000),'transient derived incident should record pending-clear when the condition first clears');
+      assert(incident.status==='open','transient derived incident vanished before the player could see it');
+      assert(incident.conditionClearedAt===now+60_000,'transient derived incident did not enter pending-clear state');
+      assert(!w.updateOpenDerivedIncident('aircraft_out_of_position',flight,false,null,now+29*60_000),'transient derived incident cleared before the stability grace window');
+      assert(incident.status==='open','transient derived incident vanished during the stability grace window');
+      assert(w.updateOpenDerivedIncident('aircraft_out_of_position',flight,false,null,now+32*60_000),'transient derived incident did not clear after the stability grace window');
+      assert(incident.status==='resolved'&&incident.selectedAction==='condition_cleared','transient derived incident did not close as condition-cleared');
+      const transitions=w.recentIncidentTransitions(10);
+      assert(transitions.some(item=>item.incidentId===incident.id&&item.event==='opened'),'incident transition trace did not record open');
+      assert(transitions.some(item=>item.incidentId===incident.id&&item.event==='auto_closed'&&item.details?.reason==='condition_cleared'),'incident transition trace did not record condition-cleared auto close');
     }
 
     {

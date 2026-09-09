@@ -498,7 +498,7 @@ function loop(now){
       changed=processEvents();
       lastEventTick=now;
     }
-    if(changed&&typeof markUiDirty==='function') markUiDirty('all');
+    if(changed&&typeof refreshOperationalSurfacesSoft==='function') refreshOperationalSurfacesSoft();
     if(typeof checkActionableIncidentDing==='function') checkActionableIncidentDing();
     if(changed||now-lastMapTick>350){
       updateMapData();

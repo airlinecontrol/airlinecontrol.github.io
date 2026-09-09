@@ -6,6 +6,7 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 const Management = window.AeroManagement;
+const SUPPORTED_SIMULATION_SPEEDS = [1,10];
 
 const FUEL_MARKET_STEP = 6 * HOUR;
 const FUEL_MARKET_BASE_EUR_GAL = 2.45;
@@ -42,6 +43,21 @@ function stableCatalogUnit(seed){
     hash=Math.imul(hash,16777619);
   }
   return (hash>>>0)/4294967295;
+}
+function simulationRandomUnit(seed){
+  return stableCatalogUnit(`${state?.rng?.seed||'aoc'}:${seed}`);
+}
+function simulationRandom(label='random'){
+  state.rng??={seed:`aoc-${state.clock?.simBase||Date.now()}`,counter:0,log:[]};
+  state.rng.counter=(Number(state.rng.counter)||0)+1;
+  const value=simulationRandomUnit(`${state.rng.counter}:${label}`);
+  state.rng.log??=[];
+  state.rng.log.push({counter:state.rng.counter,label,value,at:simNow(),realAt:Date.now()});
+  if(state.rng.log.length>80) state.rng.log.splice(0,state.rng.log.length-80);
+  return value;
+}
+function recentSimulationRandomRolls(limit=10){
+  return (state.rng?.log||[]).slice(-Math.max(1,limit));
 }
 function airportNightStatus(airportCode,timestamp){
   const rule=AIRPORT_NIGHT_RULES[airportCode]||nightRule('UTC','open');
@@ -374,7 +390,7 @@ function updateFuelMarket(t=simNow()){
   const steps=Math.min(elapsed,1000);
   for(let i=0;i<steps;i++){
     const meanPull=(FUEL_MARKET_BASE_EUR_GAL-market.pricePerGallon)*.045;
-    const shock=(Math.random()-.5)*.12;
+    const shock=(simulationRandomUnit(`fuel-market:${market.updatedAt}:${i}`)-.5)*.12;
     market.pricePerGallon=clamp(market.pricePerGallon+meanPull+shock,1.55,4.25);
   }
   market.pricePerGallon=Math.round(market.pricePerGallon*100)/100;
@@ -513,16 +529,19 @@ function newState(){
     nextRecoveryCostEvent:1,
     nextPassengerRecovery:1,
     nextCrewRecovery:1,
+    rng:{seed:`aoc-${sim}`,counter:0,log:[]},
     incidentExerciseIndex:0,
     slotRights:[],
     aircraft:[],
     flights:[],
     services:[],
     incidents:[],
+    incidentTransitions:[],
     coordinationTasks:[],
     externalRequests:[],
     resourceAssignments:[],
     crewDuties:[],
+    warningRegistry:{},
     transactions:[],
     personnelTransfers:[],
     resourceRequests:[],
@@ -545,14 +564,16 @@ function migrateState(parsed){
   if(!Array.isArray(parsed.aircraft)) parsed.aircraft=[];
   if(!Array.isArray(parsed.slotRights)) parsed.slotRights=[];
   if(!Array.isArray(parsed.incidents)) parsed.incidents=[];
+  if(!Array.isArray(parsed.incidentTransitions)) parsed.incidentTransitions=[];
   if(!Array.isArray(parsed.coordinationTasks)) parsed.coordinationTasks=[];
   if(!parsed.clock || typeof parsed.clock!=='object') parsed.clock={realBase:Date.now(),simBase:Date.now(),speed:1};
   if(!Number.isFinite(parsed.clock.realBase)) parsed.clock.realBase=Date.now();
   if(!Number.isFinite(parsed.clock.simBase)) parsed.clock.simBase=Date.now();
   if(!Number.isFinite(parsed.clock.speed)) parsed.clock.speed=1;
-  if(parsed.clock.paused===undefined) parsed.clock.paused=parsed.clock.speed===0;
-  if(!Number.isFinite(parsed.clock.previousSpeed) || parsed.clock.previousSpeed<=0) parsed.clock.previousSpeed=parsed.clock.speed>0?parsed.clock.speed:1;
-  if(parsed.clock.paused) parsed.clock.speed=0;
+  const wasPaused=parsed.clock.paused===true||parsed.clock.speed===0;
+  parsed.clock.previousSpeed=normalizedClockSpeed(parsed.clock.previousSpeed,parsed.clock.speed>0?parsed.clock.speed:1);
+  parsed.clock.speed=wasPaused?0:normalizedClockSpeed(parsed.clock.speed,parsed.clock.previousSpeed);
+  parsed.clock.paused=wasPaused;
   const removedIncidentIds=new Set(parsed.incidents.filter(incident=>incident.type==='connection_risk').map(incident=>incident.id));
   if(removedIncidentIds.size){
     parsed.incidents=parsed.incidents.filter(incident=>!removedIncidentIds.has(incident.id));
@@ -564,6 +585,7 @@ function migrateState(parsed){
   if(!Array.isArray(parsed.externalRequests)) parsed.externalRequests=[];
   if(!Array.isArray(parsed.resourceAssignments)) parsed.resourceAssignments=[];
   if(!Array.isArray(parsed.crewDuties)) parsed.crewDuties=[];
+  if(!parsed.warningRegistry || typeof parsed.warningRegistry!=='object') parsed.warningRegistry=parsed.operationalWarningRegistry&&typeof parsed.operationalWarningRegistry==='object'?parsed.operationalWarningRegistry:{};
   if(!Number.isFinite(parsed.nextExternalRequest)) parsed.nextExternalRequest=parsed.externalRequests.length+1;
   if(!Number.isFinite(parsed.nextResourceAssignment)) parsed.nextResourceAssignment=parsed.resourceAssignments.length+1;
   if(!Array.isArray(parsed.resourceRequests)) parsed.resourceRequests=[];
@@ -574,6 +596,11 @@ function migrateState(parsed){
   if(!Number.isFinite(parsed.nextRecoveryCostEvent)) parsed.nextRecoveryCostEvent=parsed.recoveryCostEvents.length+1;
   if(!Number.isFinite(parsed.nextPassengerRecovery)) parsed.nextPassengerRecovery=parsed.passengerRecoveries.length+1;
   if(!Number.isFinite(parsed.nextCrewRecovery)) parsed.nextCrewRecovery=parsed.crewRecoveries.length+1;
+  if(!parsed.rng || typeof parsed.rng!=='object') parsed.rng={seed:`aoc-${parsed.clock?.simBase||Date.now()}`,counter:0,log:[]};
+  if(!parsed.rng.seed) parsed.rng.seed=`aoc-${parsed.clock?.simBase||Date.now()}`;
+  if(!Number.isFinite(parsed.rng.counter)) parsed.rng.counter=0;
+  if(!Array.isArray(parsed.rng.log)) parsed.rng.log=[];
+  if(parsed.rng.log.length>80) parsed.rng.log=parsed.rng.log.slice(-80);
   if(!Number.isFinite(parsed.nextIncident)) parsed.nextIncident=parsed.incidents.length+1;
   if(!Number.isFinite(parsed.incidentExerciseIndex)) parsed.incidentExerciseIndex=0;
   for(const incident of parsed.incidents){
@@ -827,8 +854,24 @@ const WORKSPACE_WIDGETS={
 function loadWorkspaceUi(){
   try{
     const parsed=JSON.parse(localStorage.getItem(WORKSPACE_UI_KEY)||'{}');
-    return {activeView:'occ',collapsed:parsed.collapsed||{occ:{}},scheduleRanges:{occ:Number(parsed.scheduleRanges?.occ)||24},nextDeskPanels:parsed.nextDeskPanels||{}};
-  }catch(_){ return {activeView:'occ',collapsed:{occ:{}},scheduleRanges:{occ:24},nextDeskPanels:{}}; }
+    return {
+      activeView:'occ',
+      collapsed:parsed.collapsed||{occ:{}},
+      scheduleRanges:{occ:Number(parsed.scheduleRanges?.occ)||24},
+      nextDeskPanels:parsed.nextDeskPanels||{},
+      dismissedWarnings:parsed.dismissedWarnings||{},
+      incidentFilter:parsed.incidentFilter||'actionable'
+    };
+  }catch(_){
+    return {
+      activeView:'occ',
+      collapsed:{occ:{}},
+      scheduleRanges:{occ:24},
+      nextDeskPanels:{},
+      dismissedWarnings:{},
+      incidentFilter:'actionable'
+    };
+  }
 }
 let workspaceUi=loadWorkspaceUi();
 let activeWorkspaceView=workspaceUi.activeView;
@@ -837,6 +880,7 @@ let restoreCenterSplitForView=()=>{};
 let scheduleWindowOffsetHours=-2;
 let scheduleRangeHours=24;
 let lastScheduleSignature='';
+let lastScheduleConnectionOverlaySignature='';
 let lastScheduleRenderAt=0;
 let aircraftSelectSignature='';
 let occSignature='';
@@ -852,7 +896,9 @@ function simNow(){
 }
 function normalizedClockSpeed(value,fallback=1){
   const speed=Number(value);
-  return Number.isFinite(speed)&&speed>0?speed:fallback;
+  if(SUPPORTED_SIMULATION_SPEEDS.includes(speed)) return speed;
+  const fallbackSpeed=Number(fallback);
+  return SUPPORTED_SIMULATION_SPEEDS.includes(fallbackSpeed)?fallbackSpeed:1;
 }
 function rebaseClock(newSpeed){
   const now=simNow();
@@ -877,6 +923,24 @@ function toggleSimulationPause(){
 }
 function simulationIsPaused(){
   return Boolean(state.clock?.paused||state.clock?.speed===0);
+}
+function traceIncidentTransition(incident,event,details={}){
+  if(!incident) return null;
+  state.incidentTransitions??=[];
+  const now=simNow();
+  const entry={
+    at:now,realAt:Date.now(),event,
+    incidentId:incident.id,type:incident.type,flightId:incident.flightId||'',
+    source:incident.source||'',sourceKey:incident.sourceKey||'',
+    status:incident.status||'',selectedAction:incident.selectedAction||'',
+    details
+  };
+  state.incidentTransitions.push(entry);
+  if(state.incidentTransitions.length>80) state.incidentTransitions.splice(0,state.incidentTransitions.length-80);
+  return entry;
+}
+function recentIncidentTransitions(limit=10){
+  return (state.incidentTransitions||[]).slice(-Math.max(1,limit));
 }
 function save(){ localStorage.setItem(SAVE_KEY,JSON.stringify(state)); }
 

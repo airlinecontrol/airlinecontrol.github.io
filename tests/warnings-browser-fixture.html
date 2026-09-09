@@ -98,7 +98,26 @@
     }`);
 
     const warnings=w.operationWarnings();
+    {
+      const transient={
+        id:'fixture-transient-warning',
+        type:'fixture',
+        group:'Fixture warnings',
+        level:'warning',
+        owner:'Dispatch',
+        flightId:first.id,
+        aircraftId:first.aircraftId,
+        title:'Fixture transient warning',
+        detail:'Synthetic warning used to guard against warning flicker',
+        sortAt:now
+      };
+      assert(w.stabilizeOperationWarnings([transient],now).some(item=>item.id===transient.id&&!item.clearing),'transient warning did not enter warning memory');
+      assert(w.stabilizeOperationWarnings([],now+10*60_000).some(item=>item.id===transient.id&&item.clearing),'transient warning was removed before the warning stability window');
+      assert(!w.stabilizeOperationWarnings([],now+40*60_000).some(item=>item.id===transient.id),'transient warning did not leave memory after the warning stability window');
+    }
     assert(warnings.some(item=>item.type==='short_turn'),'short-turn warning was not derived');
+    assert(!warnings.some(item=>item.type==='short_turn'&&item.flightId===second.id),'legal planned turn with actual delay should not be classified as a short-turn warning');
+    assert(!warnings.some(item=>item.type==='short_turn'&&item.flightId===coveredOutbound.id),'outbound delay preserving turn time should not be classified as a short-turn warning');
     assert(warnings.some(item=>item.type==='late_inbound'),'late-inbound warning was not derived');
     assert(!warnings.some(item=>item.type==='late_inbound'&&item.flightId===coveredOutbound.id),'late-inbound warning should not fire when outbound delay preserves minimum turnaround');
     assert(warnings.some(item=>item.type==='night_conflict'),'night-curfew warning was not derived');

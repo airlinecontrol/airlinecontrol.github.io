@@ -1,23 +1,40 @@
 /* Derived incidents: operational risks inferred from the live schedule and resources. */
 
+const DERIVED_INCIDENT_CLEAR_GRACE_MS=30*MIN;
+
 function updateOpenDerivedIncident(type,flight,active,context,t){
   const key=context?.sourceKey||`derived:${type}:${context?.sourceId||flight.id}`;
-  const incident=state.incidents.find(item=>item.status==='open'&&item.type===type&&item.flightId===flight.id&&item.sourceKey===key);
+  const incident=state.incidents.find(item=>item.status==='open'&&item.type===type&&item.flightId===flight.id&&item.sourceKey===key)
+    ||(!context?.sourceKey?state.incidents.find(item=>item.status==='open'&&item.type===type&&item.flightId===flight.id):null);
   if(active){
     if(!incident&&state.incidents.some(item=>item.type===type&&item.flightId===flight.id&&item.sourceKey===key&&item.status==='resolved')) return false;
     if(incident){
       const previous=JSON.stringify(incident.context||null);
       const next=JSON.stringify(context||null);
-      if(previous!==next){ incident.context=context; incident.lastDetectedAt=t; return true; }
-      return false;
+      let changed=false;
+      if(previous!==next){ incident.context=context; changed=true; }
+      if(incident.conditionClearedAt){ incident.conditionClearedAt=0; changed=true; }
+      incident.lastDetectedAt=t;
+      return changed;
     }
     return Boolean(createIncident(type,flight,{detectedAt:t,source:'derived',sourceKey:key,context}));
   }
   if(incident&&!incidentTasks(incident.id).some(task=>task.status==='completed')){
+    if(typeof incidentHasUserActionStarted==='function'&&incidentHasUserActionStarted(incident)) return false;
+    const visibleSince=incident.firstVisibleAt||incident.detectedAt||t;
+    if(!incident.conditionClearedAt){
+      incident.conditionClearedAt=t;
+      if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'condition_clear_pending',{clearAfter:DERIVED_INCIDENT_CLEAR_GRACE_MS});
+      return true;
+    }
+    if(t-Math.max(visibleSince,incident.conditionClearedAt)<DERIVED_INCIDENT_CLEAR_GRACE_MS) return false;
     incident.status='resolved'; incident.blocking=false; incident.resolvedAt=t;
+    incident.autoClosedAt=t;
+    incident.autoCloseReason='condition_cleared';
     incident.automaticResolution=true; incident.selectedAction='condition_cleared';
     incident.outcome='The underlying operational risk cleared before OCC action was needed.';
     for(const task of incidentTasks(incident.id)) if(task.status!=='completed') task.status='cancelled';
+    if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'auto_closed',{reason:'condition_cleared',visibleMs:t-visibleSince});
     return true;
   }
   return false;

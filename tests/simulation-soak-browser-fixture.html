@@ -1,0 +1,177 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AOC simulation soak browser fixture</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result');
+  const frame=document.getElementById('game');
+  const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+  const MIN=60_000,HOUR=60*MIN;
+  const setNow=(w,at)=>w.eval(`state.clock={...state.clock,simBase:${Math.round(at)},realBase:Date.now(),speed:0,paused:true,previousSpeed:10};`);
+  try{
+    localStorage.removeItem('aerosim_mvp_v6');
+    localStorage.removeItem('aerosim_occ_ui_v1');
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=simulation-soak&cache='+Date.now();
+    await loaded;
+    if(typeof frame.contentWindow.resetLocalSave==='function') frame.contentWindow.resetLocalSave();
+    const cleanLoaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=simulation-soak&cache='+Date.now();
+    await cleanLoaded;
+    const w=frame.contentWindow,d=frame.contentDocument;
+    const base=w.simNow();
+    w.eval(`
+      state.ops.automaticDisruptions=true;
+      state.aircraft=[];
+      state.flights=[];
+      state.services=[];
+      state.incidents=[];
+      state.incidentTransitions=[];
+      state.coordinationTasks=[];
+      state.externalRequests=[];
+      state.resourceAssignments=[];
+      state.personnelTransfers=[];
+      state.resourceRequests=[];
+      state.passengerRecoveries=[];
+      state.crewRecoveries=[];
+      state.crewDuties=[];
+      state.warningRegistry={};
+      state.rng={seed:'simulation-soak-fixture',counter:0,log:[]};
+      workspaceUi.dismissedWarnings={};
+      save();
+      saveWorkspaceUi();
+    `);
+    setNow(w,base);
+
+    const staffed=['ATL','JFK','FRA','LHR','MCO','DFW','ORD','MIA','TPA','CDG','AMS','MAD'];
+    for(const airport of staffed){
+      w.changeStaff(airport,'captains',8);
+      w.changeStaff(airport,'firstOfficers',8);
+      w.changeStaff(airport,'cabin',24);
+      w.changeStaff(airport,'handling',10);
+      for(const family of ['Airbus A320 family','Boeing 737 family','Airbus A330 family','Embraer E-Jet']){
+        w.changeQualification(airport,'captains',family,6);
+        w.changeQualification(airport,'firstOfficers',family,6);
+      }
+    }
+
+    const patterns=[
+      {model:'A320neo',base:'ATL',legs:['MCO','ATL','JFK','ATL','DFW','ATL']},
+      {model:'A320neo',base:'MCO',legs:['ATL','MIA','ATL','ORD','ATL','TPA']},
+      {model:'A330-900',base:'ATL',legs:['JFK','FRA','JFK','ATL']},
+      {model:'A330-900',base:'FRA',legs:['LHR','JFK','FRA','CDG','FRA']},
+      {model:'E190',base:'FRA',legs:['AMS','FRA','CDG','FRA','MAD','FRA']},
+      {model:'E190',base:'JFK',legs:['BOS','JFK','DCA','JFK','PHL','JFK']}
+    ];
+    for(let i=0;i<patterns.length;i++){
+      const pattern=patterns[i];
+      const ac=w.assignRequestedAircraft(pattern.model,w.defaultCabin(pattern.model),pattern.base);
+      let origin=pattern.base;
+      let departure=base+(30+i*20)*MIN;
+      for(let j=0;j<pattern.legs.length;j++){
+        const destination=pattern.legs[j];
+        const flight=w.createFlightRecord({
+          aircraftId:ac.id,
+          from:origin,
+          to:destination,
+          departure,
+          fare:{economy:135+j*8,business:350,first:760}
+        });
+        flight.weatherChecked=true;
+        flight.constraintChecked=true;
+        flight.opsChecked=true;
+        if((i+j)%4===0) flight.manualDelayMin=15+((i+j)%3)*10;
+        w.recalculateOperations();
+        departure=w.flightActualArrival(flight)+(45+((i+j)%4)*15)*MIN;
+        origin=destination;
+      }
+    }
+    w.recalculateOperations();
+    w.refreshAll();
+    await wait(150);
+
+    const warningStates=new Map();
+    const warningFlickers=[];
+    const duplicateIncidents=[];
+    const instantAutoCloses=[];
+    const staleCancelledIncidents=[];
+
+    function recordWarnings(now){
+      const visible=w.operationWarnings(now);
+      const keys=new Set(visible.map(item=>item.id));
+      for(const [key,record] of warningStates.entries()){
+        if(record.visible&&!keys.has(key)){
+          record.visible=false;
+          record.lastHiddenAt=now;
+        }
+      }
+      for(const warning of visible){
+        const record=warningStates.get(warning.id);
+        if(record&&!record.visible&&now-record.lastHiddenAt<45*MIN){
+          warningFlickers.push(`${warning.id} reappeared after ${Math.round((now-record.lastHiddenAt)/MIN)} min`);
+        }
+        warningStates.set(warning.id,{
+          visible:true,
+          firstSeenAt:record?.firstSeenAt||now,
+          lastSeenAt:now,
+          lastHiddenAt:record?.lastHiddenAt||0
+        });
+      }
+    }
+
+    function auditOpenState(now){
+      const seen=new Map();
+      const open=w.openOperationalIncidents();
+      for(const incident of open){
+        const key=[incident.flightId||'',incident.type,incident.sourceKey||incident.context?.sourceKey||'manual'].join('|');
+        seen.set(key,(seen.get(key)||0)+1);
+      }
+      for(const [key,count] of seen.entries()){
+        if(count>1) duplicateIncidents.push(`${key} x${count} at ${w.shortClock(now)}`);
+      }
+      const cancelledIds=new Set(w.eval('state.flights.filter(f=>f.cancelled).map(f=>f.id)'));
+      for(const incident of open){
+        if(cancelledIds.has(incident.flightId)) staleCancelledIncidents.push(`${incident.id} ${incident.type} on ${incident.flightId}`);
+      }
+      for(const transition of w.recentIncidentTransitions(80)){
+        if(transition.event!=='auto_closed'||transition.details?.reason!=='condition_cleared') continue;
+        const visible=Number(transition.details?.visibleMs||0);
+        if(visible>0&&visible<30*MIN) instantAutoCloses.push(`${transition.type} ${transition.flightId} closed after ${Math.round(visible/MIN)} min`);
+      }
+    }
+
+    for(let step=0;step<=96;step++){
+      const now=base+step*15*MIN;
+      setNow(w,now);
+      w.processEvents();
+      if(step%4===0) w.recalculateOperations();
+      recordWarnings(now);
+      auditOpenState(now);
+      if(step%12===0){
+        w.refreshScheduleTimeline(true);
+        w.renderDeskStack(true);
+        await wait(20);
+        assert(d.querySelector('#schedule-board'),'schedule board disappeared during soak');
+        assert(d.querySelector('[data-desk-widget="incidents"]'),'incident widget disappeared during soak');
+      }
+    }
+
+    assert(!duplicateIncidents.length,'duplicate open incidents detected:\n'+duplicateIncidents.slice(0,8).join('\n'));
+    assert(!instantAutoCloses.length,'derived incidents auto-closed inside the grace window:\n'+instantAutoCloses.slice(0,8).join('\n'));
+    assert(!staleCancelledIncidents.length,'open incidents remained on cancelled flights:\n'+staleCancelledIncidents.slice(0,8).join('\n'));
+    assert(!warningFlickers.length,'warnings flickered during soak:\n'+warningFlickers.slice(0,8).join('\n'));
+    assert(w.recentSimulationRandomRolls(1).length===1,'simulation RNG log was not populated');
+
+    result.textContent=`PASS simulation soak validated
+flights=${w.eval('state.flights.length')}
+openIncidents=${w.openOperationalIncidents().length}
+warningsTracked=${warningStates.size}
+rngRolls=${w.eval('state.rng.counter')}`;
+  }catch(error){
+    result.textContent='FAIL '+(error.stack||error);
+  }
+})();
+</script>

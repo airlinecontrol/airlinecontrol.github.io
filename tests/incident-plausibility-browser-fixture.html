@@ -181,6 +181,50 @@
       assert(flight.enrouteDelayMin>=10,'airborne flight-deck default did not record an operational consequence');
     }
 
+    {
+      const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const flight=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'JFK',departure:now-90*60_000,fare:{economy:220,business:520,first:1100}});
+      flight.departureLogged=true;
+      flight.actualDeparture=flight.departure;
+      flight.actualArrival=now+5*60*60_000;
+      flight.fueled=true;
+      const incident=w.createIncident('onboard_medical',flight,{training:true,detectedAt:now-30*60_000,source:'fixture',sourceKey:`default-divert-followup:${flight.id}`,context:{sourceId:flight.id,authorityDecision:'divert'}});
+      incident.deadline=now-60_000;
+      assert(w.processIncidentDeadlines(now),'flight-deck diversion default did not report a change');
+      assert(incident.status==='open'&&incident.defaultApplied,'flight-deck diversion default should keep the case open');
+      assert(incident.selectedStrategy==='divert','flight-deck diversion default did not record the requested strategy');
+      assert(!flight.diversionAirport,'flight-deck diversion default silently selected a diversion airport');
+      const alternateTask=w.incidentTasks(incident.id).find(item=>item.kind==='alternate_selection');
+      assert(alternateTask?.status==='available','flight-deck diversion default did not leave OCC alternate selection available');
+    }
+
+    {
+      const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const flight=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'LHR',departure:now-2*60*60_000,fare:{economy:120,business:300,first:600}});
+      flight.departureLogged=true;
+      flight.actualDeparture=flight.departure;
+      flight.actualArrival=now+90*60_000;
+      flight.fueled=true;
+      flight.diversionAirport='AMS';
+      const incident=w.createIncident('onboard_medical',flight,{training:true,detectedAt:now-45*60_000,source:'fixture',sourceKey:`old-silent-diversion:${flight.id}`,context:{sourceId:flight.id}});
+      assert(incident,'old silent diversion fixture incident did not open');
+      incident.status='resolved';
+      incident.blocking=false;
+      incident.resolvedAt=now-5*60_000;
+      incident.defaultApplied=true;
+      incident.defaultPolicy='flightdeck_default';
+      incident.selectedAction='default_policy';
+      incident.selectedStrategy='divert';
+      incident.selectedAlternate='AMS';
+      incident.automaticResolution=true;
+      for(const task of w.incidentTasks(incident.id)) task.status='cancelled';
+      assert(w.reopenSilentDefaultFlightdeckFollowups(now),'old silent flight-deck diversion was not repaired');
+      assert(incident.status==='open'&&!incident.automaticResolution,'old silent flight-deck diversion was not reopened for OCC work');
+      assert(flight.diversionAirport==='AMS','repair should not silently undo an already-active diversion');
+      const alternateTask=w.incidentTasks(incident.id).find(item=>item.kind==='alternate_selection');
+      assert(alternateTask?.status==='available','reopened silent diversion did not restore the OCC follow-up task');
+    }
+
     result.textContent=`PASS incident plausibility matrix validated\nincidents=${activeTypes.length}\nretired=${retired.join(',')}`;
   }catch(error){
     console.error(error);

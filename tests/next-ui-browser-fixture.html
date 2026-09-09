@@ -65,6 +65,8 @@
     w.save();
     w.refreshAll(); await wait(100);
     assert(w.__incidentDingStarts===1,'new actionable incident did not play one alert ding');
+    const openIncidentTitle=`(${w.openOperationalIncidents().length}) Airline Operations Control Center`;
+    assert(d.title===openIncidentTitle,`browser title does not show open incident count badge: ${d.title}`);
     assert(incident?.training,'training scenario was not created');
     assert(d.querySelector('#operationFilterBar'),'global operation filter bar is missing');
     w.applyOperationFilter({airport:'FRA'}); await wait(100);
@@ -283,6 +285,7 @@
     assert(!d.querySelector('[data-desk-widget="incidents"]')?.textContent.includes('Aircraft late inbound'),'late inbound leaked into incident triage');
     assert(d.querySelector('[data-desk-widget="planning"]'),'dispatch widget is missing from the right rail');
     assert(d.querySelector('[data-desk-widget="passengers"]'),'passenger impact widget is missing from the right rail');
+    assert(d.querySelector('[data-desk-widget="crew-impact"]'),'crew impact widget is missing from the right rail');
     assert(d.querySelector('[data-rail-widget="personnel"]'),'personnel widget is missing from the left rail');
     assert(!d.querySelector('[data-desk-widget="personnel"]'),'personnel widget should not remain in the right rail');
     assert(!d.querySelector('[data-desk-widget="selectedWork"]'),'selected-flight work widget should not be rendered');
@@ -358,6 +361,7 @@
     const pauseBtn=d.querySelector('#pauseTopbarBtn');
     const speedSelect=d.querySelector('#speed');
     assert(pauseBtn?.getAttribute('aria-label')==='Pause simulation','topbar pause icon is missing');
+    assert([...speedSelect.options].map(option=>option.value).join(',')==='1,10','simulation speed dropdown should only expose 1x and 10x');
     speedSelect.value='10';
     speedSelect.dispatchEvent(new Event('change',{bubbles:true}));
     await wait(40);
@@ -386,7 +390,7 @@
     assert(d.querySelector('#deskStack')?.closest('.context-rail'),'attention queue is not in the right operations rail');
     w.eval(`setActiveIncidentCase('${incident.id}')`);
     w.refreshAll(); await wait(100);
-    assert(d.querySelectorAll('#deskStack .occ-board-widget').length===4,'the right rail should keep incidents, warnings, dispatch, and passenger widgets visible');
+    assert(d.querySelectorAll('#deskStack .occ-board-widget').length===5,'the right rail should keep incidents, warnings, dispatch, passenger, and crew widgets visible');
     assert(!d.querySelector('#deskStack > .occ-board-header'),'right rail still has a wrapper-style OCC header box');
     assert(d.querySelector('[data-desk-widget="incidents"] [data-incident-case]'),'open incident case is not visible');
     assert(d.querySelector('[data-desk-widget="incidents"] .case-console.expanded'),'open incident is not expanded as a case console');
@@ -435,7 +439,7 @@
     assert(d.querySelector('#weatherStrip .weather-chip'),'airport weather strip is missing');
     assert(d.querySelector('#weatherStrip .weather-chip')?.getAttribute('title')?.includes('ceiling'),'airport weather strip does not expose rich weather details');
     assert(d.querySelector('#map.maplibregl-map canvas'),'MapLibre map canvas is missing');
-    assert(d.querySelectorAll('#deskStack .occ-widget-header .info-tip').length===4,'right rail widget helper labels are not behind info tooltips');
+    assert(d.querySelectorAll('#deskStack .occ-widget-header .info-tip').length===5,'right rail widget helper labels are not behind info tooltips');
     assert(!d.querySelector('#deskStack .occ-widget-header>div>span:not(.info-tip)'),'department widget eyebrow labels are still visible');
     const widgetStyle=getComputedStyle(d.querySelector('#deskStack .occ-board-widget'));
     assert(widgetStyle.backgroundColor!=='rgba(0, 0, 0, 0)','department widgets do not have a boxed background');
@@ -564,6 +568,7 @@
     assert(!d.querySelector('[data-rail-widget="personnel"] .staff-detail'),'staff airport row did not collapse');
     assert(!d.querySelector('[data-desk-panel^="airports:"]'),'airports widget actions should not exist');
     assert(d.querySelector('[data-desk-widget="passengers"].compact-empty'),'passenger widget should show an empty selected-flight state');
+    assert(d.querySelector('[data-desk-widget="crew-impact"].compact-empty'),'crew impact widget should show an empty selected-flight state');
     const autoAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
     w.changeStaff('FRA','operations',2);
     const autoFlight=w.createFlightRecord({aircraftId:autoAc.id,from:'FRA',to:'AMS',departure:w.simNow()+2*60*60_000,fare:{economy:140,business:360,first:700}});
@@ -584,7 +589,7 @@
     assert(d.querySelector('#aircraftList [data-left-aircraft-details]'),'aircraft selection did not open inline aircraft details');
     assert(d.querySelector('#aircraftList [data-left-aircraft-details]')?.closest('[data-left-card-aircraft]'),'aircraft details are not contained by the selected aircraft card');
     assert(d.querySelector('#aircraftList [data-left-aircraft-details]')?.textContent.includes(ac.tail)||d.querySelector('#aircraftList .list-row.selected')?.textContent.includes(ac.tail),'map-style aircraft selection did not update left-side information');
-    assert(d.querySelectorAll('#deskStack .occ-board-widget').length===4,'aircraft selection rebuilt or hid the individual right-rail widgets');
+    assert(d.querySelectorAll('#deskStack .occ-board-widget').length===5,'aircraft selection rebuilt or hid the individual right-rail widgets');
     assert(d.querySelector('#managementView').hidden,'legacy management workspace became visible');
     assert(d.querySelector('#map.maplibregl-map'),'shared map did not initialize');
     assert(d.querySelector('#schedule-board .sched-aircraft-row'),'shared schedule did not initialize');

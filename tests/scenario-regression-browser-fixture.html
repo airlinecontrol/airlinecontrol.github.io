@@ -122,7 +122,8 @@
     w.refreshAll();
     await wait(150);
     assert(d.querySelector(`[data-passenger-recovery="${diverted.id}"][data-passenger-recovery-action="release"]`),'passenger release action is missing for diverted flight');
-    assert(d.querySelector(`[data-crew-recovery="${diverted.id}"][data-crew-recovery-action="transport"]`),'crew transport action is missing for diverted flight');
+    assert(d.querySelector(`[data-desk-widget="crew-impact"] [data-crew-recovery="${diverted.id}"][data-crew-recovery-action="transport"]`),'crew transport action is missing from Crew impact for diverted flight');
+    assert(!d.querySelector(`[data-rail-widget="personnel"] .crew-accommodation-row`),'crew rest and positioning should not remain in the Personnel widget');
     d.querySelector(`[data-passenger-recovery="${diverted.id}"][data-passenger-recovery-action="release"]`).click();
     d.querySelector(`[data-crew-recovery="${diverted.id}"][data-crew-recovery-action="transport"]`).click();
     await wait(120);

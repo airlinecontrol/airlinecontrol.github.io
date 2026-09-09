@@ -31,6 +31,13 @@ function taskRelevantToIncidentStrategy(task,incident){
   return true;
 }
 
+function taskBelongsToIncidentStrategy(task,incident){
+  if(!incident) return true;
+  if(task.branch) return incident.selectedStrategy?task.branch===incident.selectedStrategy:false;
+  if(Array.isArray(task.strategies)) return incident.selectedStrategy?task.strategies.includes(incident.selectedStrategy):false;
+  return true;
+}
+
 function playableIncidentTasks(incident){
   return incidentTasks(incident.id).filter(task=>task.required&&taskRelevantToIncidentStrategy(task,incident));
 }
@@ -109,6 +116,7 @@ function repairIncidentPhaseRealism(t=simNow()){
       incident.outcome='Closed: this airborne-only report is no longer valid because the flight has not taken off.';
       incident.context={...(incident.context||{}),phaseRepair:'Airborne-only report closed before takeoff'};
       for(const task of incidentTasks(incident.id)) if(task.status!=='completed') task.status='cancelled';
+      if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'auto_closed',{reason:'phase_repair'});
       changed=true;
     }
   }
@@ -488,6 +496,7 @@ function applyIncidentAircraftSubstitution(incident,optionId){
   incident.replacementAircraftId=replacement.id;
   incident.replacementAircraftTail=replacement.tail;
   incident.replacementMode=option.mode;
+  incident.replacementFerryId=option.ferryId||'';
   incident.replacementDelayMin=option.delayMin||0;
   return option;
 }
@@ -1033,6 +1042,7 @@ function closeIncidentByDefault(incident,policy,t,outcome,{impactStatus='handled
     if(!['completed','cancelled'].includes(task.status)) task.status='cancelled';
   }
   if(typeof recordResolvedIncidentRecoveryCost==='function') recordResolvedIncidentRecoveryCost(incident);
+  if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'auto_closed',{reason:'default_policy',policy:policy.mode,outcome});
   return true;
 }
 
@@ -1118,6 +1128,87 @@ function setDefaultDiversionTarget(incident,flight,strategy){
   return selected;
 }
 
+const DEFAULT_FLIGHTDECK_MANUAL_FOLLOWUP_STRATEGIES=new Set(['alternate','divert','return_origin','reselect']);
+
+function completeDefaultPrerequisitesForTask(task,incident,outcome,t){
+  const tasks=incidentTasks(incident.id);
+  for(const dependencyId of task.dependsOn||[]){
+    const dependency=tasks.find(item=>item.id===dependencyId);
+    if(!dependency||dependency.status==='completed') continue;
+    dependency.status='completed';
+    dependency.completedAt=t;
+    dependency.completesAt=t;
+    dependency.selection={defaultApplied:true};
+    dependency.outcome=outcome;
+  }
+}
+
+function applyDefaultFlightdeckManualFollowup(incident,policy,t,task,decision){
+  const outcome=`${decision.outcome}; OCC follow-up is still required before the flight is rerouted.`;
+  markIncidentDefault(incident,policy,t,outcome);
+  completeDefaultPrerequisitesForTask(task,incident,'Deadline passed; flight deck response became the controlling input.',t);
+  selectIncidentStrategy(incident,decision.strategy);
+  task.status='completed';
+  task.completedAt=t;
+  task.completesAt=t;
+  task.selection={...decision,defaultApplied:true,manualFollowupRequired:true};
+  task.outcome=outcome;
+  incident.status='open';
+  incident.blocking=true;
+  incident.selectedAction='default_policy_pending_occ';
+  incident.automaticResolution=false;
+  incident.outcome=outcome;
+  unlockOperationalTasks(incident.id);
+  if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'default_applied',{policy:policy.mode,strategy:decision.strategy,outcome,manualFollowupRequired:true});
+  return true;
+}
+
+function reopenSilentDefaultFlightdeckFollowups(t=simNow()){
+  let changed=false;
+  for(const incident of state.incidents||[]){
+    if(
+      incident.status!=='resolved' ||
+      incident.defaultPolicy!=='flightdeck_default' ||
+      incident.selectedAction!=='default_policy' ||
+      !DEFAULT_FLIGHTDECK_MANUAL_FOLLOWUP_STRATEGIES.has(incident.selectedStrategy)
+    ) continue;
+    const flight=state.flights.find(item=>item.id===incident.flightId&&!item.cancelled&&!item.settled);
+    if(!flight) continue;
+    incident.status='open';
+    incident.blocking=true;
+    incident.resolvedAt=0;
+    incident.automaticResolution=false;
+    incident.selectedAction='default_policy_pending_occ';
+    incident.outcome=`Previous automatic ${incident.selectedStrategy} decision reopened for OCC follow-up${flight.diversionAirport?`; current operational destination is ${flight.diversionAirport}`:''}.`;
+    ensureIncidentWorkflow(incident);
+    const tasks=incidentTasks(incident.id);
+    const decisionTask=tasks.find(item=>item.kind==='authority_decision')
+      ||tasks.find(item=>item.kind==='recovery_strategy');
+    if(decisionTask){
+      completeDefaultPrerequisitesForTask(decisionTask,incident,'Previous automatic flight-deck decision restored as case context.',t);
+      selectIncidentStrategy(incident,incident.selectedStrategy);
+      decisionTask.status='completed';
+      decisionTask.completedAt=t;
+      decisionTask.completesAt=t;
+      decisionTask.selection={strategy:incident.selectedStrategy,defaultApplied:true,manualFollowupRequired:true};
+      decisionTask.outcome=incident.outcome;
+    }
+    for(const task of tasks){
+      if(task===decisionTask||task.status==='completed') continue;
+      if(taskBelongsToIncidentStrategy(task,incident)){
+        task.status=task.dependsOn?.length?'blocked':'available';
+        task.startedAt=0; task.completesAt=0; task.completedAt=0; task.selection=null; task.outcome='';
+      }else{
+        task.status='cancelled';
+      }
+    }
+    unlockOperationalTasks(incident.id);
+    if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'reopened',{reason:'silent_default_flightdeck_followup',strategy:incident.selectedStrategy});
+    changed=true;
+  }
+  return changed;
+}
+
 function applyDefaultFlightdeckConsequence(incident,flight,decision,t){
   const strategy=decision.strategy||'';
   incident.selectedStrategy=strategy;
@@ -1158,6 +1249,9 @@ function applyDefaultFlightdeckDecision(incident,policy,t){
     || incidentTasks(incident.id).find(item=>item.kind==='recovery_strategy')
     || {id:`${incident.id}:default`,key:'default',action:'flightdeck',strategyOptions:[]};
   const decision=authorityDecisionForIncident(task,incident,flight);
+  if(DEFAULT_FLIGHTDECK_MANUAL_FOLLOWUP_STRATEGIES.has(decision.strategy)){
+    return applyDefaultFlightdeckManualFollowup(incident,policy,t,task,decision);
+  }
   const applied=applyDefaultFlightdeckConsequence(incident,flight,decision,t);
   if(!applied.ok){
     return applyDefaultHold(incident,{...policy,mode:'manual_required_no_auto_fix',label:'manual required',summary:applied.outcome},t);

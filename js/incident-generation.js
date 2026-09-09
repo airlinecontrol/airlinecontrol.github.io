@@ -2,7 +2,7 @@
 
 const PRE_DEPARTURE_INCIDENT_GENERATORS=[
   {type:'crew_sick',weight:1.05,eligible:f=>flightUsesLocalCrew(f)},
-  {type:'mel_defect',weight:.9,eligible:(f,t)=>Management.maintenanceStatus(state.aircraft.find(a=>a.id===f.aircraftId),t)?.due||Math.random()<.45},
+  {type:'mel_defect',weight:.9,eligible:(f,t)=>Management.maintenanceStatus(state.aircraft.find(a=>a.id===f.aircraftId),t)?.due||simulationRandom(`mel-eligibility:${f.id}`)<.45},
   {type:'gate_conflict',weight:.85},
   {type:'destination_closure_ground',weight:.5,eligible:f=>distanceKm(AIRPORTS[f.from],AIRPORTS[f.to])>250},
   {type:'fueling_issue',weight:.75},
@@ -23,7 +23,7 @@ const GROUND_DELAY_CAUSES=[
 
 function chooseGroundDelayCause(f){
   const options=GROUND_DELAY_CAUSES.filter(item=>!item.passengerOnly||f.flightType!=='ferry');
-  let roll=Math.random()*options.reduce((total,item)=>total+item.weight,0);
+  let roll=simulationRandom(`ground-delay-cause:${f.id}`)*options.reduce((total,item)=>total+item.weight,0);
   for(const option of options){
     roll-=option.weight;
     if(roll<=0) return option.label;
@@ -33,7 +33,7 @@ function chooseGroundDelayCause(f){
 
 function chooseIncidentGenerator(f,t){
   const options=PRE_DEPARTURE_INCIDENT_GENERATORS.filter(item=>!item.eligible||item.eligible(f,t));
-  let roll=Math.random()*options.reduce((total,item)=>total+item.weight,0);
+  let roll=simulationRandom(`incident-generator:${f.id}`)*options.reduce((total,item)=>total+item.weight,0);
   for(const option of options){
     roll-=option.weight;
     if(roll<=0) return option;
@@ -46,7 +46,7 @@ function maybeGenerateOperationalIncident(f,t){
   f.incidentChecks??={};
   if(f.incidentChecks.operationalGeneration||t<f.departure-120*MIN||t>=f.departure) return false;
   f.incidentChecks.operationalGeneration=true;
-  if(!openIncidentsForFlight(f.id).length&&Math.random()<.16){
+  if(!openIncidentsForFlight(f.id).length&&simulationRandom(`operational-incident:${f.id}`)<.16){
     const generator=chooseIncidentGenerator(f,t);
     if(generator){
       const context=generatedIncidentContext(generator.type,f,t);
@@ -103,7 +103,7 @@ function maybeGeneratePreDepartureIssue(f,t){
   if(f.cancelled || f.opsChecked || !state.ops.automaticDisruptions) return false;
   if(t < f.departure-60*MIN || t >= f.departure) return false;
   f.opsChecked=true;
-  const roll=Math.random();
+  const roll=simulationRandom(`predeparture-issue:${f.id}`);
   const ac=state.aircraft.find(a=>a.id===f.aircraftId);
   const maintenance=ac?Management.maintenanceStatus(ac,t):null;
   const conditionFactor=(1+(100-(ac?.condition??100))/25)*(maintenance?.due?1.55:1);
@@ -111,7 +111,7 @@ function maybeGeneratePreDepartureIssue(f,t){
   if(roll<technicalChance){
     createIncident('mel_defect',f,{detectedAt:t});
   }else if(roll<technicalChance+.135){
-    const delay=10+Math.floor(Math.random()*31);
+    const delay=10+Math.floor(simulationRandom(`predeparture-delay:${f.id}`)*31);
     const cause=chooseGroundDelayCause(f);
     f.handlingDelayMin+=delay;
     f.handlingDelayCause=cause;
