@@ -112,7 +112,7 @@
     }else if(['mx-strategy','mx-postflight-strategy','dispatch-tech-decision','dispatch-lightning-decision','dispatch-bird-decision','dispatch-pressure-decision'].includes(task.key)){
       category='maintenance';
       if(optionId==='defer') add('MEL admin / follow-up',700);
-      if(optionId==='schedule_check') add('unscheduled maintenance check',9_500*aircraftSizeFactor(flight));
+      if(optionId==='schedule_check') add('technical repair',9_500*aircraftSizeFactor(flight));
       if(optionId==='substitute') add('aircraft swap',2_000*aircraftSizeFactor(flight));
       if(['divert','return_origin'].includes(optionId)) add('arrival engineering support',4_500*aircraftSizeFactor(flight));
       if(['continue','continue_low'].includes(optionId)) add('arrival inspection',1_800*aircraftSizeFactor(flight));
@@ -321,9 +321,9 @@
 
     if(['mx-strategy','mx-postflight-strategy'].includes(task.key)){
       if(optionId==='defer') return incident.technicalContext?.deferAllowed===false
-        ? 'not deferrable under MEL · maintenance check required'
+        ? 'not deferrable under MEL · technical repair required'
         : 'minimal delay after engineering sign-off · MEL restrictions may remain';
-      if(optionId==='schedule_check') return `planned maintenance downtime · ${rotationRiskText(flight)}`;
+      if(optionId==='schedule_check') return `planned repair downtime · ${rotationRiskText(flight)}`;
       if(optionId==='substitute') return replacementConsequenceText(incident);
     }
 

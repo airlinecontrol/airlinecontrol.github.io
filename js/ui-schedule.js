@@ -184,7 +184,7 @@ function scheduleMaintenanceJobMarkup(aircraft,job,start,end,pxPerHour){
   const clippedStart=Math.max(start,job.start),clippedEnd=Math.min(end,job.end);
   if(clippedEnd<=clippedStart) return '';
   const left=(clippedStart-start)/HOUR*pxPerHour,width=Math.max(34,(clippedEnd-clippedStart)/HOUR*pxPerHour);
-  const title=`${aircraft.tail} maintenance check · ${formatTime(job.start)}-${formatTime(job.end)} · ${job.reason||'Scheduled maintenance'} · est ${money(job.cost||0)}`;
+  const title=`${aircraft.tail} ${String(job.label||'maintenance').toLowerCase()} · ${formatTime(job.start)}-${formatTime(job.end)} · ${job.reason||'Scheduled maintenance'} · est ${money(job.cost||0)}`;
   return `<div class="maintenance-schedule-block ${job.status==='active'?'active':''}" data-maintenance-job="${esc(aircraft.id)}" title="${esc(title)}" style="left:${left}px;width:${width}px"><b>MX</b><span>${esc(shortClock(job.start))}-${esc(shortClock(job.end))}</span></div>`;
 }
 function flightArrivalDelayMin(flight){

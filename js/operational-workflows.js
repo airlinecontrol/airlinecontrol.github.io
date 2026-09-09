@@ -72,13 +72,13 @@
     ])},
     mel_defect:{classification:'incident',steps:withCancellation([
       {key:'mx-inspect',department:'maintenance',kind:'maintenance_inspection',label:'Inspect reported defect',detail:'Assign an engineering inspection before choosing a technical disposition.'},
-      {key:'mx-strategy',department:'maintenance',kind:'recovery_strategy',label:'Choose ground technical recovery',detail:'Select whether to defer under MEL, schedule a maintenance check, or substitute aircraft.',dependsOn:['mx-inspect'],options:[
+      {key:'mx-strategy',department:'maintenance',kind:'recovery_strategy',label:'Choose ground technical recovery',detail:'Select whether to defer under MEL, schedule a repair, or substitute aircraft.',dependsOn:['mx-inspect'],options:[
         {id:'defer',label:'Defer under MEL',detail:'Continue with documented restrictions.'},
-        {id:'schedule_check',label:'Schedule maintenance check',detail:'Plan a maintenance check window and hold the aircraft until the check is complete.'},
+        {id:'schedule_check',label:'Schedule technical repair',detail:'Plan a repair window and hold the aircraft until engineering clears the defect.'},
         {id:'substitute',label:'Use replacement aircraft',detail:'Assign a serviceable spare or borrowed aircraft.'}
       ]},
       {key:'mx-defer',department:'maintenance',kind:'maintenance_defer',label:'Defer defect under MEL',detail:'Document restrictions and confirm the aircraft can continue under MEL.',dependsOn:['mx-strategy'],branch:'defer'},
-      {key:'mx-schedule-check',department:'maintenance',kind:'maintenance_check_scheduling',label:'Schedule maintenance check',detail:'Choose a check window for the affected aircraft. The aircraft remains unavailable until the check is complete.',dependsOn:['mx-strategy'],branch:'schedule_check'},
+      {key:'mx-schedule-check',department:'maintenance',kind:'maintenance_check_scheduling',label:'Schedule technical repair',detail:'Choose a repair window for the affected aircraft. The aircraft remains unavailable until engineering clears the defect.',dependsOn:['mx-strategy'],branch:'schedule_check'},
       {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign replacement aircraft',detail:'Use a serviceable spare at origin or position one in before departure.',dependsOn:['mx-strategy'],branch:'substitute'},
     ])},
     night_curfew_conflict:{classification:'derived',steps:withCancellation([
@@ -132,13 +132,13 @@
     ])},
     postflight_technical_defect:{classification:'derived',steps:withCancellation([
       {key:'mx-postflight-inspect',department:'maintenance',kind:'maintenance_inspection',label:'Inspect inbound aircraft',detail:'Engineering checks the aircraft after the previous sector before releasing it for the next departure.'},
-      {key:'mx-postflight-strategy',department:'maintenance',kind:'recovery_strategy',label:'Choose post-flight technical recovery',detail:'Select whether to defer the finding, schedule a maintenance check, or substitute aircraft.',dependsOn:['mx-postflight-inspect'],options:[
+      {key:'mx-postflight-strategy',department:'maintenance',kind:'recovery_strategy',label:'Choose post-flight technical recovery',detail:'Select whether to defer the finding, schedule a repair, or substitute aircraft.',dependsOn:['mx-postflight-inspect'],options:[
         {id:'defer',label:'Defer under MEL',detail:'Continue with documented restrictions if the finding is deferrable.'},
-        {id:'schedule_check',label:'Schedule maintenance check',detail:'Plan a maintenance check window before this aircraft is released.'},
+        {id:'schedule_check',label:'Schedule technical repair',detail:'Plan a repair window before this aircraft is released.'},
         {id:'substitute',label:'Use replacement aircraft',detail:'Assign a serviceable spare or borrowed aircraft.'}
       ]},
       {key:'mx-postflight-defer',department:'maintenance',kind:'maintenance_defer',label:'Defer post-flight finding',detail:'Document restrictions and confirm the aircraft can operate the next sector.',dependsOn:['mx-postflight-strategy'],branch:'defer'},
-      {key:'mx-postflight-schedule-check',department:'maintenance',kind:'maintenance_check_scheduling',label:'Schedule maintenance check',detail:'Choose a check window for the inbound aircraft and hold it until the check completes.',dependsOn:['mx-postflight-strategy'],branch:'schedule_check'},
+      {key:'mx-postflight-schedule-check',department:'maintenance',kind:'maintenance_check_scheduling',label:'Schedule technical repair',detail:'Choose a repair window for the inbound aircraft and hold it until engineering clears the defect.',dependsOn:['mx-postflight-strategy'],branch:'schedule_check'},
       {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign replacement aircraft',detail:'Use a serviceable spare or borrowed aircraft before departure.',dependsOn:['mx-postflight-strategy'],branch:'substitute'},
     ])},
     crew_misconnect:{classification:'derived',steps:withCancellation([

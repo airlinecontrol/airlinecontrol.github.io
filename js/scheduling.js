@@ -4,9 +4,9 @@ function validateAircraftItinerary(ac,proposedLegs=[]){
   const now=simNow();
   const legs=state.flights
     .filter(f=>f.aircraftId===ac.id&&!f.cancelled&&flightActualArrival(f)>now)
-    .map(f=>({from:f.from,to:flightOperationalDestination(f),departure:flightActualDeparture(f),arrival:flightActualArrival(f),label:f.id,existing:true,departureLogged:Boolean(f.departureLogged)}))
+    .map(f=>({from:f.from,to:flightOperationalDestination(f),departure:flightActualDeparture(f),arrival:flightActualArrival(f),rotationDeparture:f.departure,label:f.id,existing:true,departureLogged:Boolean(f.departureLogged)}))
     .concat(proposedLegs)
-    .sort((a,b)=>a.departure-b.departure||a.arrival-b.arrival);
+    .sort((a,b)=>aircraftRotationSequenceTime(a)-aircraftRotationSequenceTime(b)||a.departure-b.departure||a.arrival-b.arrival);
   let location=ac.location,availableAt=now,previousLeg=null;
   for(const leg of legs){
     if(leg.existing&&leg.departureLogged&&leg.departure<=now&&now<leg.arrival){

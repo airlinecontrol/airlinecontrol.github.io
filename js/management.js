@@ -14,6 +14,12 @@ window.AeroManagement = (() => {
   const WEEK = 7 * DAY;
   const CHECK_INTERVAL_HOURS = 600;
   const CHECK_INTERVAL_CYCLES = 450;
+  const MAINTENANCE_WORK_LABELS = {
+    scheduled_check:'Scheduled maintenance check',
+    mel_rectification:'MEL rectification',
+    urgent_repair:'Technical repair',
+    arrival_inspection:'Arrival inspection'
+  };
 
   const AIRPORT_WEATHER = {
     FRA:{wind:18,risk:.22,climate:'continental'}, LHR:{wind:22,risk:.29,climate:'maritime'},
@@ -157,16 +163,78 @@ window.AeroManagement = (() => {
       hoursSince,cyclesSince,progress,due,grounding,active,scheduled,
       remainingHours:Math.max(0,CHECK_INTERVAL_HOURS-hoursSince),
       remainingCycles:Math.max(0,CHECK_INTERVAL_CYCLES-cyclesSince),
-      label:active?'In maintenance':grounding?'Grounded — overdue':due?'Maintenance due':scheduled?'Check scheduled':'Serviceable'
+      label:active?(scheduled?.label||'In maintenance'):grounding?'Grounded — overdue':due?'Maintenance due':scheduled?(scheduled.label||'Check scheduled'):'Serviceable'
     };
   }
 
-  function maintenancePlan(aircraft,start,airport,seats=100){
-    const status=maintenanceStatus(aircraft,start);
+  function maintenanceWorkType(type){
+    return MAINTENANCE_WORK_LABELS[type]?type:'scheduled_check';
+  }
+
+  function roundHalfHour(hours){
+    return Math.max(.5,Math.round(hours*2)/2);
+  }
+
+  function maintenanceFindingCategory(options={}){
+    const items=Array.isArray(options.melItems)&&options.melItems.length
+      ? options.melItems
+      : options.finding?[options.finding]:[];
+    const order={A:4,B:3,C:2,D:1};
+    return items
+      .map(item=>String(item.category||'C').toUpperCase())
+      .sort((a,b)=>(order[b]||0)-(order[a]||0))[0]||'C';
+  }
+
+  function maintenanceWorkProfile(type,aircraft,seats,status,options={}){
+    const workType=maintenanceWorkType(type);
+    const category=maintenanceFindingCategory(options);
+    const widebody=seats>=240;
+    const extraItems=Math.max(0,((Array.isArray(options.melItems)?options.melItems.length:0)-1)*.75);
+    const categoryWeight={A:1.25,B:1,C:.75,D:.45}[category]||.75;
+    if(workType==='mel_rectification'){
+      const base={A:3.5,B:3,C:2.5,D:1.5}[category]||2.5;
+      const durationHours=roundHalfHour(Math.min(6,base+extraItems+(widebody ? .75 : 0)));
+      return {
+        workType,label:MAINTENANCE_WORK_LABELS[workType],durationHours,
+        cost:Math.round((4_500+seats*32+categoryWeight*2_500+extraItems*900)/250)*250,
+        conditionGain:4,resetsCheck:false,transaction:'MEL rectification'
+      };
+    }
+    if(workType==='urgent_repair'){
+      const base={A:5.5,B:4.5,C:3.5,D:2.5}[category]||4;
+      const durationHours=roundHalfHour(Math.min(9,base+(widebody?1:0)));
+      return {
+        workType,label:MAINTENANCE_WORK_LABELS[workType],durationHours,
+        cost:Math.round((9_000+seats*62+categoryWeight*4_000)/500)*500,
+        conditionGain:8,resetsCheck:false,transaction:'Technical repair'
+      };
+    }
+    if(workType==='arrival_inspection'){
+      const durationHours=roundHalfHour(widebody?1.5:1);
+      return {
+        workType,label:MAINTENANCE_WORK_LABELS[workType],durationHours,
+        cost:Math.round((1_800+seats*12)/250)*250,
+        conditionGain:2,resetsCheck:false,transaction:'Arrival inspection'
+      };
+    }
     const overdueFactor=status.due?1.18:1;
-    const durationHours=Math.round((6+seats/65)*2)/2;
-    const cost=Math.round((18_000+seats*240)*overdueFactor/500)*500;
-    return {start,end:start+durationHours*HOUR,airport,durationHours,cost,status:'scheduled'};
+    const durationHours=roundHalfHour(6+seats/65);
+    return {
+      workType:'scheduled_check',label:MAINTENANCE_WORK_LABELS.scheduled_check,durationHours,
+      cost:Math.round((18_000+seats*240)*overdueFactor/500)*500,
+      conditionGain:18,resetsCheck:true,transaction:'Scheduled maintenance'
+    };
+  }
+
+  function maintenancePlan(aircraft,start,airport,seats=100,options={}){
+    const status=maintenanceStatus(aircraft,start);
+    const profile=maintenanceWorkProfile(options.workType,aircraft,seats,status,options);
+    return {
+      start,end:start+profile.durationHours*HOUR,airport,
+      durationHours:profile.durationHours,cost:profile.cost,status:'scheduled',
+      workType:profile.workType,label:profile.label,
+      resetsCheck:profile.resetsCheck,conditionGain:profile.conditionGain,transaction:profile.transaction
+    };
   }
 
   function processMaintenance(state,now,postTransaction){
@@ -180,13 +248,21 @@ window.AeroManagement = (() => {
         changed=true;
       }
       if(now>=job.end&&job.status!=='completed'){
+        const workType=maintenanceWorkType(job.workType);
         job.status='completed';
-        maintenance.lastCheckHours=Number(aircraft.flightHours)||0;
-        maintenance.lastCheckCycles=Number(aircraft.cycles)||0;
+        if(job.resetsCheck!==false&&workType==='scheduled_check'){
+          maintenance.lastCheckHours=Number(aircraft.flightHours)||0;
+          maintenance.lastCheckCycles=Number(aircraft.cycles)||0;
+        }
         maintenance.lastCompletedAt=job.end;
-        aircraft.condition=clamp((Number(aircraft.condition)||0)+18,0,100);
+        aircraft.condition=clamp((Number(aircraft.condition)||0)+(Number(job.conditionGain)||2),0,100);
+        if(['urgent_repair','arrival_inspection'].includes(workType)){
+          aircraft.defectUntil=0;
+          aircraft.defectReason='';
+          aircraft.arrivalInspectionRequired=false;
+        }
         state.stats.scheduledMaintenanceCosts+=(Number(job.cost)||0);
-        if(job.cost) postTransaction(-job.cost,'Scheduled maintenance',`${aircraft.tail} scheduled check`,aircraft.id);
+        if(job.cost) postTransaction(-job.cost,job.transaction||MAINTENANCE_WORK_LABELS[workType],`${aircraft.tail} ${String(job.label||MAINTENANCE_WORK_LABELS[workType]).toLowerCase()}`,aircraft.id);
         maintenance.scheduled=null;
         changed=true;
       }
@@ -324,7 +400,7 @@ window.AeroManagement = (() => {
   }
 
   return {
-    MIN,HOUR,DAY,WEEK,CHECK_INTERVAL_HOURS,CHECK_INTERVAL_CYCLES,
+    MIN,HOUR,DAY,WEEK,CHECK_INTERVAL_HOURS,CHECK_INTERVAL_CYCLES,MAINTENANCE_WORK_LABELS,
     aircraftFamily,ensureState,weatherAt,maintenanceStatus,maintenancePlan,processMaintenance,
     cyclePhase,operationalKpis,processWeeklyReviews,flightReadiness,cancellationPlan,buildRoutePortfolio
   };

@@ -89,7 +89,7 @@
 
     {
       const aircraft=w.assignRequestedAircraft('A220-100',w.defaultCabin('A220-100'),'BOS');
-      aircraft.melItems=[{id:'MEL-PERF-WARN',code:'27-11',title:'Flight control dispatch restriction',status:'open',performancePenalty:.13,expiresAt:now+2*24*60*60_000,remainingCycles:4}];
+      aircraft.melItems=[{id:'MEL-PERF-WARN',code:'27-11',title:'Flight control dispatch restriction',status:'open',performancePenalty:.15,expiresAt:now+2*24*60*60_000,remainingCycles:4}];
       w.recalculateOperations();
       const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'BOS',to:'LIS',departure:now+3*60*60_000,fare:{economy:130,business:340,first:0}});
       w.recalculateOperations();
@@ -168,6 +168,26 @@
       w.processDerivedOperationalIncidents(now);
       assert(!w.openIncidentsForFlight(flight.id).some(item=>airborneTypes.includes(item.type)),'delayed ground flight has airborne incidents');
       w.AeroWeatherEngine.routeHazardSummary=originalRoute;
+    }
+
+    {
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'ATL');
+      const delayedFirst=w.createFlightRecord({aircraftId:aircraft.id,from:'ATL',to:'MCO',departure:now+30*60_000,fare:{economy:120,business:300,first:0}});
+      const laterSameOrigin=w.createFlightRecord({aircraftId:aircraft.id,from:'ATL',to:'JFK',departure:now+90*60_000,fare:{economy:120,business:300,first:0}});
+      delayedFirst.manualDelayMin=4*60;
+      for(const item of [delayedFirst,laterSameOrigin]){
+        item.weatherChecked=true; item.constraintChecked=true; item.opsChecked=true; item.enrouteChecked=true;
+      }
+      w.recalculateOperations();
+      assert(w.flightActualDeparture(delayedFirst)>w.flightActualDeparture(laterSameOrigin),'fixture did not create an actual-time inversion');
+      assert(w.updatePositioningConstraints(now),'positioning scanner did not detect the planned rotation conflict');
+      assert(!delayedFirst.positioningBlocked,'delayed first planned leg was falsely marked out of position after actual-time inversion');
+      assert(laterSameOrigin.positioningBlocked,'later same-origin leg did not carry the rotation positioning conflict');
+      const context=w.aircraftOutOfPositionContextForFlight(laterSameOrigin,now);
+      assert(context?.expectedLocation==='MCO'&&context.requiredLocation==='ATL','out-of-position context did not follow planned rotation order');
+      assert(w.processDerivedOperationalIncidents(now),'positioning incident was not opened for the actual conflicting later leg');
+      assert(!w.openIncidentsForFlight(delayedFirst.id).some(item=>item.type==='aircraft_out_of_position'),'out-of-position incident opened on the delayed first leg instead of the conflicting later leg');
+      assert(w.openIncidentsForFlight(laterSameOrigin.id).some(item=>item.type==='aircraft_out_of_position'),'out-of-position incident missing on the later conflicting leg');
     }
 
     {

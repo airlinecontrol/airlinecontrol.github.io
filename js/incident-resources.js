@@ -234,7 +234,7 @@
       return '';
     }
     if(['mx-strategy','mx-postflight-strategy'].includes(task.key)&&optionId==='defer'&&incident.technicalContext?.deferAllowed===false){
-      return 'This finding is not deferrable under MEL. Schedule a maintenance check, substitute aircraft, or cancel before departure.';
+      return 'This finding is not deferrable under MEL. Schedule a technical repair, substitute aircraft, or cancel before departure.';
     }
     if(['mx-strategy','mx-postflight-strategy','dispatch-position-strategy','dispatch-performance-strategy','mx-resource-strategy'].includes(task.key)&&optionId==='substitute'&&!incidentAircraftReplacementOptions(incident).length) return 'No suitable replacement aircraft is available. Add or position aircraft in Dispatch, then try again.';
     if(task.key==='station-fuel-outage-strategy'&&optionId==='tanker_inbound'){

@@ -114,7 +114,7 @@
       assert(w.performOperationalTask(`${incident.id}:mx-inspect`),`MEL inspection did not start for ${action}`);
       completeWaits();
       const strategy=w.incidentTasks(incident.id).find(task=>task.key==='mx-strategy');
-      assert(w.operationalOptionConsequence(strategy,incident,'schedule_check').includes('maintenance downtime'),'MEL maintenance-check consequence is missing downtime impact');
+      assert(w.operationalOptionConsequence(strategy,incident,'schedule_check').includes('repair downtime'),'MEL technical-repair consequence is missing downtime impact');
       if(action==='schedule_check') assert(w.branchStrategyOptionBlocker(strategy,incident,'defer').includes('not deferrable'),'non-MEL finding did not block MEL deferral');
       assert(w.performOperationalTask(`${incident.id}:mx-strategy`,action),`MEL ${action} strategy was rejected`);
       const taskKey=action==='schedule_check'?'mx-schedule-check':`mx-${action}`;
@@ -124,7 +124,7 @@
         assert(aircraft.melItems.some(item=>item.status==='open'),'MEL defer did not create an open MEL item');
         w.eval(`{
           const ac=state.aircraft.find(item=>item.id==='${aircraft.id}');
-          ac.maintenance={...(ac.maintenance||{}),scheduled:{start:${now+60*60_000},end:${now+2*60*60_000},airport:'FRA',durationHours:1,cost:1000,status:'scheduled'}};
+          ac.maintenance={...(ac.maintenance||{}),scheduled:{start:${now+60*60_000},end:${now+2*60*60_000},airport:'FRA',durationHours:1,cost:1000,status:'scheduled',workType:'mel_rectification',label:'MEL rectification',resetsCheck:false}};
           Management.processMaintenance(state,${now+3*60*60_000},()=>{});
           processMelConstraints(${now+3*60*60_000});
         }`);
@@ -132,6 +132,7 @@
       }
       if(action==='schedule_check'){
         assert(aircraft.maintenance.scheduled,'MEL maintenance branch did not create a scheduled check');
+        assert(aircraft.maintenance.scheduled.workType==='urgent_repair','technical incident maintenance branch should schedule a repair, not a full check');
         assert(aircraft.defectUntil>=aircraft.maintenance.scheduled.end,'MEL maintenance branch did not hold aircraft until check completion');
         assert(flight.cancelled,'MEL maintenance branch did not cancel the flight affected by the scheduled check');
         assert(flight.cancellationReason.includes('Ground technical defect'),'MEL maintenance cancellation did not keep the technical reason');

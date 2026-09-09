@@ -28,6 +28,18 @@ assert.deepEqual(weatherA,weatherB,'weather must be stable inside its six-hour p
 const maintenance=management.maintenanceStatus(state.aircraft[0],now);
 assert.equal(maintenance.due,true);
 const plan=management.maintenancePlan(state.aircraft[0],now,'FRA',180);
+const melPlan=management.maintenancePlan(state.aircraft[0],now,'FRA',180,{workType:'mel_rectification',melItems:[{category:'B',code:'32-41'}]});
+const repairPlan=management.maintenancePlan(state.aircraft[0],now,'FRA',180,{workType:'urgent_repair',finding:{category:'B'}});
+assert.equal(plan.workType,'scheduled_check');
+assert.equal(melPlan.workType,'mel_rectification');
+assert.equal(repairPlan.workType,'urgent_repair');
+assert.ok(melPlan.durationHours<plan.durationHours,'MEL rectification should be shorter than a full check');
+assert.ok(repairPlan.durationHours<plan.durationHours,'technical repair should be shorter than a full check');
+assert.ok(melPlan.cost<plan.cost,'MEL rectification should cost less than a full check');
+const beforeMelHours=state.aircraft[0].maintenance.lastCheckHours;
+state.aircraft[0].maintenance.scheduled=melPlan;
+assert.equal(management.processMaintenance(state,melPlan.end+1,()=>{}),true);
+assert.equal(state.aircraft[0].maintenance.lastCheckHours,beforeMelHours,'MEL rectification must not reset full-check hours');
 state.aircraft[0].maintenance.scheduled=plan;
 const transactions=[];
 assert.equal(management.processMaintenance(state,plan.end+1,(...args)=>transactions.push(args)),true);

@@ -800,7 +800,7 @@ function performOperationalTask(taskId,actionId='',payload={}){
   }else if(task.kind==='maintenance_defer'||task.kind==='maintenance_disposition'){
     const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
     if(task.kind==='maintenance_defer'||actionId==='defer'){
-      if(incident.technicalContext?.deferAllowed===false) return toast('This technical finding is not deferrable under MEL. Schedule a maintenance check or use a replacement aircraft.');
+      if(incident.technicalContext?.deferAllowed===false) return toast('This technical finding is not deferrable under MEL. Schedule a technical repair or use a replacement aircraft.');
       const finding=incident.technicalContext||OperationalIntelligence.melFinding(incident.id,incident.detectedAt);
       aircraft.melItems??=[];
       if(!aircraft.melItems.some(item=>item.id===finding.id)) aircraft.melItems.push({...finding,status:'open',deferredAt:simNow()});
@@ -827,6 +827,8 @@ function performOperationalTask(taskId,actionId='',payload={}){
       skipConfirm:true,
       allowFlightConflict:true,
       preserveIncidentId:incident.id,
+      workType:'urgent_repair',
+      finding:incident.technicalContext,
       reason:`${INCIDENT_DEFINITIONS[incident.type]?.title||incident.type}: ${incident.technicalContext?.title||'technical finding'}`
     });
     if(!plan) return false;
@@ -838,7 +840,7 @@ function performOperationalTask(taskId,actionId='',payload={}){
     aircraft.defectUntil=Math.max(aircraft.defectUntil||0,plan.end);
     aircraft.defectReason=incident.technicalContext?.title||'Maintenance check required';
     task.selection={action:'schedule_check',start:plan.start,end:plan.end,aircraftId:aircraft.id};
-    completeOperationalTask(task,`${aircraft.tail} maintenance check scheduled ${formatTime(plan.start)}-${formatTime(plan.end)}.`);
+    completeOperationalTask(task,`${aircraft.tail} ${String(plan.label||'maintenance').toLowerCase()} scheduled ${formatTime(plan.start)}-${formatTime(plan.end)}.`);
     recalculateOperations();
     AeroServices.persist();
   }else if(task.kind==='mobile_maintenance_team'){

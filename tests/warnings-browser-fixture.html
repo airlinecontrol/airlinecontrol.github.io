@@ -120,7 +120,8 @@
       };
       assert(w.stabilizeOperationWarnings([transient],now).some(item=>item.id===transient.id&&!item.clearing),'transient warning did not enter warning memory');
       assert(w.stabilizeOperationWarnings([],now+10*60_000).some(item=>item.id===transient.id&&item.clearing),'transient warning was removed before the warning stability window');
-      assert(!w.stabilizeOperationWarnings([],now+40*60_000).some(item=>item.id===transient.id),'transient warning did not leave memory after the warning stability window');
+      assert(w.stabilizeOperationWarnings([],now+40*60_000).some(item=>item.id===transient.id&&item.clearing),'transient warning cleared before the warning stability window');
+      assert(!w.stabilizeOperationWarnings([],now+70*60_000).some(item=>item.id===transient.id),'transient warning did not leave memory after the warning stability window');
     }
     assert(warnings.some(item=>item.type==='short_turn'),'short-turn warning was not derived');
     assert(!warnings.some(item=>item.type==='short_turn'&&item.flightId===second.id),'legal planned turn with actual delay should not be classified as a short-turn warning');
@@ -152,11 +153,31 @@
     assert(d.querySelector('[data-desk-widget="warnings"]')?.textContent.includes('MEL 32-41'),'warnings widget does not show MEL restriction detail');
     w.refreshMaintenanceRail(true);
     await wait(80);
-    assert(d.querySelector('[data-rail-widget="maintenance"]')?.textContent.includes('MEL 32-41'),'maintenance rail does not show MEL detail');
-    w.eval(`{
-      const ac=state.aircraft.find(item=>item.id==='${melAc.id}');
-      ac.maintenance.scheduled={start:${now+60*60_000},end:${now+2*60*60_000},airport:'FRA',durationHours:1,cost:1000,status:'scheduled'};
-    }`);
+    assert(d.querySelector('[data-rail-widget="maintenance"] [data-desk-panel="maintenance:schedule"]'),'maintenance rail does not expose the maintenance scheduler');
+    d.querySelector('[data-rail-widget="maintenance"] [data-desk-panel="maintenance:schedule"]').click();
+    await wait(100);
+    const maintenancePanel=d.querySelector('[data-rail-widget="maintenance"] [data-maintenance-scheduler]');
+    assert(maintenancePanel,'maintenance scheduler did not open for MEL rectification');
+    const maintenanceAircraft=maintenancePanel.querySelector('[data-maintenance-work-aircraft]');
+    maintenanceAircraft.value=melAc.id;
+    maintenanceAircraft.dispatchEvent(new Event('change',{bubbles:true}));
+    const maintenanceType=maintenancePanel.querySelector('[data-maintenance-work-type]');
+    maintenanceType.value='mel_rectification';
+    maintenanceType.dispatchEvent(new Event('change',{bubbles:true}));
+    assert(maintenancePanel.querySelector('[data-maintenance-work-preview]')?.textContent.includes('MEL 32-41'),'maintenance scheduler preview does not show the selected MEL detail');
+    const melRectificationButton=maintenancePanel.querySelector('[data-schedule-maintenance-work]');
+    assert(melRectificationButton&&!melRectificationButton.disabled,'maintenance scheduler does not enable MEL rectification');
+    const melRectificationInput=maintenancePanel.querySelector('[data-maintenance-work-start]');
+    assert(melRectificationInput,'maintenance scheduler does not expose a MEL rectification date/time input');
+    melRectificationInput.value=w.datetimeLocalValue(now+60*60_000);
+    melRectificationInput.dispatchEvent(new Event('input',{bubbles:true}));
+    w.confirm=()=>true;
+    melRectificationButton.click();
+    await wait(120);
+    assert(w.eval(`state.aircraft.find(item=>item.id==='${melAc.id}')?.maintenance?.scheduled?.reason.includes('MEL rectification')`),'MEL rectification task did not create a MEL-specific maintenance booking');
+    assert(w.eval(`state.aircraft.find(item=>item.id==='${melAc.id}')?.maintenance?.scheduled?.workType`)==='mel_rectification','MEL rectification booking did not use the MEL work type');
+    assert(d.querySelector(`[data-rail-widget="maintenance"] [data-maintenance-job-card="${melAc.id}"]`)?.textContent.includes('MEL 32-41'),'maintenance rail does not show the booked MEL rectification job');
+    assert(w.eval(`state.aircraft.find(item=>item.id==='${melAc.id}')?.maintenance?.scheduled?.durationHours < Management.maintenancePlan(state.aircraft.find(item=>item.id==='${melAc.id}'),${now+60*60_000},'FRA',MODELS.A320neo.seats).durationHours`),'MEL rectification should be shorter than a full scheduled check');
     assert(!w.operationWarnings(now+90*60_000).some(item=>item.type==='mel_restriction'&&item.aircraftId===melAc.id),'MEL warning should clear after a timely maintenance check is scheduled');
     assert(!Array.from(d.querySelectorAll('[data-desk-widget="warnings"] .warning-row em, [data-desk-widget="warnings"] .warning-group-card>header em')).some(node=>/dispatch|crew|maintenance/i.test(node.textContent)),'warning owner department labels should not be rendered');
     const flightWarning=d.querySelector(`[data-desk-widget="warnings"] [data-warning-flight="${second.id}"]`);
