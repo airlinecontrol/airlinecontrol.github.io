@@ -171,6 +171,41 @@
     }
 
     {
+      const airborneTypes=w.eval(`Object.entries(INCIDENT_DEFINITIONS)
+        .filter(([type,definition])=>definition.airborneOnly&&!RETIRED_INCIDENT_TYPES.has(type))
+        .map(([type])=>type)`);
+      assert(airborneTypes.length,'fixture found no active airborne-only incidents');
+      for(const type of airborneTypes){
+        const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+        const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'AMS',departure:now-70*60_000,fare:{economy:120,business:300,first:0}});
+        flight.departureLogged=true;
+        flight.actualDeparture=now-70*60_000;
+        flight.actualArrival=now+70*60_000;
+        flight.operationalDurationMs=flight.actualArrival-flight.actualDeparture;
+        flight.weatherChecked=true; flight.constraintChecked=true; flight.opsChecked=true; flight.enrouteChecked=true;
+        if(type==='diversion_airport_unavailable') flight.diversionAirport='LGW';
+        const incident=w.createIncident(type,flight,{
+          detectedAt:now,
+          source:'phase-test',
+          sourceKey:`arrival-phase:${type}:${flight.id}`,
+          context:{sourceId:flight.id,airport:w.flightOperationalDestination(flight),reason:'arrival lifecycle fixture'}
+        });
+        assert(incident,`${type} could not be created while the flight was airborne`);
+        assert(w.flightIsAirborne(flight,now),`${type} fixture flight was not airborne before arrival repair`);
+        w.repairIncidentPhaseRealism(now);
+        assert(w.openIncidentsForFlight(flight.id).some(item=>item.id===incident.id),`${type} closed while the flight was still airborne`);
+        flight.actualArrival=now-30*60_000;
+        flight.operationalDurationMs=flight.actualArrival-flight.actualDeparture;
+        assert(w.statusOfFlight(flight,now)==='arrived',`${type} fixture flight did not reach arrived state`);
+        w.repairIncidentPhaseRealism(now);
+        assert(!w.openIncidentsForFlight(flight.id).some(item=>item.id===incident.id),`${type} remained open after arrival`);
+        assert(incident.autoCloseReason==='flight_arrived',`${type} did not record flight_arrived auto-close reason`);
+        const expectsInspection=Boolean(w.eval(`INCIDENT_DEFINITIONS[${JSON.stringify(type)}].arrivalInspectionOnClose`));
+        assert(Boolean(flight.arrivalInspectionRequired)===expectsInspection,`${type} arrival inspection flag mismatch`);
+      }
+    }
+
+    {
       const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
       aircraft.condition=62;
       const inbound=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'AMS',departure:now-60*60_000,fare:{economy:120,business:300,first:0}});

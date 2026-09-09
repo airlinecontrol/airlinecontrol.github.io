@@ -82,6 +82,40 @@ function ensureOperationalWorkflows(){
   return changed;
 }
 
+function incidentIsAfterAirbornePhase(type,flight,t=simNow()){
+  const definition=INCIDENT_DEFINITIONS[type];
+  if(!definition?.airborneOnly||!flight) return false;
+  return flightHasCompleted(flight,t)||statusOfFlight(flight,t)==='arrived';
+}
+
+function closeIncidentForPhaseRepair(incident,t,outcome,reason='phase_repair'){
+  incident.status='resolved';
+  incident.blocking=false;
+  incident.resolvedAt=t;
+  incident.automaticResolution=true;
+  incident.autoClosedAt=t;
+  incident.autoCloseReason=reason;
+  incident.outcome=outcome;
+  incident.context={...(incident.context||{}),phaseRepair:reason};
+  for(const task of incidentTasks(incident.id)) if(task.status!=='completed') task.status='cancelled';
+  if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'auto_closed',{reason,outcome});
+}
+
+function closeArrivedAirborneIncident(incident,flight,t){
+  const definition=INCIDENT_DEFINITIONS[incident.type]||{};
+  if(definition.arrivalInspectionOnClose){
+    flight.arrivalInspectionRequired=true;
+    const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
+    if(aircraft) aircraft.arrivalInspectionRequired=true;
+  }
+  const followUp=definition.arrivalInspectionOnClose?' Arrival inspection is now required.':'';
+  closeIncidentForPhaseRepair(
+    incident,t,
+    `Closed: ${definition.title||incident.type} is no longer an active in-flight case because ${flight.id} has arrived.${followUp}`,
+    'flight_arrived'
+  );
+}
+
 function repairIncidentPhaseRealism(t=simNow()){
   let changed=false;
   for(const incident of state.incidents||[]){
@@ -90,6 +124,11 @@ function repairIncidentPhaseRealism(t=simNow()){
     if(!flight) continue;
     const started=incidentTasks(incident.id).some(task=>['completed','in_progress','waiting_external'].includes(task.status));
     if(started) continue;
+    if(incidentIsAfterAirbornePhase(incident.type,flight,t)){
+      closeArrivedAirborneIncident(incident,flight,t);
+      changed=true;
+      continue;
+    }
     if(incident.type==='postflight_technical_defect'&&!postflightTechnicalContextForFlight(flight,t)){
       incident.status='resolved';
       incident.blocking=false;
