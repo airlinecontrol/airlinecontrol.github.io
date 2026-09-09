@@ -631,6 +631,61 @@ body,
 .connection-label.focus{color:#d9f5ff;background:rgba(20,50,62,.9)}
 .connection-label.late-inbound.focus{color:#fff3be;background:#3d3218}
 .connection-label.short-turn.focus{color:#ffe2e6;background:#48222d}
+.schedule-connection-overlay{
+  position:absolute;
+  left:0;
+  top:0;
+  z-index:23;
+  overflow:visible;
+  pointer-events:none;
+}
+.schedule-passenger-connection{
+  pointer-events:none;
+}
+.schedule-connection-path{
+  fill:none;
+  stroke:#7fd6e8;
+  stroke-width:1.5;
+  stroke-linecap:round;
+  stroke-dasharray:4 4;
+  opacity:.88;
+  pointer-events:stroke;
+  cursor:pointer;
+}
+.schedule-connection-path.at-risk{
+  stroke:#e1bd5a;
+}
+.schedule-connection-path.critical{
+  stroke:#df5e72;
+  stroke-width:1.8;
+}
+.schedule-connection-path.focus{
+  stroke-width:2.2;
+  opacity:1;
+  filter:drop-shadow(0 0 5px rgba(127,214,232,.35));
+}
+.schedule-connection-path.at-risk.focus{
+  filter:drop-shadow(0 0 5px rgba(225,189,90,.42));
+}
+.schedule-connection-path.critical.focus{
+  filter:drop-shadow(0 0 6px rgba(223,94,114,.48));
+}
+.schedule-passenger-connection-label{
+  fill:#bfeaf3;
+  stroke:#071219;
+  stroke-width:3px;
+  paint-order:stroke;
+  font-size:9px;
+  font-weight:900;
+  pointer-events:auto;
+  cursor:pointer;
+}
+.schedule-passenger-connection-label.at-risk{
+  fill:#f1d27d;
+}
+.schedule-passenger-connection-label.critical{
+  fill:#ffadba;
+}
 .crew-duty-bar{
   position:absolute;
   top:var(--crew-duty-top,53px);
@@ -689,7 +744,9 @@ body,
 #schedule-board.has-selected-flight .crew-duty-bar:not(.focus),
 #schedule-board.has-selected-flight .night-closure-bar:not(.focus),
 #schedule-board.has-selected-flight .connection-line:not(.focus),
-#schedule-board.has-selected-flight .connection-label{
+#schedule-board.has-selected-flight .connection-label,
+#schedule-board.has-selected-flight .schedule-connection-path:not(.focus),
+#schedule-board.has-selected-flight .schedule-passenger-connection-label:not(.focus){
   opacity:.25;
   filter:grayscale(.7);
 }

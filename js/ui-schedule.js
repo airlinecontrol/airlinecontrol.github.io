@@ -245,6 +245,96 @@ function scheduleLateInboundWarnings(flights,t=simNow(),index=operationalIndex(t
     .map(flight=>({flight,status:lateInboundStatusForFlight(flight,t,{index})}))
     .filter(item=>item.status.active);
 }
+function schedulePassengerConnectionPairs(renderedFlights,focusIds=new Set(),now=simNow()){
+  const visibleById=new Map(renderedFlights.filter(flight=>!flight.cancelled&&!flight.settled).map(flight=>[flight.id,flight]));
+  if(!visibleById.size) return [];
+  const pairs=[];
+  const seen=new Set();
+  const selectedId=selectedFlightId||'';
+  const selectedPairs=[];
+  const warningPairs=[];
+  for(const inbound of visibleById.values()){
+    if(inbound.flightType==='ferry') continue;
+    const manifest=connectionStatusForFlight(inbound);
+    for(const connection of manifest.connections||[]){
+      if(connection.status==='missed') continue;
+      const outbound=visibleById.get(connection.flightId);
+      if(!outbound) continue;
+      const isSelected=Boolean(selectedId&&(inbound.id===selectedId||outbound.id===selectedId));
+      const isWarning=['critical','at-risk'].includes(connection.status);
+      if(!isSelected&&!isWarning) continue;
+      const key=`${inbound.id}->${outbound.id}`;
+      if(seen.has(key)) continue;
+      seen.add(key);
+      const pair={inbound,outbound,connection,selected:isSelected,focused:focusIds.has(inbound.id)||focusIds.has(outbound.id),warning:isWarning};
+      (isSelected?selectedPairs:warningPairs).push(pair);
+    }
+  }
+  pairs.push(...selectedPairs.slice(0,10),...warningPairs.slice(0,8));
+  return pairs.sort((a,b)=>flightActualArrival(a.inbound)-flightActualArrival(b.inbound)||flightActualDeparture(a.outbound)-flightActualDeparture(b.outbound));
+}
+function scheduleConnectionTone(connection){
+  if(connection.status==='critical') return 'critical';
+  if(connection.status==='at-risk') return 'at-risk';
+  return 'protected';
+}
+function scheduleConnectionLabel(connection){
+  const pax=Math.max(0,Math.round(Number(connection.pax)||0));
+  const available=Math.round(Number(connection.availableMin)||0);
+  const mct=Math.round(Number(connection.mctMin)||0);
+  return `${pax}p · ${available}/${mct}m`;
+}
+function renderScheduleConnectionOverlay(board,pairs){
+  board.querySelector('.schedule-connection-overlay')?.remove();
+  if(!pairs.length) return;
+  const boardRect=board.getBoundingClientRect();
+  const width=Math.max(board.scrollWidth,board.offsetWidth,boardRect.width);
+  const height=Math.max(board.scrollHeight,board.offsetHeight,boardRect.height);
+  const paths=[];
+  for(const pair of pairs){
+    const inboundEl=board.querySelector(`.flight-block[data-flight-id="${CSS.escape(pair.inbound.id)}"]`);
+    const outboundEl=board.querySelector(`.flight-block[data-flight-id="${CSS.escape(pair.outbound.id)}"]`);
+    if(!inboundEl||!outboundEl) continue;
+    const from=inboundEl.getBoundingClientRect(),to=outboundEl.getBoundingClientRect();
+    const x1=from.right-boardRect.left;
+    const y1=from.top+from.height*.5-boardRect.top;
+    const x2=to.left-boardRect.left;
+    const y2=to.top+to.height*.5-boardRect.top;
+    if(!Number.isFinite(x1+y1+x2+y2)) continue;
+    const midX=(x1+x2)/2,midY=(y1+y2)/2;
+    const curve=Math.max(32,Math.abs(x2-x1)*.38);
+    const c1=x1+curve,c2=x2-curve;
+    const tone=scheduleConnectionTone(pair.connection);
+    const focusClass=pair.focused||pair.selected?'focus':'';
+    const title=[
+      `${pair.inbound.id} to ${pair.outbound.id}`,
+      `${pair.connection.pax||0} connecting passengers`,
+      `${Math.round(pair.connection.availableMin||0)} min available / ${Math.round(pair.connection.mctMin||0)} min MCT`,
+      pair.connection.status==='protected'?'protected connection':pair.connection.status
+    ].join(' · ');
+    paths.push(`<g class="schedule-passenger-connection ${esc(tone)} ${esc(focusClass)}" data-connection-inbound="${esc(pair.inbound.id)}" data-connection-outbound="${esc(pair.outbound.id)}">
+      <path class="schedule-connection-path ${esc(tone)} ${esc(focusClass)}" d="M ${x1.toFixed(1)} ${y1.toFixed(1)} C ${c1.toFixed(1)} ${y1.toFixed(1)}, ${c2.toFixed(1)} ${y2.toFixed(1)}, ${x2.toFixed(1)} ${y2.toFixed(1)}" marker-end="url(#connection-arrow-${esc(tone)})"><title>${esc(title)}</title></path>
+      <text class="schedule-passenger-connection-label ${esc(tone)} ${esc(focusClass)}" x="${midX.toFixed(1)}" y="${(midY-7).toFixed(1)}"><title>${esc(title)}</title>${esc(scheduleConnectionLabel(pair.connection))}</text>
+    </g>`);
+  }
+  if(!paths.length) return;
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('class','schedule-connection-overlay');
+  svg.setAttribute('width',String(width));
+  svg.setAttribute('height',String(height));
+  svg.setAttribute('viewBox',`0 0 ${width} ${height}`);
+  svg.innerHTML=`<defs>
+    <marker id="connection-arrow-protected" viewBox="0 0 8 8" markerWidth="6" markerHeight="6" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#7fd6e8"></path></marker>
+    <marker id="connection-arrow-at-risk" viewBox="0 0 8 8" markerWidth="6" markerHeight="6" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#e1bd5a"></path></marker>
+    <marker id="connection-arrow-critical" viewBox="0 0 8 8" markerWidth="6" markerHeight="6" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#df5e72"></path></marker>
+  </defs>${paths.join('')}`;
+  board.appendChild(svg);
+  svg.querySelectorAll('[data-connection-inbound]').forEach(element=>element.addEventListener('click',event=>{
+    event.stopPropagation();
+    contextMode='context';
+    settleSelectedFlight(element.dataset.connectionInbound);
+  }));
+}
 function scheduleAircraftRowBadges(aircraft,flights,lateInboundById,now=simNow()){
   if(!flights.length) return '';
   let delayed=0,incidents=0,lateInbound=0,night=0,cancelled=0,shortTurns=0;
@@ -406,6 +496,7 @@ function refreshScheduleTimeline(force=false){
     board.querySelectorAll('[data-sched-aircraft]').forEach(row=>row.addEventListener('dblclick',()=>{contextMode='context';settleSelected(row.dataset.schedAircraft);}));
     if(selectedFlightId) requestAnimationFrame(scrollSelectedScheduleFlightIntoView);
   }
+  renderScheduleConnectionOverlay(board,schedulePassengerConnectionPairs(operationalRelevant,focusIds,now));
   updateScheduleNowLine();
   document.getElementById('schedule-window-label').textContent=`${shortDay(start)} ${shortClock(start)}  →  ${shortDay(end)} ${shortClock(end)}`;
 }
