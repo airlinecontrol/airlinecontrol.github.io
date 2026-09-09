@@ -5,6 +5,10 @@ function retiredIncidentOutcome(type){
   if(type==='alternate_unsuitable') return 'Alternate suitability is tracked as a warning instead of as a standalone incident.';
   if(type==='destination_weather_deterioration') return 'Destination weather deterioration is tracked as a warning instead of as a standalone incident.';
   if(type==='atc_restriction') return 'ATC flow restrictions are tracked as airport-flow causes instead of standalone incidents.';
+  if(type==='gate_conflict') return 'Gate and stand pressure is tracked as station-readiness warnings unless it creates a stronger operational disruption.';
+  if(type==='baggage_loading_issue') return 'Load-control and baggage trouble is tracked as station-readiness delay context unless a security or cancellation decision is required.';
+  if(type==='fueling_issue') return 'Routine fuel uplift constraints are tracked as station-readiness warnings; supplier outages remain incidents.';
+  if(type==='airport_capacity_reduction') return 'Airport flow restrictions are tracked as warnings unless they escalate into a ground stop or another OCC decision case.';
   return 'Slot risk is tracked on the schedule and as linked disruption context instead of as a standalone incident.';
 }
 

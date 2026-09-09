@@ -51,6 +51,13 @@
       ac.flightHours=550; ac.cycles=380;
       ac.maintenance={lastCheckHours:0,lastCheckCycles:0,scheduled:null};
     }`);
+    const melAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const melFlight=w.createFlightRecord({aircraftId:melAc.id,from:'FRA',to:'CDG',departure:now+4*60*60_000,fare:{economy:120,business:300,first:0}});
+    w.eval(`{
+      const ac=state.aircraft.find(item=>item.id==='${melAc.id}');
+      ac.melItems=[{id:'MEL-FIXTURE-32',code:'32-41',title:'Brake temperature indication fault',restriction:'Manual brake cooling calculation',category:'B',status:'open',deferredAt:${now-30*60_000},detectedAt:${now-30*60_000},expiresAt:${now+2*24*60*60_000},remainingCycles:6}];
+      ac.maintenance={lastCheckHours:0,lastCheckCycles:0,scheduled:null};
+    }`);
     const connectionInboundAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'HKG');
     const connectionOnwardAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'SIN');
     const connectionInbound=w.createFlightRecord({aircraftId:connectionInboundAc.id,from:'HKG',to:'SIN',departure:now-150*60_000,fare:{economy:120,business:300,first:0}});
@@ -123,9 +130,13 @@
     assert(warnings.some(item=>item.type==='night_conflict'),'night-curfew warning was not derived');
     assert(warnings.some(item=>item.type==='crew_duty'),'crew-duty warning was not derived');
     assert(warnings.some(item=>item.type==='maintenance'),'maintenance warning was not derived');
+    assert(warnings.some(item=>item.type==='mel_restriction'&&item.aircraftId===melAc.id&&item.detail.includes('MEL 32-41')),'open MEL without scheduled maintenance did not create a restriction warning');
     assert(warnings.some(item=>item.type==='connection_risk'&&item.detail.includes(connectionOnward.id)),'connection-risk warning was not derived');
     assert(warnings.some(item=>item.type==='alternate_coverage'&&item.flightId===alternateFlight.id),'alternate suitability should be a warning');
     assert(!w.createIncident('alternate_unsuitable',alternateFlight,{training:true,detectedAt:now,source:'test'}),'alternate suitability should not be creatable as an incident');
+    for(const retiredType of ['airport_capacity_reduction','gate_conflict','fueling_issue','baggage_loading_issue']){
+      assert(!w.createIncident(retiredType,first,{training:true,detectedAt:now,source:'test'}),`${retiredType} should not be creatable as an incident`);
+    }
     w.processDerivedOperationalIncidents(now);
     assert(!w.openIncidentsForFlight(alternateFlight.id).some(item=>item.type==='alternate_unsuitable'),'alternate suitability warning created an incident');
     w.renderDeskStack(true);
@@ -138,6 +149,15 @@
     if(warnings.some(item=>warnings.filter(other=>other.group===item.group).length>10)){
       assert(d.querySelector('[data-desk-widget="warnings"] .warning-group-more'),'warning groups with overflow should expose a compact disclosure');
     }
+    assert(d.querySelector('[data-desk-widget="warnings"]')?.textContent.includes('MEL 32-41'),'warnings widget does not show MEL restriction detail');
+    w.refreshMaintenanceRail(true);
+    await wait(80);
+    assert(d.querySelector('[data-rail-widget="maintenance"]')?.textContent.includes('MEL 32-41'),'maintenance rail does not show MEL detail');
+    w.eval(`{
+      const ac=state.aircraft.find(item=>item.id==='${melAc.id}');
+      ac.maintenance.scheduled={start:${now+60*60_000},end:${now+2*60*60_000},airport:'FRA',durationHours:1,cost:1000,status:'scheduled'};
+    }`);
+    assert(!w.operationWarnings(now+90*60_000).some(item=>item.type==='mel_restriction'&&item.aircraftId===melAc.id),'MEL warning should clear after a timely maintenance check is scheduled');
     assert(!Array.from(d.querySelectorAll('[data-desk-widget="warnings"] .warning-row em, [data-desk-widget="warnings"] .warning-group-card>header em')).some(node=>/dispatch|crew|maintenance/i.test(node.textContent)),'warning owner department labels should not be rendered');
     const flightWarning=d.querySelector(`[data-desk-widget="warnings"] [data-warning-flight="${second.id}"]`);
     assert(flightWarning,'clickable flight warning is missing');

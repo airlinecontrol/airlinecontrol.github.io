@@ -3,9 +3,7 @@
 const PRE_DEPARTURE_INCIDENT_GENERATORS=[
   {type:'crew_sick',weight:1.05,eligible:f=>flightUsesLocalCrew(f)},
   {type:'mel_defect',weight:.9,eligible:(f,t)=>Management.maintenanceStatus(state.aircraft.find(a=>a.id===f.aircraftId),t)?.due||simulationRandom(`mel-eligibility:${f.id}`)<.45},
-  {type:'gate_conflict',weight:.85},
   {type:'destination_closure_ground',weight:.5,eligible:f=>distanceKm(AIRPORTS[f.from],AIRPORTS[f.to])>250},
-  {type:'fueling_issue',weight:.75},
   {type:'fuel_supplier_outage',weight:.45},
   {type:'security_screening',weight:.55,eligible:f=>f.flightType!=='ferry'},
   {type:'crew_fatigue_report',weight:.55,eligible:f=>flightUsesLocalCrew(f)},

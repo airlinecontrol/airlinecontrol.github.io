@@ -107,11 +107,11 @@ function crewAccommodationExposures(t=simNow()){
       };
       exposure.records=crewRecoveryRecordsForFlight(flight.id);
       exposure.actions=crewRecoveryActionsForExposure(exposure);
-      const confirmedRecord=exposure.records.find(record=>record.status==='confirmed');
-      const activeRecord=exposure.records.find(record=>record.status!=='confirmed');
+      const readyRecord=exposure.records.find(record=>crewRecoveryRecordIsAvailable(record,t));
+      const activeRecord=exposure.records.find(record=>record.status!=='confirmed'||!crewRecoveryRecordIsAvailable(record,t));
       if(activeRecord) exposure.actions=exposure.actions.filter(action=>action.id===activeRecord.action);
       const legacyHandled=!exposure.records.length&&Boolean(flight.crewAccommodationArrangedAt);
-      exposure.arranged=Boolean(confirmedRecord)||legacyHandled;
+      exposure.arranged=Boolean(readyRecord)||legacyHandled;
       exposure.activeRecord=activeRecord||null;
       return exposure;
     })
@@ -165,10 +165,92 @@ function crewRecoveryActionDuration(action){
   return {hotel:25*MIN,transport:18*MIN,stand_down:12*MIN}[action]||20*MIN;
 }
 
+function crewRecoveryFlightFamily(flight){
+  const aircraft=state.aircraft.find(item=>item.id===flight?.aircraftId);
+  return aircraft?Management.aircraftFamily(aircraft.model):'Multi-fleet';
+}
+
+function crewRecoveryRolesForFlight(flight){
+  const aircraft=state.aircraft.find(item=>item.id===flight?.aircraftId);
+  return crewRequirementForFlight(flight,aircraft);
+}
+
+function crewRecoveryAvailabilityPlan(exposure,action,requestedAt=simNow()){
+  const flight=exposure?.flight;
+  const confirmsAt=requestedAt+crewRecoveryActionDuration(action);
+  const releaseAt=flight?flightCrewRelease(flight):confirmsAt;
+  const duty=flight?crewDutyForFlight(flight):null;
+  const plannedRestUntil=Math.max(releaseAt,Number(duty?.restUntil)||releaseAt+10*HOUR);
+  if(action==='hotel'){
+    const transferToHotel=25*MIN;
+    const reportTime=45*MIN;
+    return {
+      confirmsAt,
+      availableAt:Math.max(confirmsAt,plannedRestUntil)+transferToHotel+reportTime,
+      availableAirport:exposure.releaseAirport,
+      detail:'hotel, minimum rest, and report time'
+    };
+  }
+  if(action==='transport'){
+    return {
+      confirmsAt,
+      availableAt:confirmsAt,
+      availableAirport:exposure.plannedReleaseAirport||exposure.releaseAirport,
+      detail:'positioning transport confirmed'
+    };
+  }
+  if(action==='stand_down'){
+    return {
+      confirmsAt,
+      availableAt:Math.max(confirmsAt,plannedRestUntil),
+      availableAirport:exposure.releaseAirport,
+      detail:'stand-down rest complete'
+    };
+  }
+  return {confirmsAt,availableAt:confirmsAt,availableAirport:exposure.releaseAirport,detail:'coordination complete'};
+}
+
+function crewRecoveryRecordIsAvailable(record,t=simNow()){
+  if(!record||record.status!=='confirmed') return false;
+  if(record.availabilityStatus==='available') return true;
+  const availableAt=Number(record.availableAt)||Number(record.completedAt)||Number(record.updatedAt)||0;
+  return availableAt<=t;
+}
+
+function crewRecoveryRoleCount(record,role,family=''){
+  const roles=record?.roles||{};
+  if(!roles[role]) return 0;
+  if(['captains','firstOfficers'].includes(role)&&record.family&&family&&record.family!==family&&record.family!=='Multi-fleet') return 0;
+  return Math.max(0,Math.floor(Number(roles[role])||0));
+}
+
+function crewRecoveryAvailableStaffAt(airport,role,family='',t=simNow(),excludeFlightId=''){
+  return (state.crewRecoveries||[]).reduce((sum,record)=>{
+    if(record.flightId===excludeFlightId) return sum;
+    if(record.availableAirport!==airport||!crewRecoveryRecordIsAvailable(record,t)) return sum;
+    return sum+crewRecoveryRoleCount(record,role,family);
+  },0);
+}
+
+function availableStaffAt(airport,role,t=simNow(),excludeFlightId=''){
+  return staffAt(airport,role)+crewRecoveryAvailableStaffAt(airport,role,'',t,excludeFlightId);
+}
+
+function availableQualifiedStaffAt(airport,role,family,t=simNow(),excludeFlightId=''){
+  return qualifiedStaffAt(airport,role,family)+crewRecoveryAvailableStaffAt(airport,role,family,t,excludeFlightId);
+}
+
 function processCrewRecoveries(t=simNow()){
   let changed=false;
   for(const recovery of state.crewRecoveries||[]){
-    if(recovery.status==='confirmed') continue;
+    if(recovery.status==='confirmed'){
+      if(recovery.availabilityStatus!=='available'&&crewRecoveryRecordIsAvailable(recovery,t)){
+        recovery.availabilityStatus='available';
+        recovery.updatedAt=t;
+        changed=true;
+      }
+      continue;
+    }
     if(recovery.status==='requested'&&t>=recovery.requestedAt+8*MIN){
       recovery.status='in_progress';
       recovery.updatedAt=t;
@@ -178,6 +260,7 @@ function processCrewRecoveries(t=simNow()){
       recovery.status='confirmed';
       recovery.completedAt=t;
       recovery.updatedAt=t;
+      recovery.availabilityStatus=crewRecoveryRecordIsAvailable(recovery,t)?'available':'pending';
       const flight=state.flights.find(item=>item.id===recovery.flightId);
       if(flight){
         if(recovery.action==='hotel') flight.crewAccommodationArrangedAt=t;
@@ -201,6 +284,7 @@ function authorizeCrewRecovery(flightId,action='hotel'){
   if(existing) return toast(`${flight.id}: ${crewRecoveryActionRequestLabel(action)} already ${crewRecoveryStatusLabel(existing.status).toLowerCase()}.`);
   const now=simNow();
   const amount=available.amount;
+  const availability=crewRecoveryAvailabilityPlan(exposure,action,now);
   const event=typeof recordRecoveryCostEvent==='function'?recordRecoveryCostEvent({
     flight,category:'crew',kind:`crew_${action}`,
     amount,crew:exposure.crew,airport:exposure.releaseAirport,
@@ -214,11 +298,18 @@ function authorizeCrewRecovery(flightId,action='hotel'){
     status:'requested',
     requestedAt:now,
     updatedAt:now,
-    confirmsAt:now+crewRecoveryActionDuration(action),
+    confirmsAt:availability.confirmsAt,
     completedAt:0,
+    availableAt:availability.availableAt,
+    availableAirport:availability.availableAirport,
+    availabilityStatus:'pending',
+    availabilityDetail:availability.detail,
     amount,
     crew:exposure.crew,
+    roles:crewRecoveryRolesForFlight(flight),
+    family:crewRecoveryFlightFamily(flight),
     releaseAirport:exposure.releaseAirport,
+    plannedReleaseAirport:exposure.plannedReleaseAirport,
     reason:exposure.reason,
     costEventId:event?.id||''
   });
@@ -402,14 +493,16 @@ function personnelDeficitsForFlight(ac,departure,duration,airport=ac.location,ca
   const {family,needed,qualifiedNeeded}=staffingRequirementSnapshot(ac,departure,duration,airport,candidateId,localFlightCrew,flightType);
   const deficits=[];
   for(const [role,count] of Object.entries(needed)){
-    const missing=Math.max(0,count-staffAt(airport,role));
+    const availableRole=availableStaffAt(airport,role,departure,candidateId);
+    const missing=Math.max(0,count-availableRole);
     if(!['captains','firstOfficers'].includes(role)){
-      if(missing) deficits.push({role,airport,amount:missing,qualification:'',required:count,available:staffAt(airport,role)});
+      if(missing) deficits.push({role,airport,amount:missing,qualification:'',required:count,available:availableRole});
       continue;
     }
-    const ratingMissing=Math.max(0,(qualifiedNeeded[role]||0)-qualifiedStaffAt(airport,role,family));
+    const availableRated=availableQualifiedStaffAt(airport,role,family,departure,candidateId);
+    const ratingMissing=Math.max(0,(qualifiedNeeded[role]||0)-availableRated);
     const amount=Math.max(missing,ratingMissing);
-    if(amount) deficits.push({role,airport,amount,qualification:family,required:Math.max(count,qualifiedNeeded[role]||0),available:Math.min(staffAt(airport,role),qualifiedStaffAt(airport,role,family))});
+    if(amount) deficits.push({role,airport,amount,qualification:family,required:Math.max(count,qualifiedNeeded[role]||0),available:Math.min(availableRole,availableRated)});
   }
   return deficits;
 }

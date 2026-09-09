@@ -90,6 +90,20 @@ function repairIncidentPhaseRealism(t=simNow()){
     if(!flight) continue;
     const started=incidentTasks(incident.id).some(task=>['completed','in_progress','waiting_external'].includes(task.status));
     if(started) continue;
+    if(incident.type==='postflight_technical_defect'&&!postflightTechnicalContextForFlight(flight,t)){
+      incident.status='resolved';
+      incident.blocking=false;
+      incident.resolvedAt=t;
+      incident.automaticResolution=true;
+      incident.autoClosedAt=t;
+      incident.autoCloseReason='phase_repair';
+      incident.outcome='Closed: this post-flight defect is not valid until the inbound aircraft has arrived on-block.';
+      incident.context={...(incident.context||{}),phaseRepair:'Post-flight defect closed before inbound arrival'};
+      for(const task of incidentTasks(incident.id)) if(task.status!=='completed') task.status='cancelled';
+      if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'auto_closed',{reason:'phase_repair'});
+      changed=true;
+      continue;
+    }
     const beforeTakeoff=incidentIsBeforeTakeoff(incident.type,flight,t);
     if(incident.type==='destination_closure'&&beforeTakeoff){
       incident.type='destination_closure_ground';
@@ -220,6 +234,11 @@ function finalizeOperationalCase(incident){
     if(incident.selectedStrategy==='schedule_check') incident.outcome=`Maintenance check scheduled for ${incident.maintenanceCheckTail||aircraft?.tail||'aircraft'}.`;
     else if(incident.selectedStrategy==='substitute') incident.outcome=`Replacement aircraft ${incident.replacementAircraftTail||''} assigned and the technical disruption was recovered.`;
     else incident.outcome=`Defect deferred under MEL ${incident.technicalContext?.code||''}; dispatch accepted the restrictions.`;
+  }else if(incident.type==='maintenance_resource_unavailable'){
+    if(incident.selectedStrategy==='send_mobile_team') incident.outcome=`Mobile maintenance team dispatched to ${incident.mobileMaintenanceAirport||flight.from}; local check scheduling is now available when the team arrives.`;
+    else if(incident.selectedStrategy==='ferry_to_maintenance') incident.outcome=`Maintenance ferry ${incident.maintenanceFerryId||''} planned to ${incident.maintenanceFerryAirport||'a maintenance-capable station'}.`;
+    else if(incident.selectedStrategy==='substitute') incident.outcome=`Replacement aircraft ${incident.replacementAircraftTail||''} assigned while the original aircraft awaits maintenance support.`;
+    else incident.outcome='Maintenance-resource recovery path recorded.';
   }else if(['airport_capacity_reduction','atc_ground_stop'].includes(incident.type)){
     applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||45);
     incident.outcome=incident.atcOutcome||'Returned airport flow opportunity incorporated into the operating plan.';
@@ -466,7 +485,8 @@ function processOperationalWorkflows(t=simNow()){
 
 function applyIncidentAircraftSubstitution(incident,optionId){
   const flight=state.flights.find(item=>item.id===incident.flightId&&!item.cancelled);
-  const option=incidentAircraftReplacementOptions(incident).find(item=>item.id===optionId);
+  const options=incident.type==='fuel_supplier_outage' ? fuelSupplierReplacementOptions(incident) : incidentAircraftReplacementOptions(incident);
+  const option=options.find(item=>item.id===optionId);
   if(!flight||!option) return toast('No suitable replacement aircraft is available. Request or position an aircraft in Dispatch.');
   const replacement=state.aircraft.find(item=>item.id===option.aircraftId);
   const original=state.aircraft.find(item=>item.id===flight.aircraftId);
@@ -518,6 +538,7 @@ const STATION_RECOVERY_EFFECTS={
   wait_truck:{delay:35,outcome:'Fuel truck delay accepted and fuel completion time updated.'},
   wait_supply:{delay:75,outcome:'Fuel supplier outage recovery ETA accepted and departure plan updated.'},
   minimum_uplift:{delay:15,outcome:'Minimum compliant fuel uplift confirmed with dispatch.'},
+  tanker_inbound:{delay:10,outcome:'Inbound tanker fuel coordinated; departure protected without relying on local fuel supply.'},
   deice:{delay:25,outcome:'Aircraft deicing completed and a holdover window was started.'},
   priority_deice:{delay:15,outcome:'Station accepted priority deicing and a holdover window was started.'},
   deice_queue:{delay:60,outcome:'Aircraft entered the constrained deicing queue and a treatment sequence was confirmed.'},
@@ -781,6 +802,15 @@ function performOperationalTask(taskId,actionId='',payload={}){
     completeOperationalTask(task,`${aircraft.tail} maintenance check scheduled ${formatTime(plan.start)}-${formatTime(plan.end)}.`);
     recalculateOperations();
     AeroServices.persist();
+  }else if(task.kind==='mobile_maintenance_team'){
+    const plan=applyMobileMaintenanceTeam(incident);
+    if(!plan) return false;
+    incident.mobileMaintenanceSource=plan.source;
+    incident.mobileMaintenanceAirport=plan.airport;
+    incident.mobileMaintenanceArrivesAt=plan.arrivesAt;
+    incident.mobileMaintenanceCost=plan.cost;
+    task.selection={action:'send_mobile_team',source:plan.source,airport:plan.airport,responseMin:plan.responseMin,cost:plan.cost};
+    createExternalWorkflowRequest(task,'Mobile maintenance control',plan.responseMin,`${plan.source} mobile team available at ${plan.airport}; schedule the check locally.`);
   }else if(task.kind==='maintenance_clearance'){
     const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
     if(aircraft){ aircraft.defectUntil=0; aircraft.defectReason=''; aircraft.condition=clamp((aircraft.condition??100)-1,0,100); }
@@ -798,6 +828,14 @@ function performOperationalTask(taskId,actionId='',payload={}){
     incident.positioningFerryId=plan.ferry?.id||'';
     task.selection={action:'check_ferry',ferryFlightId:incident.positioningFerryId,projectedLocation:plan.projection?.location||''};
     completeOperationalTask(task,incident.positioningFerryId?`Positioning ferry ${incident.positioningFerryId} confirmed.`:'Aircraft projection confirmed at origin.');
+  }else if(task.kind==='manual_maintenance_ferry_required'){
+    const plan=maintenanceFerryPlanState(incident);
+    if(!plan.ready) return toast(plan.reason);
+    incident.selectedStrategy='ferry_to_maintenance';
+    incident.maintenanceFerryId=plan.ferry?.id||'';
+    incident.maintenanceFerryAirport=plan.to;
+    task.selection={action:'check_maintenance_ferry',ferryFlightId:incident.maintenanceFerryId,to:plan.to};
+    completeOperationalTask(task,incident.maintenanceFerryId?`Maintenance ferry ${incident.maintenanceFerryId} confirmed to ${plan.to}.`:`${plan.aircraft?.tail||'Aircraft'} maintenance positioning confirmed.`);
   }else if(task.kind==='manual_crew_move_required'){
     const plan=crewRelocationPlanState(incident);
     if(!plan.ready) return toast(plan.reason);
@@ -862,7 +900,13 @@ function performOperationalTask(taskId,actionId='',payload={}){
     const outcome=action==='deice_queue'&&incident.context?.demand
       ? `Station sequenced ${incident.context.demand} deicing-demand departures; treatment queue accepted.`
       : effect.outcome;
-    if(task.kind==='fuel_recovery'&&['priority','fuel_outage_priority','minimum_uplift'].includes(action)) fuelFlight(flight,simNow(),true);
+    if(task.kind==='fuel_recovery'&&action==='tanker_inbound'){
+      const plan=applyFuelOutageTankerPlan(incident);
+      if(!plan) return false;
+      incident.fuelTankerPlan={mode:plan.mode,previousFlightId:plan.previousFlightId||'',targetFuelGal:plan.targetFuelGal,extraFuelGal:plan.extraFuelGal,cost:plan.cost};
+    }else if(task.kind==='fuel_recovery'&&['priority','fuel_outage_priority','minimum_uplift'].includes(action)){
+      fuelFlight(flight,simNow(),true);
+    }
     if(task.kind==='security_coordination'&&action==='offload_passenger'&&flight.pax>0){
       flight.pax=Math.max(0,flight.pax-1);
       if(flight.classPax?.economy) flight.classPax.economy=Math.max(0,flight.classPax.economy-1);

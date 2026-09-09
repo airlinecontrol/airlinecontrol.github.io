@@ -213,17 +213,23 @@ window.AeroManagement = (() => {
   function operationalKpis(state,now,days=30,startOverride=null,endOverride=null){
     const start=startOverride??now-days*DAY;
     const end=endOverride??now;
-    const completed=(state.flights||[]).filter(f=>f.settled&&(f.actualArrival??f.arrival)>=start&&(f.actualArrival??f.arrival)<end);
-    const cancelled=(state.flights||[]).filter(f=>f.cancelled&&f.cancelledAt>=start&&f.cancelledAt<end);
+    const completed=[
+      ...(state.flights||[]).filter(f=>f.settled&&(f.actualArrival??f.arrival)>=start&&(f.actualArrival??f.arrival)<end),
+      ...(state.flightHistory||[]).filter(f=>f.settled&&(f.actualArrival??f.arrival)>=start&&(f.actualArrival??f.arrival)<end)
+    ];
+    const cancelled=[
+      ...(state.flights||[]).filter(f=>f.cancelled&&f.cancelledAt>=start&&f.cancelledAt<end),
+      ...(state.flightHistory||[]).filter(f=>f.cancelled&&f.cancelledAt>=start&&f.cancelledAt<end)
+    ];
     const operated=completed.length;
     const total=operated+cancelled.length;
     const onTime=completed.filter(f=>((f.actualArrival??f.arrival)-f.arrival)<=15*MIN).length;
     const arrivalDelay=completed.reduce((sum,f)=>sum+Math.max(0,((f.actualArrival??f.arrival)-f.arrival)/MIN),0);
     const pax=completed.reduce((sum,f)=>sum+(Number(f.pax)||0),0);
-    const seats=completed.reduce((sum,f)=>sum+(f.load?Math.round((Number(f.pax)||0)/f.load):Number(f.pax)||0),0);
+    const seats=completed.reduce((sum,f)=>sum+(Number(f.seats)||0||(f.load?Math.round((Number(f.pax)||0)/f.load):Number(f.pax)||0)),0);
     const revenue=completed.reduce((sum,f)=>sum+(Number(f.revenue)||0),0);
     const directCosts=completed.reduce((sum,f)=>sum+(Number(f.costs)||0),0);
-    const blockHours=completed.reduce((sum,f)=>sum+Math.max(0,(f.arrival-f.departure)/HOUR),0);
+    const blockHours=completed.reduce((sum,f)=>sum+(Number(f.blockHours)||Math.max(0,(f.arrival-f.departure)/HOUR)),0);
     const periodDays=Math.max(1,(end-start)/DAY);
     return {
       completed:operated,cancelled:cancelled.length,total,

@@ -361,6 +361,12 @@ function previousAircraftFlight(flight){
     .sort((a,b)=>b.departure-a.departure)[0]||null;
 }
 
+function inboundAircraftReadyForPostflightInspection(previous,station,t=simNow()){
+  if(!previous||previous.flightType==='ferry'||!previous.departureLogged) return false;
+  if(flightOperationalDestination(previous)!==station) return false;
+  return statusOfFlight(previous,t)==='arrived';
+}
+
 function lateInboundStatusForFlight(flight,t=simNow(),context={}){
   if(!flight||flight.cancelled||flight.settled||flight.departureLogged||flight.flightType==='ferry') return {active:false,delayMin:0};
   const index=context.index||operationalIndex(t);
@@ -1652,9 +1658,9 @@ function postflightTechnicalContextForFlight(flight,t=simNow()){
   if(flight.departureLogged||flight.flightType==='ferry') return null;
   const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
   const previous=previousAircraftFlight(flight);
-  if(!aircraft||!previous||flightOperationalDestination(previous)!==flight.from) return null;
+  if(!aircraft||!inboundAircraftReadyForPostflightInspection(previous,flight.from,t)) return null;
   const previousArrival=flightActualArrival(previous);
-  if(previousArrival>t||previousArrival<t-4*HOUR) return null;
+  if(previousArrival<t-4*HOUR) return null;
   const inspectionRequired=Boolean(previous.arrivalInspectionRequired||aircraft.arrivalInspectionRequired);
   const poorCondition=(aircraft.condition??100)<76;
   const maintenanceDue=Boolean(Management.maintenanceStatus(aircraft,t)?.due);
@@ -1763,6 +1769,11 @@ function performanceLimitContextForFlight(flight,t=simNow()){
   };
 }
 
+function performanceLimitIncidentRequired(context){
+  if(!context?.active) return false;
+  return Number(context.rangeMarginKm)<0||Number(context.fuelMarginGal)<0||Number(context.payloadReductionPct)>=18;
+}
+
 function destinationHandlingContextForFlight(flight,t=simNow()){
   if(flight.flightType==='ferry'||t<flight.departure-6*HOUR||flight.settled) return null;
   const destination=flightOperationalDestination(flight);
@@ -1778,6 +1789,11 @@ function destinationHandlingContextForFlight(flight,t=simNow()){
     delayMin:flight.departureLogged?25:35,
     active:true
   };
+}
+
+function destinationHandlingIncidentRequired(flight,context){
+  if(!context?.active||!flight) return false;
+  return Boolean(flight.departureLogged||flight.diversionAirport);
 }
 
 function diversionAirportUnavailableContextForFlight(flight,t=simNow()){
@@ -1952,6 +1968,108 @@ function incidentAircraftReplacementOptions(incident){
       ferryDeparture,ferryArrival:ferryDeparture+ferry.duration,
       label:`${ac.tail} · ${ac.model} from ${ac.location}`,detail:`${impact}; positioning flight to ${target.from}${delayMin?` · delays departure ${delayMin} min`:''}.`};
   }).filter(Boolean).sort((a,b)=>a.delayMin-b.delayMin||a.tail.localeCompare(b.tail)).slice(0,8);
+}
+
+function incidentAircraftReplacementOptionsForTask(incident,task=null){
+  if(incident?.type!=='fuel_supplier_outage') return incidentAircraftReplacementOptions(incident);
+  return fuelSupplierReplacementOptions(incident);
+}
+
+function fuelSupplierTargetFlight(incident){
+  const flight=state.flights.find(item=>item.id===incident?.flightId&&!item.cancelled);
+  if(!flight) return null;
+  const {service,outbound}=rotationForFlight(flight);
+  return service&&outbound?outbound:flight;
+}
+
+function fuelSupplierReplacementOptions(incident){
+  const target=fuelSupplierTargetFlight(incident);
+  if(!target||target.departureLogged||target.fueled) return [];
+  return incidentAircraftReplacementOptions(incident).filter(option=>{
+    if(option.mode!=='local') return false;
+    const aircraft=state.aircraft.find(item=>item.id===option.aircraftId);
+    if(!aircraft) return false;
+    const plan=flightFuelPlan(target.from,flightOperationalDestination(target),aircraft);
+    return (Number(aircraft.fuelGallons)||0)>=plan.requiredGal;
+  }).map(option=>({
+    ...option,
+    detail:`${option.impact}; fuel already onboard for ${target.from}-${flightOperationalDestination(target)}.`
+  }));
+}
+
+function fuelOutageTankerPlan(incident){
+  const target=fuelSupplierTargetFlight(incident);
+  const aircraft=target&&state.aircraft.find(item=>item.id===target.aircraftId);
+  if(!target||!aircraft) return {available:false,reason:'The affected flight or aircraft is no longer available.'};
+  if(target.cancelled||target.departureLogged) return {available:false,reason:'Tanker fuel is only useful before the affected flight departs.'};
+  if(target.fueled) return {available:false,reason:'The affected flight is already fueled.'};
+  const targetPlan=flightFuelPlan(target.from,flightOperationalDestination(target),aircraft);
+  const onboard=Math.max(0,Number(aircraft.fuelGallons)||0);
+  if(aircraft.location===target.from&&onboard>=targetPlan.requiredGal){
+    return {
+      available:true,mode:'onboard',targetFlight:target,aircraft,targetPlan,
+      targetFuelGal:targetPlan.requiredGal,delayMin:0,extraFuelGal:0,cost:0,
+      reason:`${aircraft.tail} already has enough onboard fuel for ${target.from}-${flightOperationalDestination(target)}.`
+    };
+  }
+  const previous=previousAircraftFlight(target);
+  if(!previous||previous.cancelled||flightOperationalDestination(previous)!==target.from){
+    return {available:false,reason:'No inbound leg reaches the disrupted station before this flight.'};
+  }
+  if(previous.departureLogged){
+    return {available:false,reason:`${previous.id} has already departed, so extra tanker fuel can no longer be loaded upstream.`};
+  }
+  const previousPlan=flightFuelPlan(previous.from,flightOperationalDestination(previous),aircraft);
+  const combinedFuelGal=Math.ceil(previousPlan.tripBurnGal+targetPlan.requiredGal);
+  const usableCapacity=Math.floor(targetPlan.fuelCapacityGal*.96);
+  if(combinedFuelGal>usableCapacity){
+    return {available:false,reason:`${aircraft.tail} cannot carry enough fuel for ${previous.id} plus the next sector without exceeding practical tank capacity.`};
+  }
+  const extraFuelGal=Math.max(0,combinedFuelGal-onboard);
+  const cost=Math.round(extraFuelGal*(state.fuelMarket?.pricePerGallon||FUEL_MARKET_BASE_EUR_GAL)*1.08+450);
+  return {
+    available:true,mode:'previous_leg',targetFlight:target,previousFlight:previous,aircraft,targetPlan,previousPlan,
+    previousFlightId:previous.id,combinedFuelGal,targetFuelGal:targetPlan.requiredGal,extraFuelGal,cost,delayMin:10,
+    reason:`Load tanker fuel on ${previous.id}; ${aircraft.tail} should arrive at ${target.from} with enough fuel for ${target.id}.`
+  };
+}
+
+function applyFuelOutageTankerPlan(incident){
+  const plan=fuelOutageTankerPlan(incident);
+  if(!plan.available) return toast(plan.reason);
+  const flight=plan.targetFlight, aircraft=plan.aircraft;
+  if(plan.mode==='previous_leg'&&plan.previousFlight){
+    const previous=plan.previousFlight;
+    const purchased=Math.max(0,Math.ceil(plan.combinedFuelGal-(Number(aircraft.fuelGallons)||0)));
+    aircraft.fuelGallons=Math.max(Number(aircraft.fuelGallons)||0,plan.combinedFuelGal);
+    previous.fueled=true;
+    previous.fuelOnboardAtDeparture=aircraft.fuelGallons;
+    previous.fuelRequiredGallons=plan.previousPlan.requiredGal;
+    previous.tripFuelGallons=plan.previousPlan.tripBurnGal;
+    previous.fuelReserveGallons=plan.previousPlan.reserveGal;
+    previous.fuelCapacityGallons=plan.previousPlan.fuelCapacityGal;
+    previous.fuelPurchasedGallons=(Number(previous.fuelPurchasedGallons)||0)+purchased;
+    previous.fuelPricePerGallon=state.fuelMarket?.pricePerGallon||FUEL_MARKET_BASE_EUR_GAL;
+    previous.tankerFuelForFlightId=flight.id;
+  }
+  flight.fueled=true;
+  flight.fueledAt=simNow();
+  flight.fuelGallons=0;
+  flight.fuelPurchasedGallons=0;
+  flight.fuelRequiredGallons=plan.targetPlan.requiredGal;
+  flight.fuelOnboardAtDeparture=plan.targetFuelGal;
+  flight.tripFuelGallons=plan.targetPlan.tripBurnGal;
+  flight.fuelReserveGallons=plan.targetPlan.reserveGal;
+  flight.fuelCapacityGallons=plan.targetPlan.fuelCapacityGal;
+  flight.tankerFuelPlanned=true;
+  flight.tankerFuelPreviousFlightId=plan.previousFlightId||'';
+  if(plan.cost){
+    flight.economics??={ticketRevenue:flight.revenue||0};
+    flight.economics.recoveryOps=(Number(flight.economics.recoveryOps)||0)+plan.cost;
+    refreshEconomicsTotals(flight);
+    postTransaction(-plan.cost,'Fuel tanker',`${flight.id} protected from supplier outage${plan.previousFlightId?` via ${plan.previousFlightId}`:''}`,flight.id);
+  }
+  return plan;
 }
 
 function fuelFlight(f,t,force=false){
@@ -2212,6 +2330,103 @@ function processFlightLifecycleTransitions(t=simNow()){
   return {changed,needsRecalc};
 }
 
+function compactFlightHistoryRecord(f){
+  const actualDeparture=flightActualDeparture(f),actualArrival=flightActualArrival(f);
+  return {
+    id:f.id,serviceId:f.serviceId||'',serviceLeg:f.serviceLeg||'',aircraftId:f.aircraftId||'',
+    from:f.from,to:f.to,operationalDestination:flightOperationalDestination(f),flightType:f.flightType||'passenger',
+    departure:f.departure,arrival:f.arrival,actualDeparture,actualArrival,
+    settled:Boolean(f.settled),cancelled:Boolean(f.cancelled),cancelledAt:f.cancelledAt||0,
+    pax:Number(f.pax)||0,seats:f.load?Math.round((Number(f.pax)||0)/f.load):Number(f.pax)||0,
+    revenue:Number(f.revenue)||0,costs:Number(f.costs)||0,cancellationCost:Number(f.cancellationCost)||0,
+    delayMin:Math.max(0,Math.round((actualArrival-f.arrival)/MIN)),
+    blockHours:Math.max(0,(f.arrival-f.departure)/HOUR)
+  };
+}
+
+function flightHasOpenOperationalWork(flightId){
+  if(!flightId) return false;
+  if((state.incidents||[]).some(item=>item.flightId===flightId&&item.status==='open')) return true;
+  if((state.coordinationTasks||[]).some(item=>item.flightId===flightId&&!['completed','cancelled'].includes(item.status))) return true;
+  if((state.personnelTransfers||[]).some(item=>item.flightId===flightId&&!['completed','cancelled'].includes(item.status))) return true;
+  if((state.passengerRecoveries||[]).some(item=>item.flightId===flightId&&!['confirmed','cancelled'].includes(item.status))) return true;
+  if((state.crewRecoveries||[]).some(item=>item.flightId===flightId&&!['confirmed','cancelled'].includes(item.status))) return true;
+  return false;
+}
+
+function pruneOperationalFlightRetention(t=simNow()){
+  const pastCutoff=t-OPERATIONAL_PAST_FLIGHT_RETENTION;
+  const futureCutoff=t+OPERATIONAL_FUTURE_FLIGHT_HORIZON;
+  const removedIds=new Set();
+  const removedFutureOutboundByService=new Map();
+  const historyById=new Map((state.flightHistory||[]).map(item=>[item.id,item]));
+
+  const shouldPruneFutureFlight=flight=>{
+    if(flight.cancelled||flight.settled||flight.departureLogged) return false;
+    if(flightActualDeparture(flight)<=futureCutoff) return false;
+    if(flight.serviceId){
+      const rotation=rotationForFlight(flight);
+      const outbound=rotation.outbound||flight;
+      const outboundDeparture=flightActualDeparture(outbound);
+      if(outboundDeparture<=futureCutoff) return false;
+      const current=removedFutureOutboundByService.get(flight.serviceId);
+      if(!Number.isFinite(current)||outboundDeparture<current) removedFutureOutboundByService.set(flight.serviceId,outboundDeparture);
+    }
+    return true;
+  };
+
+  for(const flight of state.flights||[]){
+    if(flightHasOpenOperationalWork(flight.id)) continue;
+    const terminalAt=flight.settled
+      ? flightActualArrival(flight)
+      : flight.cancelled
+        ? (flight.cancelledAt||flightActualDeparture(flight))
+        : 0;
+    if(terminalAt&&terminalAt<pastCutoff){
+      historyById.set(flight.id,compactFlightHistoryRecord(flight));
+      removedIds.add(flight.id);
+      continue;
+    }
+    if(shouldPruneFutureFlight(flight)) removedIds.add(flight.id);
+  }
+
+  if(!removedIds.size){
+    const trimmed=[...historyById.values()].filter(item=>(item.actualArrival||item.cancelledAt||item.arrival)>=t-FLIGHT_HISTORY_RETENTION);
+    const changed=trimmed.length!==(state.flightHistory||[]).length;
+    state.flightHistory=trimmed;
+    return changed;
+  }
+
+  state.flights=state.flights.filter(flight=>!removedIds.has(flight.id));
+  for(const [serviceId,departure] of removedFutureOutboundByService.entries()){
+    const service=state.services.find(item=>item.id===serviceId&&item.active);
+    if(service&&departure<service.nextDeparture) service.nextDeparture=departure;
+  }
+  const removedIncidentIds=new Set(
+    (state.incidents||[])
+      .filter(incident=>removedIds.has(incident.flightId)&&incident.status!=='open')
+      .map(incident=>incident.id)
+  );
+  state.incidents=(state.incidents||[]).filter(incident=>!removedIncidentIds.has(incident.id)&&!removedIds.has(incident.flightId));
+  state.coordinationTasks=(state.coordinationTasks||[]).filter(task=>!removedIncidentIds.has(task.incidentId)&&!removedIds.has(task.flightId));
+  state.personnelTransfers=(state.personnelTransfers||[]).filter(item=>!removedIds.has(item.flightId)||!['completed','cancelled'].includes(item.status));
+  state.passengerRecoveries=(state.passengerRecoveries||[]).filter(item=>!removedIds.has(item.flightId)||!['confirmed','cancelled'].includes(item.status));
+  state.crewRecoveries=(state.crewRecoveries||[]).filter(item=>!removedIds.has(item.flightId)||!['confirmed','cancelled'].includes(item.status));
+  state.crewDuties=(state.crewDuties||[]).map(duty=>({
+    ...duty,
+    flightIds:(duty.flightIds||[]).filter(id=>!removedIds.has(id))
+  })).filter(duty=>duty.flightIds.length||Math.max(duty.releaseAt||0,duty.dutyEnd||0)>=pastCutoff);
+  if(selectedFlightId&&removedIds.has(selectedFlightId)) selectedFlightId=null;
+  if(state.warningRegistry&&typeof state.warningRegistry==='object'){
+    for(const [key,warning] of Object.entries(state.warningRegistry)){
+      if(removedIds.has(warning?.flightId)) delete state.warningRegistry[key];
+    }
+  }
+  state.flightHistory=[...historyById.values()].filter(item=>(item.actualArrival||item.cancelledAt||item.arrival)>=t-FLIGHT_HISTORY_RETENTION);
+  invalidateOperationalIndex();
+  return true;
+}
+
 function eventProcessingContext(t){
   return {
     t,
@@ -2250,6 +2465,7 @@ function processStateRepairEvents(ctx){
     ctx.markChanged('phaseRealismRepairedFlag');
   }
   if(repairIncidentPhaseRealism(t)) ctx.markChanged('repairIncidentPhaseRealism');
+  if(pruneOperationalFlightRetention(t)) ctx.markChanged('pruneOperationalFlightRetention',true);
 }
 
 function processOperationalTimerEvents(ctx){
@@ -2751,6 +2967,149 @@ function acknowledgeAircraftIssue(aircraftId){
   toast(`${ac.tail} issue acknowledged. It will return if the situation changes.`);
 }
 
+function maintenanceSupportAtAirport(airportCode,aircraft=null,t=simNow()){
+  const airport=AIRPORTS[airportCode], market=AIRPORT_MARKETS[airportCode], costs=AIRPORT_COSTS[airportCode], ops=AIRPORT_OPS[airportCode];
+  if(!airport||!market||!costs||!ops) return {available:false,score:0,source:'none',airport:airportCode,label:'No airport maintenance profile'};
+  if(
+    aircraft?.mobileMaintenanceAirport===airportCode&&
+    Number(aircraft.mobileMaintenanceAvailableAt||0)<=t&&
+    Number(aircraft.mobileMaintenanceUntil||0)>t
+  ){
+    return {available:true,score:80,source:'mobile_team',airport:airportCode,label:'mobile maintenance team on site'};
+  }
+  const stationGround=staffAt(airportCode,'groundHandling');
+  const stationOps=staffAt(airportCode,'operations');
+  const ownScore=Math.min(100,stationGround*6+stationOps*8);
+  if(airportCode===state.home||ownScore>=42){
+    return {
+      available:true,score:Math.max(75,ownScore),source:airportCode===state.home?'home_base':'line_station',airport:airportCode,
+      responseMin:airportCode===state.home?25:40,
+      label:airportCode===state.home?'home-base line maintenance':`own line station maintenance · support ${Math.max(75,ownScore)}%`
+    };
+  }
+  const seats=MODELS[aircraft?.model]?.seats||120;
+  const heavy=seats>=250;
+  const contractScore=Math.round((market.hub*.42+market.size*.34+market.business*.18+market.wealth*.06)*100);
+  const available=contractScore>=(heavy?82:66)&&costs.handlingBase>0;
+  return {
+    available,score:available?contractScore:0,source:available?'contract':'none',airport:airportCode,
+    responseMin:available?Math.round(55+(100-contractScore)*.8):0,
+    label:available?`contract line maintenance · readiness ${contractScore}%`:'no modeled line-maintenance support'
+  };
+}
+
+function maintenanceSupportOptions(airportCode,aircraft=null,t=simNow()){
+  return Object.keys(AIRPORTS)
+    .map(code=>{
+      const support=maintenanceSupportAtAirport(code,aircraft,t);
+      if(!support.available) return null;
+      const km=AIRPORTS[airportCode]&&AIRPORTS[code]?distanceKm(AIRPORTS[airportCode],AIRPORTS[code]):Infinity;
+      return {...support,km};
+    })
+    .filter(Boolean)
+    .sort((a,b)=>a.km-b.km||b.score-a.score);
+}
+
+function mobileMaintenanceTeamPlan(incident,t=simNow()){
+  const flight=state.flights.find(item=>item.id===incident?.flightId&&!item.cancelled);
+  const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
+  const airport=incident?.context?.airport||flight?.from||aircraft?.location;
+  if(!flight||!aircraft||!AIRPORTS[airport]) return {available:false,reason:'The affected aircraft or airport is no longer available.'};
+  const candidates=maintenanceSupportOptions(airport,aircraft,t).filter(item=>item.airport!==airport);
+  if(!candidates.length) return {available:false,reason:`No maintenance-capable station can dispatch a mobile team to ${airport}.`};
+  const source=candidates[0];
+  const responseMin=Math.round(75+source.km/650*60);
+  const cost=Math.round(3200+source.km*6+(MODELS[aircraft.model]?.seats||120)*18);
+  return {
+    available:true,aircraft,flight,airport,source:source.airport,sourceLabel:source.label,
+    responseMin,cost,arrivesAt:t+responseMin*MIN,
+    reason:`Mobile team from ${source.airport} can reach ${airport} in about ${responseMin} minutes.`
+  };
+}
+
+function applyMobileMaintenanceTeam(incident){
+  const plan=mobileMaintenanceTeamPlan(incident);
+  if(!plan.available) return toast(plan.reason);
+  plan.aircraft.mobileMaintenanceAirport=plan.airport;
+  plan.aircraft.mobileMaintenanceAvailableAt=plan.arrivesAt;
+  plan.aircraft.mobileMaintenanceUntil=plan.arrivesAt+8*HOUR;
+  plan.aircraft.mobileMaintenanceSource=plan.source;
+  plan.flight.economics??={ticketRevenue:plan.flight.revenue||0};
+  plan.flight.economics.recoveryOps=(Number(plan.flight.economics.recoveryOps)||0)+plan.cost;
+  refreshEconomicsTotals(plan.flight);
+  postTransaction(-plan.cost,'Mobile maintenance',`${plan.aircraft.tail} team ${plan.source} → ${plan.airport}`,plan.flight.id);
+  return plan;
+}
+
+function maintenanceFerryPlanState(incident,t=simNow()){
+  const flight=state.flights.find(item=>item.id===incident?.flightId&&!item.cancelled);
+  const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
+  const from=incident?.context?.airport||flight?.from||aircraft?.location;
+  if(!flight||!aircraft||!AIRPORTS[from]) return {ready:false,reason:'The affected aircraft or airport is no longer available.'};
+  if(incident?.technicalContext?.deferAllowed===false||aircraft.defectUntil>t){
+    return {ready:false,flight,aircraft,from,to:'',reason:'This aircraft is not legal to ferry until Maintenance Control clears a ferry permit or sends support to the aircraft.'};
+  }
+  const capable=maintenanceSupportOptions(from,aircraft,t).filter(item=>item.airport!==from);
+  if(!capable.length) return {ready:false,reason:`No maintenance-capable airport is available for ${aircraft.tail}.`};
+  const ferry=(state.flights||[]).find(item=>
+    item.flightType==='ferry'&&item.aircraftId===aircraft.id&&!item.cancelled&&!item.settled&&
+    item.from===from&&capable.some(candidate=>candidate.airport===flightOperationalDestination(item))&&
+    flightActualDeparture(item)>=t-5*MIN
+  );
+  if(!ferry){
+    return {
+      ready:false,aircraft,flight,from,to:capable[0].airport,
+      reason:`Create a ferry flight from ${from} to a maintenance-capable station, for example ${capable[0].airport}.`
+    };
+  }
+  return {ready:true,aircraft,flight,from,to:flightOperationalDestination(ferry),ferry,reason:`${ferry.id} positions ${aircraft.tail} to maintenance support at ${flightOperationalDestination(ferry)}.`};
+}
+
+function maintenanceResourceContextForFlight(flight,t=simNow()){
+  if(!flight||flight.cancelled||flight.settled||flight.departureLogged||flight.flightType==='ferry') return null;
+  const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
+  if(!aircraft) return null;
+  const status=Management.maintenanceStatus(aircraft,t);
+  const postflight=postflightTechnicalContextForFlight(flight,t);
+  const maintenanceNeeded=Boolean(
+    status?.grounding||
+    aircraft.defectUntil>t||
+    postflight?.reason==='scheduled maintenance due after inbound'||
+    (postflight?.active&&postflight.delayMin>=45)
+  );
+  if(!maintenanceNeeded) return null;
+  const support=maintenanceSupportAtAirport(flight.from,aircraft,t);
+  if(support.available) return null;
+  return {
+    sourceId:flight.id,
+    aircraftId:aircraft.id,
+    tail:aircraft.tail,
+    airport:flight.from,
+    reason:aircraft.defectReason||postflight?.reason||status?.label||'Maintenance required',
+    supportLabel:support.label,
+    active:true
+  };
+}
+
+function createMaintenanceResourceIncidentForAircraft(aircraft,airport,context={}){
+  const flight=(state.flights||[]).filter(item=>
+    item.aircraftId===aircraft.id&&!item.cancelled&&!item.settled&&!item.departureLogged&&item.from===airport
+  ).sort((a,b)=>flightActualDeparture(a)-flightActualDeparture(b)||a.id.localeCompare(b.id))[0];
+  if(!flight) return null;
+  const incidentContext={
+    sourceId:`${aircraft.id}:${airport}:maintenance-resource`,
+    aircraftId:aircraft.id,tail:aircraft.tail,airport,
+    reason:context.reason||aircraft.defectReason||'Maintenance required',
+    supportLabel:context.supportLabel||maintenanceSupportAtAirport(airport,aircraft).label,
+    active:true
+  };
+  return createIncident('maintenance_resource_unavailable',flight,{
+    detectedAt:simNow(),source:'derived',
+    sourceKey:`derived:maintenance_resource_unavailable:${aircraft.id}:${airport}`,
+    context:incidentContext
+  });
+}
+
 function earliestMaintenancePlan(ac){
   const model=MODELS[ac.model];
   let start=simNow()+2*HOUR,airport=ac.location,guard=0;
@@ -2792,12 +3151,19 @@ function defaultMaintenanceStart(acId){
   return (ac&&earliestMaintenancePlan(ac)?.start)||simNow()+2*HOUR;
 }
 
-function scheduleMaintenanceCheckForAircraft(acId,start,{skipConfirm=false,reason='',allowFlightConflict=false,preserveIncidentId=''}={}){
+function scheduleMaintenanceCheckForAircraft(acId,start,{skipConfirm=false,reason='',allowFlightConflict=false,preserveIncidentId='',allowUnsupportedMaintenance=false}={}){
   const ac=state.aircraft.find(item=>item.id===acId);
   if(!ac) return;
   const maintenance=Management.maintenanceStatus(ac,simNow());
   if(maintenance.scheduled) return toast(`${ac.tail} already has a scheduled check.`);
   const requestedStart=Number.isFinite(start)?Math.max(simNow(),start):defaultMaintenanceStart(ac.id);
+  const support=maintenanceSupportAtAirport(ac.location,ac,requestedStart);
+  if(!support.available&&!allowUnsupportedMaintenance){
+    const incident=createMaintenanceResourceIncidentForAircraft(ac,ac.location,{reason:reason||maintenance.label,supportLabel:support.label});
+    if(incident) toast(`${ac.tail} has no maintenance support at ${ac.location}. Resolve the maintenance-resource case first.`);
+    else toast(`${ac.tail} has no maintenance support at ${ac.location}. Move the aircraft or send a mobile maintenance team first.`);
+    return null;
+  }
   const plan=Management.maintenancePlan(ac,requestedStart,ac.location,MODELS[ac.model]?.seats||100);
   if(!plan) return toast(`No maintenance window found for ${ac.tail} in the current programme.`);
   const conflict=maintenancePlanConflict(ac,plan);

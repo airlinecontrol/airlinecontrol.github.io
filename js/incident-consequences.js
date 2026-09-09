@@ -125,7 +125,19 @@
       category='station';
       if(['priority','fuel_outage_priority'].includes(optionId)) add('provider priority surcharge',3_500*aircraftSizeFactor(flight));
       if(['wait_truck','wait_supply'].includes(optionId)) delay(context.delayMin||35);
+      if(optionId==='tanker_inbound'){
+        const plan=typeof fuelOutageTankerPlan==='function'?fuelOutageTankerPlan(incident):null;
+        add('tanker fuel coordination',plan?.available?(plan.cost||900*aircraftSizeFactor(flight)):700);
+      }
       if(optionId==='minimum_uplift') add('reduced fuel margin handling',900*aircraftSizeFactor(flight));
+      if(optionId==='substitute') add('aircraft swap',2_500*aircraftSizeFactor(flight));
+    }else if(task.key==='mx-resource-strategy'){
+      category='maintenance';
+      if(optionId==='send_mobile_team'){
+        const plan=typeof mobileMaintenanceTeamPlan==='function'?mobileMaintenanceTeamPlan(incident):null;
+        add('mobile engineering callout',plan?.cost||5_500*aircraftSizeFactor(flight));
+      }
+      if(optionId==='ferry_to_maintenance') add('maintenance ferry setup',ferryRecoveryCost(flight,context.airport||flight.from,state.home));
       if(optionId==='substitute') add('aircraft swap',2_500*aircraftSizeFactor(flight));
     }else if(['station-deicing-strategy','station-deicing-collapse-strategy','station-holdover-strategy'].includes(task.key)){
       category='station';
@@ -259,7 +271,9 @@
   }
 
   function replacementConsequenceText(incident){
-    const options=incidentAircraftReplacementOptions(incident);
+    const options=typeof incidentAircraftReplacementOptionsForTask==='function'
+      ? incidentAircraftReplacementOptionsForTask(incident,{kind:'aircraft_substitution'})
+      : incidentAircraftReplacementOptions(incident);
     if(!options.length) return 'requires a suitable spare or positioned aircraft';
     const range=consequenceRange(options.map(option=>option.delayMin||0));
     const borrowed=options.some(option=>option.kind==='borrow');
@@ -343,7 +357,23 @@
     if(task.key==='station-fuel-outage-strategy'){
       if(optionId==='priority') return 'possible +20 min delay · depends on provider escalation';
       if(optionId==='wait_supply') return `${consequenceDelayText(incident.context?.delayMin||75)} · supplier outage drives departure`;
+      if(optionId==='tanker_inbound'){
+        const plan=typeof fuelOutageTankerPlan==='function'?fuelOutageTankerPlan(incident):null;
+        return plan?.available
+          ? `${consequenceDelayText(plan.delayMin||0)} · avoids disrupted station uplift`
+          : 'requires an inbound leg with practical tank capacity';
+      }
       if(optionId==='minimum_uplift') return 'possible +25 min delay · legal fuel only, smaller operational margin';
+      if(optionId==='substitute') return replacementConsequenceText(incident);
+    }
+    if(task.key==='mx-resource-strategy'){
+      if(optionId==='send_mobile_team'){
+        const plan=typeof mobileMaintenanceTeamPlan==='function'?mobileMaintenanceTeamPlan(incident):null;
+        return plan?.available
+          ? `${plan.responseMin} min engineering response · check still must be scheduled`
+          : 'requires a reachable maintenance-capable station';
+      }
+      if(optionId==='ferry_to_maintenance') return 'requires manually planned ferry · aircraft not repaired until checked';
       if(optionId==='substitute') return replacementConsequenceText(incident);
     }
     if(task.key==='station-deicing-strategy'){

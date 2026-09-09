@@ -451,6 +451,7 @@ function refreshScheduleTimeline(force=false){
         const night=f.cancelled?null:scheduleNightMarkerInfo(f);
         const lateInbound=f.cancelled?null:lateInboundById.get(f.id);
         const positionContext=f.positioningBlocked?aircraftOutOfPositionContextForFlight(f):null;
+        const openIncidents=openIncidentsForFlight(f.id);
         if(!f.cancelled&&f.departure>=start&&f.departure<=end){
           const markerLeft=(f.departure-start)/HOUR*pxPerHour;
           const slot=flightSlotImpactState(f,now);
@@ -466,11 +467,12 @@ function refreshScheduleTimeline(force=false){
         const flightTitle=[
           ...(delayAnalysis.active?delayAnalysis.tooltipLines:[`${f.id} · ${f.from} → ${destination}`,shifted?`Planned ${shortClock(f.departure)}–${shortClock(f.arrival)} · Actual ${shortClock(actualDep)}–${shortClock(actualArr)}`:null]),
           f.cancelled&&f.cancellationReason?`Cancelled: ${f.cancellationReason}`:null,
+          openIncidents.length?`Open incident${openIncidents.length===1?'':'s'}: ${openIncidents.map(incident=>incident.title||incident.type).join(' · ')}`:null,
           positionContext?`Aircraft positioning: expected ${positionContext.expectedLocation}, required ${positionContext.requiredLocation}`:null,
           lateInbound?.title,
           night?.title
         ].filter(Boolean).join('\n');
-        if(clippedEnd>clippedStart) html+=`<div class="flight-block ${st} ${shifted?'shifted':''} ${lateInbound?'late-inbound-risk':''} ${positionContext?'positioning-conflict':''} ${night?'has-night-marker':''} ${focusClass} ${selected?'selected':''}" data-flight-id="${esc(f.id)}" title="${esc(flightTitle)}" style="left:${left}px;width:${width}px"><div class="flight-code">${esc(f.id)}${delay?` <span class="delay-text">+${delay}</span>`:''}</div>${lateInbound?`<span class="flight-late-inbound" title="${esc(lateInbound.title)}">IN</span>`:''}${night?`<span class="flight-night-marker ${esc(night.className||'')}" title="${esc(night.title)}">${esc(night.label)}</span>`:''}<div class="flight-route">${esc(f.from)} → ${esc(destination)}</div><div class="flight-times">${shifted?`<span class="sched">S ${shortClock(f.departure)}</span> · <span class="actual">A ${shortClock(actualDep)}</span>`:`${shortClock(actualDep)}–${shortClock(actualArr)}`}</div></div>`;
+        if(clippedEnd>clippedStart) html+=`<div class="flight-block ${st} ${shifted?'shifted':''} ${openIncidents.length?'has-incident':''} ${lateInbound?'late-inbound-risk':''} ${positionContext?'positioning-conflict':''} ${night?'has-night-marker':''} ${focusClass} ${selected?'selected':''}" data-flight-id="${esc(f.id)}" title="${esc(flightTitle)}" style="left:${left}px;width:${width}px"><div class="flight-code">${esc(f.id)}${delay?` <span class="delay-text">+${delay}</span>`:''}</div>${lateInbound?`<span class="flight-late-inbound" title="${esc(lateInbound.title)}">IN</span>`:''}${night?`<span class="flight-night-marker ${esc(night.className||'')}" title="${esc(night.title)}">${esc(night.label)}</span>`:''}<div class="flight-route">${esc(f.from)} → ${esc(destination)}</div><div class="flight-times">${shifted?`<span class="sched">S ${shortClock(f.departure)}</span> · <span class="actual">A ${shortClock(actualDep)}</span>`:`${shortClock(actualDep)}–${shortClock(actualArr)}`}</div></div>`;
         const next=flights[i+1];
         if(next&&!f.cancelled&&!next.cancelled){
           const nextDep=flightActualDeparture(next),gapMs=nextDep-actualArr,turn=turnaroundGapInfo(f,next,ac);

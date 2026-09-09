@@ -30,21 +30,23 @@
     const missingUsAirports=addedUsAirports.filter(code=>!airports.includes(code));
     assert(!missingUsAirports.length,'US expansion airports missing from catalog: '+missingUsAirports.join(', '));
     assert(w.eval('validateAirportCatalogs()'),'expanded airport catalogs failed validation');
+    const routeAirports=['ATL','MCO','MIA','TPA','DFW','ORD','JFK','BOS','DCA','PHL','CLT','RDU','BNA','MSY','AUS','IAH','FLL','BWI','DTW','MSP'].filter(code=>airports.includes(code));
     const models=['E190','A320neo','A330-900'].filter(model=>w.eval(`Boolean(MODELS[${JSON.stringify(model)}])`));
     assert(airports.length>=20,'performance fixture needs the expanded airport list');
+    assert(routeAirports.length>=12,'performance fixture needs enough close-range airports inside the 3-day operational horizon');
     assert(models.length>=2,'performance fixture needs at least two aircraft models');
 
     const now=w.simNow();
-    const aircraftCount=90;
-    const legsPerAircraft=12;
+    const aircraftCount=70;
+    const legsPerAircraft=10;
     for(let i=0;i<aircraftCount;i++){
       const model=models[i%models.length];
-      let origin=airports[(i*7)%airports.length];
+      let origin=routeAirports[(i*7)%routeAirports.length];
       const aircraft=w.assignRequestedAircraft(model,w.defaultCabin(model),origin);
-      let departure=now-3*HOUR+(i%18)*10*MIN;
+      let departure=now-90*MIN+(i%18)*8*MIN;
       for(let j=0;j<legsPerAircraft;j++){
-        let destination=airports[(i*11+j*5+3)%airports.length];
-        if(destination===origin) destination=airports[(airports.indexOf(origin)+1)%airports.length];
+        let destination=routeAirports[(i*11+j*5+3)%routeAirports.length];
+        if(destination===origin) destination=routeAirports[(routeAirports.indexOf(origin)+1)%routeAirports.length];
         const flight=w.createFlightRecord({
           aircraftId:aircraft.id,
           from:origin,
@@ -66,14 +68,14 @@
           flight.settled=true;
           flight.actualArrival=flight.arrival+(flight.manualDelayMin||0)*MIN;
         }
-        departure=flight.arrival+(45+(i+j)%55)*MIN;
+        departure=flight.arrival+(35+(i+j)%35)*MIN;
         origin=destination;
       }
     }
 
     for(let i=0;i<12;i++){
       const flight=w.__perfState.flights.find(item=>!item.cancelled&&item.departure>w.simNow()+i*HOUR);
-      if(flight) w.createIncident(i%2?'fueling_issue':'crew_sick',flight,{training:true,detectedAt:now+i*MIN});
+      if(flight) w.createIncident(i%2?'security_screening':'crew_sick',flight,{training:true,detectedAt:now+i*MIN});
     }
 
     const timings=[];

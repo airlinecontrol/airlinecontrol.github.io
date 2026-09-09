@@ -1,11 +1,12 @@
 /* Incident metadata, retired-case markers, and default no-action policies. */
 
 const INCIDENT_TYPE_ORDER=[
-  'crew_sick','mel_defect','gate_conflict','destination_closure_ground','destination_closure',
+  'crew_sick','mel_defect','destination_closure_ground','destination_closure',
   'aircraft_out_of_position','aircraft_misposition_after_diversion','postflight_technical_defect',
+  'maintenance_resource_unavailable',
   'crew_misconnect','crew_misposition_after_diversion','crew_report_delayed','no_legal_crew','crew_duty_extension',
-  'airport_capacity_reduction','atc_ground_stop','night_curfew_conflict','arrival_curfew_coordination','performance_limited','destination_handling_unavailable',
-  'fueling_issue','fuel_supplier_outage','deicing_required','deicing_capacity_collapse','security_screening','crew_fatigue_report','bird_strike'
+  'atc_ground_stop','night_curfew_conflict','arrival_curfew_coordination','performance_limited','destination_handling_unavailable',
+  'fuel_supplier_outage','deicing_required','deicing_capacity_collapse','security_screening','crew_fatigue_report','bird_strike'
 ];
 
 const INCIDENT_DEFINITIONS={
@@ -18,6 +19,7 @@ const INCIDENT_DEFINITIONS={
   aircraft_out_of_position:{title:'Aircraft out of position',severity:'critical',decisionMin:35,summary:'The assigned aircraft is not projected to be at the planned origin in time.'},
   aircraft_misposition_after_diversion:{title:'Aircraft misposition after diversion',severity:'critical',decisionMin:40,summary:'A previous diversion left the assigned aircraft away from the next planned origin.'},
   postflight_technical_defect:{title:'Post-flight technical defect',severity:'critical',decisionMin:30,summary:'The inbound aircraft needs engineering disposition before the next sector.'},
+  maintenance_resource_unavailable:{title:'Maintenance resource unavailable',severity:'critical',decisionMin:45,summary:'Required aircraft maintenance is at an airport without modeled maintenance support.'},
   crew_duty_risk:{title:'Crew duty risk',severity:'critical',decisionMin:40,summary:'The planned duty is projected to exceed the crew duty envelope.'},
   crew_fatigue_report:{title:'Crew fatigue report',severity:'critical',decisionMin:30,summary:'A crew member reported fatigue or fitness concerns before departure.'},
   crew_fatigue_mid_rotation:{title:'Crew fatigue mid-rotation',severity:'critical',decisionMin:30,summary:'The active crew duty has too little margin for the remaining sector.'},
@@ -55,7 +57,10 @@ const INCIDENT_DEFINITIONS={
   pressurization_issue:{title:'Pressurization issue',severity:'critical',decisionMin:15,summary:'The flight deck reports abnormal pressurization requiring immediate flight-watch support.',allowAirborne:true,airborneOnly:true}
 };
 
-const RETIRED_INCIDENT_TYPES=new Set(['slot_miss_risk','aircraft_late_inbound','alternate_unsuitable','destination_weather_deterioration','atc_restriction']);
+const RETIRED_INCIDENT_TYPES=new Set([
+  'slot_miss_risk','aircraft_late_inbound','alternate_unsuitable','destination_weather_deterioration','atc_restriction',
+  'gate_conflict','baggage_loading_issue','fueling_issue','airport_capacity_reduction'
+]);
 
 const INCIDENT_DEFAULT_POLICIES={
   crew_sick:{mode:'cancel_after_deadline',label:'cancel',summary:'If Crew Control takes no action before the decision deadline, the affected unflown flight is cancelled so an illegal crew is not dispatched.'},
@@ -66,6 +71,7 @@ const INCIDENT_DEFAULT_POLICIES={
   aircraft_out_of_position:{mode:'manual_required_no_auto_fix',label:'manual required',summary:'If Dispatch takes no action, the case remains open and the flight continues to be held. The sim will not create a ferry flight or aircraft resource automatically.'},
   aircraft_misposition_after_diversion:{mode:'manual_required_no_auto_fix',label:'manual required',summary:'If Dispatch takes no action, the case remains open and the flight continues to be held. The sim will not create a recovery ferry automatically.'},
   postflight_technical_defect:{mode:'cancel_after_deadline',label:'cancel',summary:'If Maintenance Control takes no action before the decision deadline, the next unflown flight is cancelled rather than dispatching an uncleared aircraft.'},
+  maintenance_resource_unavailable:{mode:'manual_required_no_auto_fix',label:'manual required',summary:'If Maintenance Control takes no action, the aircraft remains unreleased. The sim will not invent engineering support or a ferry movement automatically.'},
   crew_duty_risk:{mode:'cancel_after_deadline',label:'cancel',summary:'If Crew Control takes no action before the decision deadline, the affected unflown flight is cancelled so the planned crew duty is not operated illegally.'},
   crew_fatigue_report:{mode:'cancel_after_deadline',label:'cancel',summary:'If Crew Control takes no action before the decision deadline, the affected unflown flight is cancelled because the reported crew cannot be assumed fit.'},
   crew_fatigue_mid_rotation:{mode:'cancel_after_deadline',label:'cancel',summary:'If Crew Control takes no action before the decision deadline, the remaining unflown sector is cancelled so the fatigued crew is not pushed into another leg.'},
@@ -102,9 +108,9 @@ const INCIDENT_DEFAULT_POLICIES={
 };
 
 const DERIVED_INCIDENT_TYPES=new Set([
-  'aircraft_out_of_position','aircraft_misposition_after_diversion','postflight_technical_defect','crew_duty_risk',
+  'aircraft_out_of_position','aircraft_misposition_after_diversion','postflight_technical_defect','maintenance_resource_unavailable','crew_duty_risk',
   'crew_fatigue_mid_rotation','crew_misconnect','crew_misposition_after_diversion','no_legal_crew','crew_duty_extension',
-  'deicing_required','deicing_capacity_collapse','holdover_expired','airport_capacity_reduction','atc_ground_stop','night_curfew_conflict','arrival_curfew_coordination','performance_limited',
+  'deicing_required','deicing_capacity_collapse','holdover_expired','atc_ground_stop','night_curfew_conflict','arrival_curfew_coordination','performance_limited',
   'destination_handling_unavailable','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute',
   'destination_below_minima','diversion_airport_unavailable','lightning_strike'
 ]);

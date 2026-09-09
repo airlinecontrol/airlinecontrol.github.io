@@ -147,12 +147,12 @@
     {
       const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
       const flight=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'AMS',departure:now+70*60_000,fare:{economy:120,business:300,first:600}});
-      const incident=w.createIncident('airport_capacity_reduction',flight,{training:true,detectedAt:now-30*60_000,source:'fixture',sourceKey:`default-delay:${flight.id}`,context:{sourceId:flight.id,delayMin:40,reason:'ATC regulated departure window'}});
+      const incident=w.createIncident('crew_report_delayed',flight,{training:true,detectedAt:now-30*60_000,source:'fixture',sourceKey:`default-delay:${flight.id}`,context:{sourceId:flight.id,delayMin:40,reason:'Crew transport delay'}});
       incident.deadline=now-60_000;
-      assert(w.processIncidentDeadlines(now),'airport-flow default deadline did not report a change');
-      assert(incident.status==='resolved'&&incident.defaultApplied,'airport-flow default did not close the case');
-      assert(!flight.cancelled,'airport-flow accept-delay default cancelled the flight');
-      assert(flight.incidentDelayMin>=40,'airport-flow accept-delay default did not apply the expected delay');
+      assert(w.processIncidentDeadlines(now),'crew-report default deadline did not report a change');
+      assert(incident.status==='resolved'&&incident.defaultApplied,'crew-report default did not close the case');
+      assert(!flight.cancelled,'crew-report accept-delay default cancelled the flight');
+      assert(flight.incidentDelayMin>=40,'crew-report accept-delay default did not apply the expected delay');
     }
 
     {

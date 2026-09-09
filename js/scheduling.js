@@ -276,7 +276,7 @@ function createFlightRecord({aircraftId,from,to,departure,fare,serviceId=null,se
 
 function ensureRecurringFlights(){
   if(!Array.isArray(state.services)) state.services=[];
-  const horizon=simNow()+14*DAY;
+  const horizon=simNow()+OPERATIONAL_FUTURE_FLIGHT_HORIZON;
   let changed=false;
 
   for(const svc of state.services){

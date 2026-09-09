@@ -62,6 +62,9 @@ function processDerivedOperationalIncidents(t=simNow()){
       const postflightContext=postflightTechnicalContextForFlight(flight,t);
       if(updateOpenDerivedIncident('postflight_technical_defect',flight,Boolean(postflightContext?.active),postflightContext,t)) changed=true;
 
+      const maintenanceResourceContext=maintenanceResourceContextForFlight(flight,t);
+      if(updateOpenDerivedIncident('maintenance_resource_unavailable',flight,Boolean(maintenanceResourceContext?.active),maintenanceResourceContext,t)) changed=true;
+
       const legalCrewContext=legalCrewContextForFlight(flight,t);
       if(updateOpenDerivedIncident('no_legal_crew',flight,Boolean(legalCrewContext?.active),legalCrewContext,t)) changed=true;
 
@@ -78,16 +81,16 @@ function processDerivedOperationalIncidents(t=simNow()){
       if(updateOpenDerivedIncident('atc_ground_stop',flight,Boolean(groundStopContext?.active),groundStopContext,t)) changed=true;
 
       const capacityContext=airportCapacityContextForFlight(flight,t);
-      if(updateOpenDerivedIncident('airport_capacity_reduction',flight,Boolean(capacityContext?.active&&!groundStopContext?.active),capacityContext,t)) changed=true;
+      if(updateOpenDerivedIncident('airport_capacity_reduction',flight,false,capacityContext,t)) changed=true;
 
       const nightCurfewContext=nightCurfewConflictContextForFlight(flight,dep);
       if(updateOpenDerivedIncident('night_curfew_conflict',flight,Boolean(nightCurfewContext?.active),nightCurfewContext,t)) changed=true;
 
       const performanceContext=performanceLimitContextForFlight(flight,t);
-      if(updateOpenDerivedIncident('performance_limited',flight,Boolean(performanceContext?.active),performanceContext,t)) changed=true;
+      if(updateOpenDerivedIncident('performance_limited',flight,Boolean(performanceLimitIncidentRequired(performanceContext)),performanceContext,t)) changed=true;
 
       const handlingContext=destinationHandlingContextForFlight(flight,t);
-      if(updateOpenDerivedIncident('destination_handling_unavailable',flight,Boolean(handlingContext?.active),handlingContext,t)) changed=true;
+      if(updateOpenDerivedIncident('destination_handling_unavailable',flight,Boolean(destinationHandlingIncidentRequired(flight,handlingContext)),handlingContext,t)) changed=true;
 
       const deicingCollapseContext=deicingCapacityCollapseContextForFlight(flight,t);
       if(updateOpenDerivedIncident('deicing_capacity_collapse',flight,Boolean(deicingCollapseContext?.active),deicingCollapseContext,t)) changed=true;
@@ -105,7 +108,7 @@ function processDerivedOperationalIncidents(t=simNow()){
         const holdingContext=holdingFuelConflictContextForFlight(flight,t);
         if(holdingContext&&updateOpenDerivedIncident('atc_holding_fuel_conflict',flight,Boolean(holdingContext.active),holdingContext,t)) changed=true;
         const airborneHandlingContext=destinationHandlingContextForFlight(flight,t);
-        if(airborneHandlingContext&&updateOpenDerivedIncident('destination_handling_unavailable',flight,Boolean(airborneHandlingContext.active),airborneHandlingContext,t)) changed=true;
+        if(airborneHandlingContext&&updateOpenDerivedIncident('destination_handling_unavailable',flight,Boolean(destinationHandlingIncidentRequired(flight,airborneHandlingContext)),airborneHandlingContext,t)) changed=true;
         const diversionUnavailableContext=diversionAirportUnavailableContextForFlight(flight,t);
         if(diversionUnavailableContext&&updateOpenDerivedIncident('diversion_airport_unavailable',flight,Boolean(diversionUnavailableContext.active),diversionUnavailableContext,t)) changed=true;
         const arrivalCurfewContext=arrivalCurfewContextForFlight(flight,t);

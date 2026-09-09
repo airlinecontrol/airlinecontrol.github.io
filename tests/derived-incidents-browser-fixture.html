@@ -24,6 +24,11 @@
     const now=w.simNow();
     assert(!w.eval('INCIDENT_TYPE_ORDER.includes("baggage_loading_issue")'),'baggage loading should not be in the automatic/training OCC incident order');
     assert(!w.eval('PRE_DEPARTURE_INCIDENT_GENERATORS.some(item=>item.type==="baggage_loading_issue")'),'baggage loading should not be a random top-level OCC incident');
+    for(const retiredType of ['gate_conflict','fueling_issue','airport_capacity_reduction']){
+      assert(!w.eval(`INCIDENT_TYPE_ORDER.includes(${JSON.stringify(retiredType)})`),`${retiredType} should not be in the automatic/training OCC incident order`);
+      assert(w.eval(`RETIRED_INCIDENT_TYPES.has(${JSON.stringify(retiredType)})`),`${retiredType} should be marked retired`);
+    }
+    assert(!w.eval('PRE_DEPARTURE_INCIDENT_GENERATORS.some(item=>item.type==="gate_conflict"||item.type==="fueling_issue")'),'routine gate and fuel-uplift cases should not be random top-level OCC incidents');
     for(const airport of ['FRA','AMS','CDG','LGW']){
       w.changeStaff(airport,'captains',20);
       w.changeStaff(airport,'firstOfficers',20);
@@ -36,6 +41,87 @@
     }
 
     const completeWaits=()=>w.processOperationalWorkflows(Number.MAX_SAFE_INTEGER);
+
+    {
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'AMS',departure:now+50*60_000,fare:{economy:120,business:300,first:0}});
+      w.recalculateOperations();
+      flight.airportDelayMin=25;
+      flight.airportConstraintLabel='Surface movement restriction';
+      flight.handlingDelayMin=18;
+      flight.handlingDelayCause='Load-control reissue';
+      flight.fueled=false;
+      const originalGroundStop=w.atcGroundStopContextForFlight;
+      w.atcGroundStopContextForFlight=(candidate,t)=>candidate.id===flight.id?null:originalGroundStop(candidate,t);
+      w.processDerivedOperationalIncidents(now);
+      const warnings=w.operationWarnings(now);
+      w.atcGroundStopContextForFlight=originalGroundStop;
+      assert(!w.openIncidentsForFlight(flight.id).some(item=>item.type==='airport_capacity_reduction'||item.type==='baggage_loading_issue'||item.type==='fueling_issue'),'routine station or airport-flow warnings created retired incidents');
+      assert(warnings.some(item=>item.type==='airport_flow_warning'&&item.flightId===flight.id),'airport flow restriction did not become a warning');
+      assert(warnings.some(item=>item.type==='load_control_warning'&&item.flightId===flight.id),'load-control delay did not become a warning');
+      assert(warnings.some(item=>item.type==='fuel_uplift_warning'&&item.flightId===flight.id),'fuel uplift readiness did not become a warning');
+    }
+
+    {
+      w.changeStaff('LGW','groundHandling',-w.staffAt('LGW','groundHandling'));
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const groundFlight=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'LGW',departure:now+90*60_000,fare:{economy:120,business:300,first:0}});
+      groundFlight.fueled=true;
+      w.recalculateOperations();
+      w.processDerivedOperationalIncidents(now);
+      assert(!w.openIncidentsForFlight(groundFlight.id).some(item=>item.type==='destination_handling_unavailable'),'planned destination handling gap should not open an incident before departure');
+      assert(w.operationWarnings(now).some(item=>item.type==='destination_handling_warning'&&item.flightId===groundFlight.id),'planned destination handling gap did not become a warning');
+
+      const airborneAircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const airborneFlight=w.createFlightRecord({aircraftId:airborneAircraft.id,from:'FRA',to:'LGW',departure:now-90*60_000,fare:{economy:120,business:300,first:0}});
+      w.recalculateOperations();
+      airborneFlight.departureLogged=true;
+      airborneFlight.actualDeparture=now-90*60_000;
+      airborneFlight.actualArrival=now+90*60_000;
+      airborneFlight.operationalDurationMs=airborneFlight.actualArrival-airborneFlight.actualDeparture;
+      const airborneHandlingContext=w.destinationHandlingContextForFlight(airborneFlight,now);
+      assert(w.flightIsAirborne(airborneFlight,now),`destination handling fixture should be airborne: dep=${w.hhmm(w.flightActualDeparture(airborneFlight))} arr=${w.hhmm(w.flightActualArrival(airborneFlight))}`);
+      assert(airborneHandlingContext?.active,`destination handling fixture has no active context: ${JSON.stringify(airborneHandlingContext)} staff=${w.staffAt('LGW','groundHandling')}`);
+      assert(w.destinationHandlingIncidentRequired(airborneFlight,airborneHandlingContext),'airborne destination handling context was not classified as incident-required');
+      w.processDerivedOperationalIncidents(now);
+      assert(w.openIncidentsForFlight(airborneFlight.id).some(item=>item.type==='destination_handling_unavailable'),'airborne destination handling gap should escalate to an incident');
+    }
+
+    {
+      const aircraft=w.assignRequestedAircraft('A220-100',w.defaultCabin('A220-100'),'BOS');
+      aircraft.melItems=[{id:'MEL-PERF-WARN',code:'27-11',title:'Flight control dispatch restriction',status:'open',performancePenalty:.13,expiresAt:now+2*24*60*60_000,remainingCycles:4}];
+      w.recalculateOperations();
+      const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'BOS',to:'LIS',departure:now+3*60*60_000,fare:{economy:130,business:340,first:0}});
+      w.recalculateOperations();
+      const context=w.performanceLimitContextForFlight(flight,now);
+      assert(context?.active&&!w.performanceLimitIncidentRequired(context),`fixture expected degraded-but-dispatchable performance margin: ${JSON.stringify(context)}`);
+      w.processDerivedOperationalIncidents(now);
+      assert(!w.openIncidentsForFlight(flight.id).some(item=>item.type==='performance_limited'),'dispatchable performance margin should not open a performance-limited incident');
+      assert(w.operationWarnings(now).some(item=>item.type==='performance_margin_warning'&&item.flightId===flight.id),'dispatchable performance margin did not become a warning');
+    }
+
+    {
+      const probe=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const unsupported=Object.keys(w.eval('AIRPORTS')).find(code=>code!=='FRA'&&!w.maintenanceSupportAtAirport(code,probe,now).available);
+      assert(unsupported,'fixture needs at least one airport without modeled maintenance support');
+      probe.location=unsupported;
+      probe.defectUntil=now+5*60*60_000;
+      probe.defectReason='APU fault requires maintenance action';
+      const flight=w.createFlightRecord({aircraftId:probe.id,from:unsupported,to:'FRA',departure:now+2*60*60_000,fare:{economy:120,business:300,first:0}});
+      flight.weatherChecked=true; flight.constraintChecked=true; flight.opsChecked=true; flight.enrouteChecked=true;
+      w.processDerivedOperationalIncidents(now);
+      const incident=w.openIncidentsForFlight(flight.id).find(item=>item.type==='maintenance_resource_unavailable');
+      assert(incident,`maintenance-resource incident did not open at unsupported station ${unsupported}`);
+      const strategy=w.incidentTasks(incident.id).find(task=>task.key==='mx-resource-strategy');
+      assert(w.branchStrategyOptionBlocker(strategy,incident,'send_mobile_team')==='','mobile maintenance team should be a viable recovery path');
+      assert(w.performOperationalTask(strategy.id,'send_mobile_team'),'maintenance-resource mobile-team strategy was rejected');
+      const task=w.incidentTasks(incident.id).find(item=>item.kind==='mobile_maintenance_team');
+      assert(w.performOperationalTask(task.id),'mobile maintenance task was rejected');
+      assert(task.status==='waiting_external','mobile maintenance should wait for an external team response');
+      w.processOperationalWorkflows(Number.MAX_SAFE_INTEGER);
+      assert(incident.status==='resolved','maintenance-resource incident did not resolve after mobile-team response');
+      assert(w.maintenanceSupportAtAirport(unsupported,probe,probe.mobileMaintenanceAvailableAt+60_000).available,'mobile team did not create temporary local maintenance support');
+    }
 
     {
       const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
@@ -82,6 +168,33 @@
       w.processDerivedOperationalIncidents(now);
       assert(!w.openIncidentsForFlight(flight.id).some(item=>airborneTypes.includes(item.type)),'delayed ground flight has airborne incidents');
       w.AeroWeatherEngine.routeHazardSummary=originalRoute;
+    }
+
+    {
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      aircraft.condition=62;
+      const inbound=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'AMS',departure:now-60*60_000,fare:{economy:120,business:300,first:0}});
+      inbound.departureLogged=true;
+      inbound.operationalDurationMs=90*60_000;
+      inbound.weatherChecked=true; inbound.constraintChecked=true; inbound.opsChecked=true; inbound.enrouteChecked=true;
+      const outbound=w.createFlightRecord({aircraftId:aircraft.id,from:'AMS',to:'FRA',departure:now+100*60_000,fare:{economy:120,business:300,first:0}});
+      outbound.weatherChecked=true; outbound.constraintChecked=true; outbound.opsChecked=true; outbound.enrouteChecked=true;
+      w.recalculateOperations();
+      assert(w.statusOfFlight(inbound,now)!=='arrived','post-flight fixture inbound should still be airborne before the regression check');
+      assert(!w.postflightTechnicalContextForFlight(outbound,now),'post-flight technical context was active before the inbound aircraft arrived');
+      w.processDerivedOperationalIncidents(now);
+      assert(!w.openIncidentsForFlight(outbound.id).some(item=>item.type==='postflight_technical_defect'),'post-flight technical defect opened before the inbound aircraft arrived');
+      inbound.departure=now-120*60_000;
+      inbound.arrival=now-30*60_000;
+      inbound.actualDeparture=inbound.departure;
+      inbound.actualArrival=inbound.arrival;
+      inbound.operationalDurationMs=90*60_000;
+      w.recalculateOperations();
+      assert(w.statusOfFlight(inbound,now)==='arrived','post-flight fixture inbound should be on-block after the timing change');
+      const context=w.postflightTechnicalContextForFlight(outbound,now);
+      assert(context?.active&&context.previousFlightId===inbound.id,'post-flight technical context did not activate after the inbound arrived');
+      w.processDerivedOperationalIncidents(now);
+      assert(w.openIncidentsForFlight(outbound.id).some(item=>item.type==='postflight_technical_defect'),'post-flight technical defect did not open once the inbound aircraft was on-block');
     }
 
     {

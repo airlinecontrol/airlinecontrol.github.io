@@ -7,6 +7,9 @@ const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 const Management = window.AeroManagement;
 const SUPPORTED_SIMULATION_SPEEDS = [1,10];
+const OPERATIONAL_PAST_FLIGHT_RETENTION = 24 * HOUR;
+const OPERATIONAL_FUTURE_FLIGHT_HORIZON = 3 * DAY;
+const FLIGHT_HISTORY_RETENTION = 35 * DAY;
 
 const FUEL_MARKET_STEP = 6 * HOUR;
 const FUEL_MARKET_BASE_EUR_GAL = 2.45;
@@ -537,6 +540,7 @@ function newState(){
     services:[],
     incidents:[],
     incidentTransitions:[],
+    flightHistory:[],
     coordinationTasks:[],
     externalRequests:[],
     resourceAssignments:[],
@@ -565,6 +569,8 @@ function migrateState(parsed){
   if(!Array.isArray(parsed.slotRights)) parsed.slotRights=[];
   if(!Array.isArray(parsed.incidents)) parsed.incidents=[];
   if(!Array.isArray(parsed.incidentTransitions)) parsed.incidentTransitions=[];
+  if(!Array.isArray(parsed.flightHistory)) parsed.flightHistory=[];
+  parsed.flightHistory=parsed.flightHistory.filter(item=>item&&item.id);
   if(!Array.isArray(parsed.coordinationTasks)) parsed.coordinationTasks=[];
   if(!parsed.clock || typeof parsed.clock!=='object') parsed.clock={realBase:Date.now(),simBase:Date.now(),speed:1};
   if(!Number.isFinite(parsed.clock.realBase)) parsed.clock.realBase=Date.now();
@@ -664,9 +670,17 @@ function migrateState(parsed){
     if(!Number.isFinite(recovery.updatedAt)) recovery.updatedAt=recovery.requestedAt;
     if(!Number.isFinite(recovery.confirmsAt)) recovery.confirmsAt=recovery.updatedAt;
     if(!Number.isFinite(recovery.completedAt)) recovery.completedAt=0;
+    if(!Number.isFinite(recovery.availableAt)) recovery.availableAt=recovery.completedAt||recovery.confirmsAt||recovery.updatedAt;
+    if(recovery.availableAirport===undefined) recovery.availableAirport=recovery.releaseAirport||'';
+    if(recovery.availabilityStatus===undefined) recovery.availabilityStatus=(recovery.status==='confirmed'&&recovery.availableAt<=(parsed.clock?.simBase||Date.now()))?'available':'pending';
+    if(recovery.availabilityDetail===undefined) recovery.availabilityDetail='';
     if(!Number.isFinite(recovery.amount)) recovery.amount=0;
     if(!Number.isFinite(recovery.crew)) recovery.crew=0;
+    if(!recovery.roles) recovery.roles={captains:1,firstOfficers:1,cabinCrew:Math.max(0,recovery.crew-2)};
+    for(const role of ['captains','firstOfficers','cabinCrew']) recovery.roles[role]=Math.max(0,Math.floor(Number(recovery.roles[role])||0));
+    if(recovery.family===undefined) recovery.family='Multi-fleet';
     if(recovery.releaseAirport===undefined) recovery.releaseAirport='';
+    if(recovery.plannedReleaseAirport===undefined) recovery.plannedReleaseAirport='';
     if(recovery.reason===undefined) recovery.reason='';
     if(recovery.costEventId===undefined) recovery.costEventId='';
   }

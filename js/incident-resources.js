@@ -18,7 +18,12 @@
     const role=incident.affectedRole||'captains';
     const family=Management.aircraftFamily(aircraft.model);
     const reserved=activeWorkflowAssignments().filter(item=>item.role===role).reduce((map,item)=>map.set(item.base,(map.get(item.base)||0)+item.amount),new Map());
-    const roster=['captains','firstOfficers'].includes(role)?qualifiedStaffAt(airport,role,family):staffAt(airport,role);
+    const t=simNow();
+    const roster=['captains','firstOfficers'].includes(role)&&typeof availableQualifiedStaffAt==='function'
+      ? availableQualifiedStaffAt(airport,role,family,t,flight.id)
+      : typeof availableStaffAt==='function'
+        ? availableStaffAt(airport,role,t,flight.id)
+        : ['captains','firstOfficers'].includes(role)?qualifiedStaffAt(airport,role,family):staffAt(airport,role);
     const available=Math.max(0,roster-(reserved.get(airport)||0));
     if(!available) return [];
     return [{id:`${airport}:${role}`,airport,role,family,available,reportMin:20,
@@ -193,10 +198,13 @@
     });
     if(!augmented.legal) return 'Augmented crew would still exceed the duty envelope. Use replacement crew or cancel before departure.';
     const family=Management.aircraftFamily(aircraft.model);
-    const missingCaptain=Math.max(0,2-qualifiedStaffAt(flight.from,'captains',family));
-    const missingFirstOfficer=Math.max(0,2-qualifiedStaffAt(flight.from,'firstOfficers',family));
+    const availableCaptains=typeof availableQualifiedStaffAt==='function'?availableQualifiedStaffAt(flight.from,'captains',family,simNow(),flight.id):qualifiedStaffAt(flight.from,'captains',family);
+    const availableFirstOfficers=typeof availableQualifiedStaffAt==='function'?availableQualifiedStaffAt(flight.from,'firstOfficers',family,simNow(),flight.id):qualifiedStaffAt(flight.from,'firstOfficers',family);
+    const availableCabin=typeof availableStaffAt==='function'?availableStaffAt(flight.from,'cabinCrew',simNow(),flight.id):staffAt(flight.from,'cabinCrew');
+    const missingCaptain=Math.max(0,2-availableCaptains);
+    const missingFirstOfficer=Math.max(0,2-availableFirstOfficers);
     const cabinRequired=Math.max(2,Math.ceil(cabinSeatCount(aircraft)/50)*2);
-    const missingCabin=Math.max(0,cabinRequired-staffAt(flight.from,'cabinCrew'));
+    const missingCabin=Math.max(0,cabinRequired-availableCabin);
     const missing=[];
     if(missingCaptain) missing.push(`${missingCaptain} captain`);
     if(missingFirstOfficer) missing.push(`${missingFirstOfficer} first officer`);
@@ -228,8 +236,16 @@
     if(['mx-strategy','mx-postflight-strategy'].includes(task.key)&&optionId==='defer'&&incident.technicalContext?.deferAllowed===false){
       return 'This finding is not deferrable under MEL. Schedule a maintenance check, substitute aircraft, or cancel before departure.';
     }
-    if(['mx-strategy','mx-postflight-strategy','dispatch-position-strategy','dispatch-performance-strategy'].includes(task.key)&&optionId==='substitute'&&!incidentAircraftReplacementOptions(incident).length) return 'No suitable replacement aircraft is available. Add or position aircraft in Dispatch, then try again.';
-    if(task.key==='station-fuel-outage-strategy'&&optionId==='substitute'&&!incidentAircraftReplacementOptions(incident).length) return 'No suitable fueled replacement aircraft is available. Add or position aircraft in Dispatch, then try again.';
+    if(['mx-strategy','mx-postflight-strategy','dispatch-position-strategy','dispatch-performance-strategy','mx-resource-strategy'].includes(task.key)&&optionId==='substitute'&&!incidentAircraftReplacementOptions(incident).length) return 'No suitable replacement aircraft is available. Add or position aircraft in Dispatch, then try again.';
+    if(task.key==='station-fuel-outage-strategy'&&optionId==='tanker_inbound'){
+      const plan=typeof fuelOutageTankerPlan==='function'?fuelOutageTankerPlan(incident):null;
+      if(!plan?.available) return plan?.reason||'Inbound tanker fuel is not available for this rotation.';
+    }
+    if(task.key==='station-fuel-outage-strategy'&&optionId==='substitute'&&!incidentAircraftReplacementOptionsForTask(incident,task).length) return 'No suitable replacement aircraft is already fueled for this sector. Add a fueled aircraft or choose a different recovery.';
+    if(task.key==='mx-resource-strategy'&&optionId==='send_mobile_team'){
+      const plan=typeof mobileMaintenanceTeamPlan==='function'?mobileMaintenanceTeamPlan(incident):null;
+      if(!plan?.available) return plan?.reason||'No mobile maintenance team is available.';
+    }
     if(task.key==='crew-legal-strategy'&&optionId==='confirm') return legalCrewConfirmationBlocker(incident);
     if(['crew-duty-strategy','crew-fatigue-strategy'].includes(task.key)&&optionId==='augment'){
       const message=crewAugmentationBlocker(incident);
@@ -299,7 +315,7 @@
       return 'No qualified crew pool is available. Request or move personnel in the Personnel widget.';
     }
     if(requirement.type==='augmented_crew') return crewAugmentationBlocker(incident);
-    if(requirement.type==='aircraft'&&requirement.mode==='replacement'&&!incidentAircraftReplacementOptions(incident).length) return 'No suitable replacement aircraft is available. Request aircraft or position a spare in Dispatch.';
+    if(requirement.type==='aircraft'&&requirement.mode==='replacement'&&!incidentAircraftReplacementOptionsForTask(incident,task).length) return 'No suitable replacement aircraft is available. Request aircraft or position a spare in Dispatch.';
     if(requirement.type==='alternate'&&requirement.mode==='operational'&&!diversionOptionsForIncident(incident,{includeReturnOrigin:false}).length) return alternateUnavailableMessage(incident,{includeReturnOrigin:false});
     if(requirement.type==='alternate'&&requirement.mode==='return_origin'&&!diversionOptionsForIncident(incident,{onlyReturnOrigin:true}).length) return 'Return to origin is not currently suitable. Fuel, weather, or handling is not available.';
     return '';
@@ -336,7 +352,17 @@
       const blocker=typeof crewSwapBlocker==='function'?crewSwapBlocker(next):'';
       if(blocker) return `${next.id}: ${blocker}`;
     }
-    if(task.kind==='aircraft_substitution'&&!incidentAircraftReplacementOptions(incident).length) return 'No suitable replacement aircraft is available. Request aircraft or position a spare in Dispatch.';
+    if(task.kind==='aircraft_substitution'&&!incidentAircraftReplacementOptionsForTask(incident,task).length) return incident.type==='fuel_supplier_outage'
+      ? 'No replacement aircraft is already fueled for this sector. Request or position a fueled spare, use tanker fuel, wait supplier recovery, or cancel.'
+      : 'No suitable replacement aircraft is available. Request aircraft or position a spare in Dispatch.';
+    if(task.kind==='fuel_recovery'&&task.action==='tanker_inbound'){
+      const plan=typeof fuelOutageTankerPlan==='function'?fuelOutageTankerPlan(incident):null;
+      if(!plan?.available) return plan?.reason||'Inbound tanker fuel is not available for this rotation.';
+    }
+    if(task.kind==='mobile_maintenance_team'){
+      const plan=typeof mobileMaintenanceTeamPlan==='function'?mobileMaintenanceTeamPlan(incident):null;
+      if(!plan?.available) return plan?.reason||'No mobile maintenance team is available.';
+    }
     if(['stand_request','station_coordination'].includes(task.kind)&&staffAt(flight.from,'groundHandling')<=0) return `No ground handling team is available at ${flight.from}. Add personnel in the Personnel widget.`;
     if(['station_recovery','fuel_recovery','security_coordination','turnaround_expedite'].includes(task.kind)&&staffAt(flight.from,'groundHandling')<=0) return `No ground handling team is available at ${flight.from}. Add personnel in the Personnel widget.`;
     if(task.kind==='security_coordination'&&staffAt(flight.from,'customerService')<=0) return `No customer-service team is available at ${flight.from}. Add personnel in the Personnel widget.`;

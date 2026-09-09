@@ -144,6 +144,27 @@
     assert(!d.querySelector('.passenger-recovery-row'),'confirmed passenger recovery should remove the whole task row from the widget');
     assert(!d.querySelector('.crew-accommodation-row'),'confirmed crew recovery should remove the whole task row from the widget');
 
+    const hotelAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const hotelFlight=w.createFlightRecord({aircraftId:hotelAc.id,from:'FRA',to:'LHR',departure:now+150*60_000,fare:{economy:160,business:420,first:800}});
+    hotelFlight.diversionAirport='AMS';
+    hotelFlight.actualArrival=hotelFlight.arrival+25*60_000;
+    w.recalculateOperations();
+    const hotelExposure=w.crewAccommodationExposures().find(item=>item.flightId===hotelFlight.id);
+    assert(hotelExposure&&!hotelExposure.arranged,'hotel crew exposure missing before request');
+    w.authorizeCrewRecovery(hotelFlight.id,'hotel');
+    const hotelRecord=w.crewRecoveryRecordsForFlight(hotelFlight.id).find(item=>item.action==='hotel');
+    const hotelFamily=w.AeroManagement.aircraftFamily(hotelAc.model);
+    const earlyCaptainCount=w.availableQualifiedStaffAt('AMS','captains',hotelFamily,hotelRecord.confirmsAt+60_000);
+    assert(hotelRecord?.availableAirport==='AMS','hotel recovery should make crew available at the disrupted release airport');
+    assert(hotelRecord.availableAt>hotelRecord.confirmsAt,'hotel recovery did not include rest and report availability time');
+    w.processCrewRecoveries(hotelRecord.confirmsAt+60_000);
+    assert(w.crewRecoveryRecordsForFlight(hotelFlight.id).find(item=>item.action==='hotel')?.status==='confirmed','hotel request did not confirm');
+    assert(!w.crewAccommodationExposures(hotelRecord.confirmsAt+60_000).find(item=>item.flightId===hotelFlight.id)?.arranged,'hotel exposure resolved before crew was rested and reported');
+    w.processCrewRecoveries(hotelRecord.availableAt+60_000);
+    assert(w.crewRecoveryRecordsForFlight(hotelFlight.id).find(item=>item.action==='hotel')?.availabilityStatus==='available','hotel-rested crew did not become available');
+    assert(w.availableQualifiedStaffAt('AMS','captains',hotelFamily,hotelRecord.availableAt+60_000)>=earlyCaptainCount+1,'rested diverted crew did not add usable qualified captain availability at the release airport');
+    assert(w.crewAccommodationExposures(hotelRecord.availableAt+60_000).find(item=>item.flightId===hotelFlight.id)?.arranged,'hotel exposure did not resolve after crew rest availability');
+
     result.textContent='PASS scenario regressions validated';
   }catch(error){
     console.error(error);

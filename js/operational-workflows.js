@@ -23,6 +23,8 @@
   const KIND_META={
     aircraft_substitution:{eligibility:{phase:'pre_departure_unfueled'},resources:[{type:'aircraft',mode:'replacement'}]},
     maintenance_check_scheduling:{resources:[]},
+    mobile_maintenance_team:{resources:[]},
+    manual_maintenance_ferry_required:{resources:[]},
     crew_allocation:{resources:[{type:'crew_pool',location:'origin'}]},
     manual_crew_move_required:{resources:[]},
     crew_augmentation:{resources:[{type:'augmented_crew',location:'origin'}]},
@@ -238,13 +240,25 @@
       {key:'station-fuel-outage-strategy',department:'station',kind:'recovery_strategy',label:'Choose fuel-supplier recovery',detail:'Select the station/OCC response when the local fuel provider cannot support normal uplift.',options:[
         {id:'priority',label:'Request priority fuel truck',detail:'Escalate the affected flight with the fuel provider or airport fuel desk.'},
         {id:'wait_supply',label:'Wait for supplier recovery',detail:'Accept the provider recovery ETA and update the departure plan.'},
+        {id:'tanker_inbound',label:'Tanker fuel on inbound',detail:'Overfuel the aircraft before it reaches the disrupted station so the next sector can depart without local uplift.'},
         {id:'minimum_uplift',label:'Use minimum compliant uplift',detail:'Dispatch with legal fuel only if the supplier can provide the minimum required uplift.'},
         {id:'substitute',label:'Use already fueled replacement aircraft',detail:'Assign a serviceable aircraft that can depart without waiting for the affected aircraft uplift.'}
       ]},
       {key:'station-fuel-priority',department:'station',kind:'fuel_recovery',label:'Escalate fuel priority',detail:'Coordinate priority truck dispatch or hydrant access with the provider.',dependsOn:['station-fuel-outage-strategy'],branch:'priority',action:'fuel_outage_priority'},
       {key:'station-fuel-wait',department:'station',kind:'fuel_recovery',label:'Publish supplier recovery ETA',detail:'Accept the supplier outage recovery time as the departure driver.',dependsOn:['station-fuel-outage-strategy'],branch:'wait_supply',action:'wait_supply'},
+      {key:'station-fuel-tanker',department:'station',kind:'fuel_recovery',label:'Coordinate inbound tanker fuel',detail:'Confirm the previous station can load enough fuel for this sector before the aircraft reaches the disrupted airport.',dependsOn:['station-fuel-outage-strategy'],branch:'tanker_inbound',action:'tanker_inbound'},
       {key:'station-fuel-minimum',department:'station',kind:'fuel_recovery',label:'Confirm minimum compliant uplift',detail:'Use the legal dispatch fuel plan without discretionary uplift if the provider can support it.',dependsOn:['station-fuel-outage-strategy'],branch:'minimum_uplift',action:'minimum_uplift'},
       {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign fueled replacement aircraft',detail:'Use a suitable spare or borrowed aircraft before departure.',dependsOn:['station-fuel-outage-strategy'],branch:'substitute'},
+    ])},
+    maintenance_resource_unavailable:{classification:'derived',steps:withCancellation([
+      {key:'mx-resource-strategy',department:'maintenance',kind:'recovery_strategy',label:'Choose maintenance-resource recovery',detail:'Required engineering work is at a station without maintenance support. Choose how OCC protects the aircraft and schedule.',options:[
+        {id:'send_mobile_team',label:'Send mobile maintenance team',detail:'Dispatch a mobile engineering team from the nearest capable station, then schedule the check locally after they arrive.'},
+        {id:'ferry_to_maintenance',label:'Create ferry to maintenance station',detail:'Manually plan a ferry to a maintenance-capable station if the aircraft is legal to reposition.'},
+        {id:'substitute',label:'Use replacement aircraft',detail:'Protect the passenger flight with a serviceable aircraft while the original aircraft remains unavailable.'}
+      ]},
+      {key:'mx-mobile-team',department:'maintenance',kind:'mobile_maintenance_team',label:'Send mobile maintenance team',detail:'Coordinate an engineering callout and wait until the mobile team is available at the aircraft.',dependsOn:['mx-resource-strategy'],branch:'send_mobile_team',action:'send_mobile_team'},
+      {key:'dispatch-maintenance-ferry',department:'dispatch',kind:'manual_maintenance_ferry_required',label:'Plan maintenance ferry',detail:'Create a ferry movement to a maintenance-capable airport, then confirm the plan here.',dependsOn:['mx-resource-strategy'],branch:'ferry_to_maintenance',action:'check_maintenance_ferry'},
+      {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign replacement aircraft',detail:'Use a serviceable spare at origin or position one in before departure.',dependsOn:['mx-resource-strategy'],branch:'substitute'},
     ])},
     deicing_required:{classification:'derived',steps:withCancellation([
       {key:'station-deicing-strategy',department:'station',kind:'recovery_strategy',label:'Choose deicing recovery',detail:'Select the departure-station response when snow or ice requires treatment before departure.',options:[

@@ -120,7 +120,16 @@
       const taskKey=action==='schedule_check'?'mx-schedule-check':`mx-${action}`;
       assert(w.performOperationalTask(`${incident.id}:${taskKey}`,action),`MEL ${action} was rejected`);
       assert(incident.status==='resolved',`MEL ${action} incident did not resolve`);
-      if(action==='defer') assert(aircraft.melItems.some(item=>item.status==='open'),'MEL defer did not create an open MEL item');
+      if(action==='defer'){
+        assert(aircraft.melItems.some(item=>item.status==='open'),'MEL defer did not create an open MEL item');
+        w.eval(`{
+          const ac=state.aircraft.find(item=>item.id==='${aircraft.id}');
+          ac.maintenance={...(ac.maintenance||{}),scheduled:{start:${now+60*60_000},end:${now+2*60*60_000},airport:'FRA',durationHours:1,cost:1000,status:'scheduled'}};
+          Management.processMaintenance(state,${now+3*60*60_000},()=>{});
+          processMelConstraints(${now+3*60*60_000});
+        }`);
+        assert(aircraft.melItems.every(item=>item.status==='cleared'),'completed maintenance check did not clear deferred MEL items');
+      }
       if(action==='schedule_check'){
         assert(aircraft.maintenance.scheduled,'MEL maintenance branch did not create a scheduled check');
         assert(aircraft.defectUntil>=aircraft.maintenance.scheduled.end,'MEL maintenance branch did not hold aircraft until check completion');
@@ -204,28 +213,42 @@
     }
 
     {
-      const {flight,incident}=makeCase('airport_capacity_reduction','LHR',{sourceId:'fixture',delayMin:45,reason:'ATC regulated departure window'});
-      assert(w.performOperationalTask(`${incident.id}:dispatch-capacity-strategy`,'cancel'),'airport-flow cancellation was rejected');
-      assert(incident.status==='resolved','airport-flow cancellation did not resolve the incident');
-      assert(flight.cancelled,'airport-flow cancellation did not cancel the affected flight');
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'LHR',departure:now+9*60*60_000,fare:{economy:150,business:390,first:750}});
+      for(const retiredType of ['airport_capacity_reduction','gate_conflict','fueling_issue','baggage_loading_issue']){
+        assert(!w.createIncident(retiredType,flight,{training:true,detectedAt:now,source:'fixture'}),`${retiredType} should be retired from active incident creation`);
+      }
     }
 
-    for(const action of ['accept','priority']){
-      const {flight,incident}=makeCase('airport_capacity_reduction','LHR',{sourceId:'fixture',delayMin:40,reason:'ATC regulated departure window'});
-      const strategy=w.incidentTasks(incident.id).find(task=>task.key==='dispatch-capacity-strategy');
-      assert(w.operationalOptionConsequence(strategy,incident,action).includes('delay'),`Airport-flow ${action} consequence is missing delay impact`);
-      assert(w.performOperationalTask(`${incident.id}:dispatch-capacity-strategy`,action),`Airport-flow ${action} strategy was rejected`);
-      if(action==='priority') completeWaits();
-      assert(incident.status==='resolved',`Airport-flow ${action} incident did not resolve`);
-      assert(flight.incidentDelayMin===(action==='priority'?22:40),`Airport-flow ${action} applied the wrong delay`);
-    }
-
-    for(const action of ['remote','tow','wait_gate']){
-      const {flight,incident}=makeCase('gate_conflict');
-      assert(w.performOperationalTask(`${incident.id}:station-stand-strategy`,action),`Gate ${action} strategy was rejected`);
+    {
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'MUC');
+      const inbound=w.createFlightRecord({aircraftId:aircraft.id,from:'MUC',to:'FRA',departure:now+75*60_000,fare:0,flightType:'ferry'});
+      inbound.weatherChecked=true; inbound.constraintChecked=true; inbound.opsChecked=true; inbound.enrouteChecked=true;
+      const target=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'LHR',departure:w.flightActualArrival(inbound)+90*60_000,fare:{economy:150,business:390,first:750}});
+      const incident=w.createIncident('fuel_supplier_outage',target,{training:true,detectedAt:now,context:{airport:'FRA',reason:'Fuel farm delivery interruption',delayMin:95,active:true}});
+      const strategy=w.incidentTasks(incident.id).find(task=>task.key==='station-fuel-outage-strategy');
+      assert(w.fuelOutageTankerPlan(incident).available,'tanker fuel should be feasible from the inbound station');
+      assert(w.branchStrategyOptionBlocker(strategy,incident,'tanker_inbound')==='','tanker fuel strategy was incorrectly blocked');
+      assert(w.operationalOptionConsequence(strategy,incident,'tanker_inbound').includes('avoids disrupted station uplift'),'tanker fuel consequence should explain the avoided station uplift');
+      assert(w.performOperationalTask(`${incident.id}:station-fuel-outage-strategy`,'tanker_inbound'),'fuel outage tanker strategy was rejected');
+      assert(w.performOperationalTask(`${incident.id}:station-fuel-tanker`),'fuel outage tanker task was rejected');
       completeWaits();
-      assert(incident.status==='resolved',`Gate ${action} incident did not resolve`);
-      assert(flight.incidentDelayMin>0,`Gate ${action} did not apply a delay`);
+      assert(incident.status==='resolved','fuel outage tanker incident did not resolve');
+      assert(target.tankerFuelPlanned&&target.fueled,'target flight was not protected by tanker fuel');
+      assert(inbound.tankerFuelForFlightId===target.id,'inbound sector did not record the tanker-fuel link');
+    }
+
+    {
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const target=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'LHR',departure:now+8*60*60_000,fare:{economy:150,business:390,first:750}});
+      const incident=w.createIncident('fuel_supplier_outage',target,{training:true,detectedAt:now,context:{airport:'FRA',reason:'Fuel truck fleet shortage',delayMin:75,active:true}});
+      const unfueledSpare=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      unfueledSpare.fuelGallons=0;
+      assert(w.incidentAircraftReplacementOptions(incident).some(option=>option.aircraftId===unfueledSpare.id),'generic replacement options should see the local spare');
+      assert(!w.fuelSupplierReplacementOptions(incident).some(option=>option.aircraftId===unfueledSpare.id),'fuel outage replacement should reject unfueled spares');
+      const fueledSpare=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      fueledSpare.fuelGallons=w.flightFuelPlan('FRA','LHR',fueledSpare).requiredGal;
+      assert(w.fuelSupplierReplacementOptions(incident).some(option=>option.aircraftId===fueledSpare.id),'fuel outage replacement should allow an already fueled spare');
     }
 
     const {flight:groundClosureFlight,incident:groundClosure}=makeCase('destination_closure','LHR');
@@ -250,13 +273,17 @@
     assert(closure.status==='resolved','Destination closure incident did not resolve');
     assert(closureFlight.diversionAirport===alternate,'Destination closure did not apply the selected diversion');
 
+    const originalWeatherAt=w.AeroManagement.weatherAt;
+    w.AeroManagement.weatherAt=(code,t)=>code==='FRA'
+      ? {...originalWeatherAt(code,t),type:'clear',conditions:'Normal operations',level:'normal',capacityFactor:1,delayMin:0}
+      : originalWeatherAt(code,t);
     const {flight:returnFlight,incident:returnClosure}=makeAirborneCase('destination_closure','LHR',{authorityDecision:'return_origin'});
     assert(w.performOperationalTask(`${returnClosure.id}:dispatch-diversion-assess`),'Destination closure return-to-origin assessment was rejected');
     completeWaits();
     assert(w.performOperationalTask(`${returnClosure.id}:dispatch-flightdeck-decision`),'Destination closure return-to-origin flight-deck response was rejected');
     completeWaits();
     const returnOption=w.diversionOptionsForIncident(returnClosure,{onlyReturnOrigin:true})[0];
-    assert(returnOption,'Destination closure did not offer return to origin');
+    assert(returnOption,`Destination closure did not offer return to origin: ${w.diversionRejectionSummaryForIncident(returnClosure,{onlyReturnOrigin:true})}`);
     assert(returnOption.fuel&&returnOption.fuel.ok,'Destination closure return-to-origin did not include a valid fuel check');
     assert(w.performOperationalTask(`${returnClosure.id}:dispatch-return-origin`),'Destination closure return-to-origin selection was rejected');
     assert(returnClosure.diversionReturnOrigin,'Destination closure return-to-origin selection was not recorded');
@@ -291,10 +318,12 @@
       completeWaits();
       assert(w.performOperationalTask(`${incident.id}:dispatch-flightdeck-decision`),'Transatlantic closure flight-deck response was rejected');
       completeWaits();
-      assert(w.performOperationalTask(`${incident.id}:dispatch-alternate`,'',{airport:option.code}),'Transatlantic airborne alternate selection was rejected');
-      assert(Math.abs(incident.diversionRouteKm-option.km)<5,'selected airborne alternate did not store aircraft-anchored distance');
+      const selectionOption=w.diversionOptionsForIncident(incident,{includeReturnOrigin:false}).find(item=>item.code===option.code);
+      assert(selectionOption,'selected transatlantic alternate disappeared before selection');
+      assert(w.performOperationalTask(`${incident.id}:dispatch-alternate`,'',{airport:selectionOption.code}),'Transatlantic airborne alternate selection was rejected');
+      assert(Math.abs(incident.diversionRouteKm-selectionOption.km)<5,'selected airborne alternate did not store aircraft-anchored distance');
       assert(incident.diversionDurationMode==='remaining_from_anchor','selected airborne alternate did not mark duration as remaining from aircraft');
-      assert(Math.abs(flight.operationalDurationMs-((now-flight.actualDeparture)+option.duration))<2*60_000,'selected airborne alternate did not apply elapsed plus aircraft-anchored duration');
+      assert(Math.abs(flight.operationalDurationMs-((now-flight.actualDeparture)+selectionOption.duration))<2*60_000,'selected airborne alternate did not apply elapsed plus aircraft-anchored duration');
     }
 
     {
@@ -334,9 +363,10 @@
     assert(fuelDecision.strategyOptions.some(option=>option.id==='return_origin'),'Fuel-margin decision does not offer return to origin');
     assert(w.performOperationalTask(`${fuelReturn.id}:dispatch-fuel-decision`),'Fuel-margin return decision was rejected');
     completeWaits();
-    assert(w.performOperationalTask(`${fuelReturn.id}:dispatch-return-origin`),'Fuel-margin return-to-origin selection was rejected');
+    assert(w.performOperationalTask(`${fuelReturn.id}:dispatch-return-origin`),`Fuel-margin return-to-origin selection was rejected: ${w.diversionRejectionSummaryForIncident(fuelReturn,{onlyReturnOrigin:true})}`);
     assert(fuelReturn.status==='resolved','Fuel-margin return-to-origin incident did not resolve');
     assert(fuelReturnFlight.diversionAirport===fuelReturnFlight.from,'Fuel-margin return-to-origin did not apply return to origin');
+    w.AeroManagement.weatherAt=originalWeatherAt;
 
     result.textContent='PASS incident options validated';
   }catch(error){
