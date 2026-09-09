@@ -126,6 +126,17 @@ workspaceUi.operationFilter.weatherCell??=null;
 function esc(value){
   return String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 }
+function activeFormControl(){
+  const active=document.activeElement;
+  return active&&active.matches('select,input,textarea,[contenteditable="true"]')?active:null;
+}
+function activeFormControlWithin(root){
+  const active=activeFormControl();
+  return Boolean(root&&active&&root.contains(active));
+}
+function activeEmbeddedManagementControl(){
+  return Boolean(activeFormControl()?.closest('[data-management-content]'));
+}
 function infoTip(text){
   if(!String(text||'').trim()) return '';
   const copy=esc(text);
@@ -473,6 +484,7 @@ function renderOperationFilterBar(force=false){
     Math.floor(now/(30*MIN))
   ].join('|');
   if(!force&&signature===lastOperationFilterSignature) return;
+  if(activeFormControlWithin(root)||activeEmbeddedManagementControl()) return;
   lastOperationFilterSignature=signature;
   root.innerHTML=`<div class="filter-title"><span>Filters</span><b>${matched.length}/${base.length} flights</b></div>
     <label class="filter-control airport-filter"><span>Airport</span><select data-operation-filter-airport>
@@ -484,7 +496,7 @@ function renderOperationFilterBar(force=false){
     <button class="filter-toggle ${filter.delayed?'active':''}" type="button" data-operation-filter-delayed aria-pressed="${filter.delayed?'true':'false'}">Delayed</button>
     ${weather?`<button class="filter-chip weather ${weather.severity==='severe'?'severe':'warning'}" type="button" data-clear-weather-filter title="Clear weather filter"><span>${esc(weather.label)}</span><b>${esc(weather.id)}</b></button>`:''}
     ${operationFilterActive()?'<button class="filter-clear" type="button" data-clear-operation-filters>Clear</button>':''}`;
-  root.querySelector('[data-operation-filter-airport]')?.addEventListener('change',event=>applyOperationFilter({airport:event.target.value}));
+  root.querySelector('[data-operation-filter-airport]')?.addEventListener('change',event=>{applyOperationFilter({airport:event.target.value});event.target.blur();});
   root.querySelectorAll('[data-remove-airport-filter]').forEach(button=>button.addEventListener('click',()=>applyOperationFilter({removeAirport:button.dataset.removeAirportFilter})));
   root.querySelector('[data-operation-filter-incidents]')?.addEventListener('click',()=>applyOperationFilter({activeIncidents:!operationFilter().activeIncidents}));
   root.querySelector('[data-operation-filter-delayed]')?.addEventListener('click',()=>applyOperationFilter({delayed:!operationFilter().delayed}));
@@ -603,12 +615,13 @@ function refreshCorporateResources(force=false){
     JSON.stringify(state.personnel.assignments||{}),
     Math.floor(simNow()/MIN)
   ].join('::');
-  if(!force&&signature===lastCorporateResourcesSignature) return;
-  lastCorporateResourcesSignature=signature;
   const count=document.getElementById('corporateResourceCount');
   if(count) count.textContent=activeRequests.length;
   const root=document.getElementById('corporateResourcesList');
   if(!root) return;
+  if(!force&&signature===lastCorporateResourcesSignature) return;
+  if(activeFormControlWithin(root)||activeEmbeddedManagementControl()) return;
+  lastCorporateResourcesSignature=signature;
   restoreEmbeddedManagementPages(root);
   root.innerHTML=corporateResourcesMarkup(activeRequests);
   mountOccManagementPages(root);
@@ -2289,7 +2302,7 @@ function renderDeskStack(force=false){
     JSON.stringify(workspaceUi.dismissedWarnings||{})
   ].join('::');
   if(!force&&signature===lastDeskStackSignature) return;
-  if(!force&&root.contains(document.activeElement)) return;
+  if(activeFormControlWithin(root)) return;
   lastDeskStackSignature=signature;
   restoreEmbeddedManagementPages(root);
   root.innerHTML=`${occWidgetMarkup('incidents','Operational work','Open incidents',disruptionGroupCount,incidents.length?`${disruptionGroupCount} disruption case${disruptionGroupCount===1?'':'s'} · ${incidents.length} open incident${incidents.length===1?'':'s'}`:'No action required',deskActionBar('incidents',[
@@ -2510,8 +2523,27 @@ function refreshHeader(){
   document.getElementById('headerActive').textContent=active.length;
   document.getElementById('headerUpcoming').textContent=upcomingCount;
   document.getElementById('headerOnTime').textContent=`${onTime}%`;
+  refreshPauseControl();
 }
 function refreshKPIs(){ refreshHeader(); }
+
+function refreshPauseControl(){
+  const speedSelect=document.getElementById('speed');
+  const pauseButton=document.getElementById('pauseTopbarBtn');
+  const paused=simulationIsPaused();
+  const displayedSpeed=paused?normalizedClockSpeed(state.clock?.previousSpeed,1):normalizedClockSpeed(state.clock?.speed,1);
+  if(speedSelect){
+    speedSelect.value=String(displayedSpeed);
+    speedSelect.disabled=paused;
+  }
+  if(pauseButton){
+    pauseButton.innerHTML=paused?'&#9654;':'&#10074;&#10074;';
+    pauseButton.title=paused?'Resume simulation':'Pause simulation';
+    pauseButton.setAttribute('aria-label',paused?'Resume simulation':'Pause simulation');
+    pauseButton.setAttribute('aria-pressed',paused?'true':'false');
+    pauseButton.classList.toggle('paused',paused);
+  }
+}
 
 function setHomeBase(code){
   if(!AIRPORTS[code]) return;
@@ -2677,7 +2709,9 @@ function refreshMaintenance(){
 function refreshManagement(force=false){
   const transferSignature=(state.personnelTransfers||[]).map(item=>`${item.id}:${item.status}:${item.departure}:${item.arrival}:${item.actualTo||''}:${item.status==='scheduled'&&simNow()>=item.departure?'transit':'waiting'}`).join('|');
   const signature=[managementPage,state.aircraft.length,state.slotRights.length,JSON.stringify(state.personnel.assignments),transferSignature,state.resourceRequests?.map(r=>`${r.id}:${r.status}`).join('|')].join('::');
-  if(!force&&signature===lastManagementSignature) return; lastManagementSignature=signature;
+  if(!force&&signature===lastManagementSignature) return;
+  if(activeEmbeddedManagementControl()) return;
+  lastManagementSignature=signature;
   refreshAircraftSelect(force); refreshAircraftRequestPreview(); refreshPersonnelRequestPreview(); refreshPersonnelTransferOptions();
   renderManagementAircraft(); renderManagementPersonnel(); renderPersonnelTransfers(); refreshMaintenance(); refreshSchedulePreview();
 }
@@ -2687,7 +2721,7 @@ function refreshManagementCycle(force=false){ if(force||nextWorkspace==='managem
 function refreshWeather(force=false){ renderWeatherStrip(force); }
 
 function applyWorkspaceView(){
-  document.getElementById('speed').value=String(state.clock.speed);
+  refreshPauseControl();
   document.getElementById('scheduleRange').value=String(scheduleRangeHours);
   showWorkspace('operations');
 }
@@ -2713,7 +2747,7 @@ refreshScheduleMode();
 refreshAircraftRequestPreview();
 refreshPersonnelRequestPreview();
 refreshPersonnelTransferOptions();
-document.getElementById('speed').value=String(state.clock.speed);
+refreshPauseControl();
 
 document.querySelectorAll('[data-workspace]').forEach(button=>button.addEventListener('click',()=>showWorkspace(button.dataset.workspace)));
 document.querySelectorAll('[data-management-page]').forEach(button=>button.addEventListener('click',()=>showManagementPage(button.dataset.managementPage)));
@@ -2734,7 +2768,8 @@ document.getElementById('requestPersonnelBtn').addEventListener('click',()=>{
 ['transferPersonnelRole','transferPersonnelAmount','transferPersonnelFrom','transferPersonnelTo','transferPersonnelMethod','transferPersonnelFlight'].forEach(id=>document.getElementById(id).addEventListener('input',refreshPersonnelTransferOptions));
 document.getElementById('transferPersonnelBtn').addEventListener('click',createPersonnelTransfer);
 
-document.getElementById('speed').addEventListener('change',event=>{rebaseClock(Number(event.target.value));markUiDirty('all');toast(event.target.value==='1'?'Realtime enabled.':'Test acceleration enabled.');});
+document.getElementById('speed').addEventListener('change',event=>{rebaseClock(Number(event.target.value));refreshPauseControl();markUiDirty('all');toast(event.target.value==='1'?'Realtime enabled.':'Test acceleration enabled.');});
+document.getElementById('pauseTopbarBtn')?.addEventListener('click',()=>{const clock=toggleSimulationPause();refreshPauseControl();markUiDirty('all');toast(simulationIsPaused()?'Simulation paused.':`Simulation resumed at ${clock.speed}×.`);});
 document.getElementById('schedulePrevBtn').addEventListener('click',()=>{scheduleWindowOffsetHours-=12;markUiDirty('schedule');});
 document.getElementById('scheduleNowBtn').addEventListener('click',centerScheduleOnNow);
 document.getElementById('scheduleNextBtn').addEventListener('click',()=>{scheduleWindowOffsetHours+=12;markUiDirty('schedule');});

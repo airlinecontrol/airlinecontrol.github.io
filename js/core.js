@@ -497,7 +497,7 @@ function newState(){
   const sim=real;
   const s={
     version:VERSION,
-    clock:{realBase:real,simBase:sim,speed:1},
+    clock:{realBase:real,simBase:sim,speed:1,paused:false,previousSpeed:1},
     cash:0,
     home:'FRA',
     nextAircraft:1,
@@ -546,6 +546,13 @@ function migrateState(parsed){
   if(!Array.isArray(parsed.slotRights)) parsed.slotRights=[];
   if(!Array.isArray(parsed.incidents)) parsed.incidents=[];
   if(!Array.isArray(parsed.coordinationTasks)) parsed.coordinationTasks=[];
+  if(!parsed.clock || typeof parsed.clock!=='object') parsed.clock={realBase:Date.now(),simBase:Date.now(),speed:1};
+  if(!Number.isFinite(parsed.clock.realBase)) parsed.clock.realBase=Date.now();
+  if(!Number.isFinite(parsed.clock.simBase)) parsed.clock.simBase=Date.now();
+  if(!Number.isFinite(parsed.clock.speed)) parsed.clock.speed=1;
+  if(parsed.clock.paused===undefined) parsed.clock.paused=parsed.clock.speed===0;
+  if(!Number.isFinite(parsed.clock.previousSpeed) || parsed.clock.previousSpeed<=0) parsed.clock.previousSpeed=parsed.clock.speed>0?parsed.clock.speed:1;
+  if(parsed.clock.paused) parsed.clock.speed=0;
   const removedIncidentIds=new Set(parsed.incidents.filter(incident=>incident.type==='connection_risk').map(incident=>incident.id));
   if(removedIncidentIds.size){
     parsed.incidents=parsed.incidents.filter(incident=>!removedIncidentIds.has(incident.id));
@@ -843,10 +850,33 @@ function postTransaction(amount,category,description,reference=''){
 function simNow(){
   return state.clock.simBase + (Date.now()-state.clock.realBase)*state.clock.speed;
 }
+function normalizedClockSpeed(value,fallback=1){
+  const speed=Number(value);
+  return Number.isFinite(speed)&&speed>0?speed:fallback;
+}
 function rebaseClock(newSpeed){
   const now=simNow();
-  state.clock={realBase:Date.now(),simBase:now,speed:newSpeed};
+  const speed=normalizedClockSpeed(newSpeed,state.clock?.previousSpeed||1);
+  state.clock={...state.clock,realBase:Date.now(),simBase:now,speed,paused:false,previousSpeed:speed};
   save();
+}
+function setSimulationPaused(paused){
+  const now=simNow();
+  if(paused){
+    const previousSpeed=normalizedClockSpeed(state.clock?.speed,state.clock?.previousSpeed||1);
+    state.clock={...state.clock,realBase:Date.now(),simBase:now,speed:0,paused:true,previousSpeed};
+  }else{
+    const speed=normalizedClockSpeed(state.clock?.previousSpeed,state.clock?.speed||1);
+    state.clock={...state.clock,realBase:Date.now(),simBase:now,speed,paused:false,previousSpeed:speed};
+  }
+  save();
+  return state.clock;
+}
+function toggleSimulationPause(){
+  return setSimulationPaused(!simulationIsPaused());
+}
+function simulationIsPaused(){
+  return Boolean(state.clock?.paused||state.clock?.speed===0);
 }
 function save(){ localStorage.setItem(SAVE_KEY,JSON.stringify(state)); }
 
@@ -892,6 +922,7 @@ function resetLocalSave(){
     routeSignature='';
 
     document.getElementById('speed').value='1';
+    if(typeof refreshPauseControl==='function') refreshPauseControl();
     aircraftMarkers.clear();
     aircraftLayer.clearLayers();
     routeLayer.clearLayers();

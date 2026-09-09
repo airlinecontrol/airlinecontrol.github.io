@@ -983,6 +983,14 @@ body,
 .topbar-icon-button:disabled{
   opacity:.45;
 }
+.pause-sim-button{
+  font-size:13px;
+  font-weight:900;
+}
+.pause-sim-button.paused{
+  background:#1f2115;
+  color:#e7bd5b;
+}
 
 .case-console.expanded{
   background:#10242d!important;
