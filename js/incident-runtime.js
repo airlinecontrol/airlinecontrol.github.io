@@ -240,13 +240,13 @@ function nextSectorForCrewExtensionIncident(incident){
 
 /* Incident resource and consequence helpers live in incident-resources.js and incident-consequences.js. */
 
-function completeOperationalTask(task,outcome=''){
-  task.status='completed'; task.completedAt=simNow(); task.completesAt=task.completedAt;
+function completeOperationalTask(task,outcome='',t=simNow()){
+  task.status='completed'; task.completedAt=t; task.completesAt=task.completedAt;
   task.outcome=outcome||task.pendingOutcome||task.outcome||'Completed';
   delete task.pendingOutcome;
   unlockOperationalTasks(task.incidentId);
   const incident=state.incidents.find(item=>item.id===task.incidentId);
-  if(incident) finalizeOperationalCase(incident);
+  if(incident) finalizeOperationalCase(incident,t);
 }
 
 function unlockOperationalTasks(incidentId){
@@ -277,12 +277,12 @@ function selectIncidentStrategy(incident,strategy){
   }
 }
 
-function completeFinalizedIncident(incident){
-  resolveIncidentImpacts(incident,simNow(),incident.selectedStrategy&&['wait_inbound','accept_next','accept'].includes(incident.selectedStrategy)?'accepted':'handled');
+function completeFinalizedIncident(incident,t=simNow()){
+  resolveIncidentImpacts(incident,t,incident.selectedStrategy&&['wait_inbound','accept_next','accept'].includes(incident.selectedStrategy)?'accepted':'handled');
   if(typeof recordResolvedIncidentRecoveryCost==='function') recordResolvedIncidentRecoveryCost(incident);
   incident.status='resolved';
   incident.blocking=false;
-  incident.resolvedAt=simNow();
+  incident.resolvedAt=t;
   incident.selectedAction='workflow_complete';
   incident.automaticResolution=false;
   for(const task of incidentTasks(incident.id)){
@@ -410,6 +410,53 @@ function finalizeCrewPositionIncident({incident,flight,tasks}){
     incident.outcome='Crew report / positioning ETA accepted and the revised departure was published.';
   }
   return true;
+}
+
+function completeCrewResourceTask(task,incident,outcome,t){
+  task.selection={...(task.selection||{}),source:'resource_reconciliation'};
+  completeOperationalTask(task,outcome,t);
+  if(incident.status==='resolved') incident.recoveredByResourceUpdate=true;
+  return true;
+}
+
+function reconcileNoLegalCrewIncident(incident,t=simNow()){
+  ensureIncidentWorkflow(incident);
+  if(legalCrewConfirmationBlocker(incident)) return false;
+  const task=incidentTasks(incident.id).find(item=>
+    item.key==='crew-legal-strategy'&&taskRelevantToIncidentStrategy(item,incident)&&!['completed','cancelled'].includes(item.status)
+  );
+  if(!task) return false;
+  selectIncidentStrategy(incident,'confirm');
+  task.selection={strategy:'confirm',source:'resource_reconciliation'};
+  return completeCrewResourceTask(task,incident,'Legal crew became available after personnel movement or resource delivery.',t);
+}
+
+function reconcileManualCrewMoveIncident(incident,t=simNow()){
+  if(!['move_crew','move_reserve'].includes(incident.selectedStrategy)) return false;
+  ensureIncidentWorkflow(incident);
+  const task=incidentTasks(incident.id).find(item=>
+    item.kind==='manual_crew_move_required'&&taskRelevantToIncidentStrategy(item,incident)&&!['completed','cancelled'].includes(item.status)
+  );
+  if(!task) return false;
+  const plan=crewRelocationPlanState(incident,t);
+  if(!plan.ready||plan.transfer?.status!=='completed') return false;
+  task.selection={action:'check_crew_move',transferId:plan.transfer.id,role:plan.role,to:plan.to,source:'resource_reconciliation'};
+  return completeCrewResourceTask(task,incident,`${plan.transfer.id} arrived with ${PERSONNEL[plan.role]?.label?.toLowerCase()||'crew'} at ${plan.to}.`,t);
+}
+
+function reconcileCrewResourceIncidents(t=simNow()){
+  let changed=false;
+  for(const incident of state.incidents||[]){
+    if(incident.status!=='open') continue;
+    if(incident.type==='no_legal_crew'){
+      if(reconcileNoLegalCrewIncident(incident,t)) changed=true;
+      continue;
+    }
+    if(['crew_misposition_after_diversion','crew_report_delayed'].includes(incident.type)){
+      if(reconcileManualCrewMoveIncident(incident,t)) changed=true;
+    }
+  }
+  return changed;
 }
 
 function finalizeCrewDutyIncident({incident,flight,tasks}){
@@ -610,7 +657,7 @@ const INCIDENT_FINALIZERS={
 
 window.AeroIncidentFinalizers=INCIDENT_FINALIZERS;
 
-function finalizeOperationalCase(incident){
+function finalizeOperationalCase(incident,t=simNow()){
   if(!incident||incident.status!=='open') return false;
   const tasks=playableIncidentTasks(incident);
   if(!tasks.length||tasks.some(task=>task.status!=='completed')) return false;
@@ -619,8 +666,8 @@ function finalizeOperationalCase(incident){
   if(!flight) return false;
   const handler=INCIDENT_FINALIZERS[incident.type];
   if(!handler) return false;
-  if(!handler({incident,flight,aircraft,tasks})) return false;
-  return completeFinalizedIncident(incident);
+  if(!handler({incident,flight,aircraft,tasks,t})) return false;
+  return completeFinalizedIncident(incident,t);
 }
 
 function processOperationalWorkflows(t=simNow()){
@@ -637,11 +684,11 @@ function processOperationalWorkflows(t=simNow()){
       const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
       if(aircraft){ aircraft.defectUntil=0; aircraft.defectReason=''; aircraft.condition=clamp((aircraft.condition??100)+5,0,100); }
     }
-    completeOperationalTask(task); changed=true;
+    completeOperationalTask(task,'',t); changed=true;
   }
   for(const incident of state.incidents.filter(item=>item.status==='open')){
     unlockOperationalTasks(incident.id);
-    if(finalizeOperationalCase(incident)) changed=true;
+    if(finalizeOperationalCase(incident,t)) changed=true;
   }
   return changed;
 }

@@ -16,6 +16,14 @@
   try{
     let w=frame.contentWindow;
     const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+    const setStaff=(airport,role,value,qualification='')=>{
+      const current=w.staffAt(airport,role);
+      w.changeStaff(airport,role,value-current);
+      if(qualification){
+        const rated=w.qualificationAt(airport,role,qualification);
+        w.changeQualification(airport,role,qualification,value-rated);
+      }
+    };
     w.resetLocalSave();
     await loadApp();
     w=frame.contentWindow;
@@ -73,6 +81,55 @@
     w.processPersonnelTransfers(ferry.arrival+60_000);
     assert(w.eval(`state.personnelTransfers.find(item=>item.id==='${ownTransfer.id}').status`)==='completed','own-flight transfer did not complete after ferry arrival');
     assert(w.staffAt('LHR','cabinCrew')===ownBeforeTo+2,'own-flight transfer did not add staff at ferry destination');
+    const family='Airbus A320 family';
+    setStaff('CDG','captains',0,'Multi-fleet');
+    setStaff('CDG','captains',0,family);
+    setStaff('CDG','firstOfficers',2,family);
+    setStaff('CDG','cabinCrew',4);
+    setStaff('CDG','groundHandling',8);
+    setStaff('CDG','operations',4);
+    setStaff('CDG','customerService',4);
+    setStaff('AMS','captains',2,family);
+    const legalAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'CDG');
+    const legalFlight=w.createFlightRecord({aircraftId:legalAc.id,from:'CDG',to:'FRA',departure:w.simNow()+4*60*60_000,fare:{economy:120,business:300,first:600}});
+    const legalIncident=w.createIncident('no_legal_crew',legalFlight,{training:true,detectedAt:w.simNow(),source:'derived',sourceKey:'fixture:no-legal-after-transfer',context:{role:'captains'}});
+    assert(legalIncident?.status==='open','no-legal-crew fixture incident was not open before personnel move');
+    assert(/still not legal/.test(w.legalCrewConfirmationBlocker(legalIncident)),'no-legal-crew fixture was already legal before personnel move');
+    const legalFerryAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'AMS');
+    const legalFerry=w.createFlightRecord({aircraftId:legalFerryAc.id,from:'AMS',to:'CDG',departure:w.simNow()+30*60_000,fare:{economy:0,business:0,first:0},flightType:'ferry'});
+    w.document.getElementById('transferPersonnelRole').value='captains';
+    w.document.getElementById('transferPersonnelAmount').value='1';
+    w.document.getElementById('transferPersonnelFrom').value='AMS';
+    w.document.getElementById('transferPersonnelTo').value='CDG';
+    w.document.getElementById('transferPersonnelMethod').value='own';
+    w.refreshPersonnelTransferOptions();
+    w.document.getElementById('transferPersonnelFlight').value=legalFerry.id;
+    w.createPersonnelTransfer();
+    const legalTransfer=w.eval('state.personnelTransfers[state.personnelTransfers.length-1]');
+    assert(legalTransfer?.flightId===legalFerry.id,'legal-crew recovery transfer was not booked on the ferry');
+    assert(legalIncident.status==='open','no-legal-crew incident resolved before the ferry arrived');
+    w.processPersonnelTransfers(legalFerry.arrival+60_000);
+    assert(legalIncident.status==='resolved','no-legal-crew incident did not resolve when moved crew arrived');
+    assert(legalIncident.recoveredByResourceUpdate,'no-legal-crew incident did not record resource-update recovery');
+    setStaff('LHR','captains',2,family);
+    const positionAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const positionFlight=w.createFlightRecord({aircraftId:positionAc.id,from:'FRA',to:'AMS',departure:w.simNow()+5*60*60_000,fare:{economy:120,business:300,first:600}});
+    const positionIncident=w.createIncident('crew_misposition_after_diversion',positionFlight,{training:true,detectedAt:w.simNow(),source:'derived',sourceKey:'fixture:manual-crew-move',context:{role:'captains',from:'LHR',crewAirport:'LHR',delayMin:45}});
+    assert(positionIncident?.status==='open','crew-positioning fixture incident was not open before manual move');
+    assert(w.performOperationalTask(`${positionIncident.id}:crew-diversion-strategy`,'move_crew'),'crew-positioning move strategy was rejected');
+    w.document.getElementById('transferPersonnelRole').value='captains';
+    w.document.getElementById('transferPersonnelAmount').value='1';
+    w.document.getElementById('transferPersonnelFrom').value='LHR';
+    w.document.getElementById('transferPersonnelTo').value='FRA';
+    w.document.getElementById('transferPersonnelMethod').value='external';
+    w.refreshPersonnelTransferOptions();
+    w.createPersonnelTransfer();
+    const positionTransfer=w.eval('state.personnelTransfers[state.personnelTransfers.length-1]');
+    assert(positionTransfer?.from==='LHR'&&positionTransfer.to==='FRA','manual crew-positioning transfer was not booked');
+    assert(positionIncident.status==='open','crew-positioning incident resolved before the transfer completed');
+    w.processPersonnelTransfers(positionTransfer.arrival+60_000);
+    assert(positionIncident.status==='resolved','manual crew-positioning incident did not resolve when moved crew arrived');
+    assert(positionIncident.recoveredByResourceUpdate,'manual crew-positioning incident did not record resource-update recovery');
     result.textContent='PASS personnel transfer lifecycle validated';
   }catch(error){
     result.textContent='FAIL '+(error.stack||error);

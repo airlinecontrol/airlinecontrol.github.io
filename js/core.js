@@ -571,6 +571,9 @@ function processPersonnelTransfers(t=simNow()){
       logEvent(`${transfer.id}: ${transfer.amount} ${PERSONNEL[transfer.role].label.toLowerCase()} arrived at ${arrivalAirport}.`);
     }
   }
+  if(changed&&typeof reconcileCrewResourceIncidents==='function'){
+    changed=Boolean(reconcileCrewResourceIncidents(t))||changed;
+  }
   return changed;
 }
 
