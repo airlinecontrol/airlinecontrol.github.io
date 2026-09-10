@@ -2914,10 +2914,20 @@ document.getElementById('scheduleRange').addEventListener('change',event=>{sched
 function confirmLocalReset(){
   if(window.confirm('Delete this local airline save? Aircraft, flights, schedules, tasks, and slot rights will be removed.')) resetLocalSave();
 }
+function handleOperationsShortcut(event){
+  const deletionKey=event.key==='Delete'||event.key==='Backspace';
+  if(event.defaultPrevented||!deletionKey||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey) return;
+  if(activeFormControl()) return;
+  const flight=selectedFlightId&&state.flights.find(item=>item.id===selectedFlightId);
+  if(!flight?.cancelled) return;
+  event.preventDefault();
+  removeCancelledFlight(flight.id,{skipConfirm:true});
+}
 document.getElementById('resetBtn')?.addEventListener('click',confirmLocalReset);
 document.getElementById('resetTopbarBtn')?.addEventListener('click',confirmLocalReset);
 window.addEventListener('pointerdown',armIncidentDing,{passive:true});
 window.addEventListener('keydown',armIncidentDing);
+window.addEventListener('keydown',handleOperationsShortcut);
 bindRailWidgetToggles();
 initWorkspaceSplitter();
 refreshRailCollapseState();

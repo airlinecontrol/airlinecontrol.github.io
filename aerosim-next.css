@@ -403,6 +403,14 @@ body,
   color:#c2d3da;
 }
 .flight-block{top:16px!important;height:34px!important}
+.flight-block.cancelled{
+  z-index:2!important;
+  opacity:.58;
+}
+.flight-block.cancelled:hover{
+  z-index:5!important;
+  opacity:.72;
+}
 .planned-flight-block{
   top:16px!important;
   height:34px!important;
@@ -758,6 +766,11 @@ body,
   outline:0!important;
   z-index:26;
   box-shadow:0 0 0 2px #a1e7fb,0 0 0 5px rgba(97,203,234,.18),0 8px 22px rgba(0,0,0,.36)!important;
+}
+#schedule-board.has-selected-flight .flight-block.cancelled.selected,
+.flight-block.cancelled.selected{
+  z-index:7!important;
+  opacity:.78;
 }
 #schedule-board.has-selected-flight .slot-marker.selected{
   z-index:28;

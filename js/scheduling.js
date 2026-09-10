@@ -638,6 +638,26 @@ function removeStandaloneSchedule(flightId){
   return true;
 }
 
+function removeCancelledFlight(flightId,{skipConfirm=false}={}){
+  const flight=state.flights.find(f=>f.id===flightId);
+  if(!flight) return false;
+  if(!flight.cancelled) return toast('Only cancelled flights can be removed from the schedule view.');
+  if(!skipConfirm&&!AeroServices.confirm(`Remove cancelled flight ${flight.id} from the operations board?`)) return false;
+  const t=simNow();
+  resolveRemovedScheduleArtifacts([flight.id],flight.id,t);
+  state.flights=state.flights.filter(f=>f.id!==flight.id);
+  for(const duty of state.crewDuties||[]) duty.flightIds=(duty.flightIds||[]).filter(id=>id!==flight.id);
+  state.crewDuties=(state.crewDuties||[]).filter(duty=>(duty.flightIds||[]).length);
+  if(selectedFlightId===flight.id) selectedFlightId=null;
+  if(selectedAircraftId===flight.aircraftId) selectedAircraftId=null;
+  updatePassengerConnections();
+  recalculateOperations();
+  AeroServices.commit();
+  requestUiRefresh('all');
+  toast(`${flight.id} removed from the operations board.`);
+  return true;
+}
+
 function removeScheduleSelection(selection){
   const [kind,id]=String(selection||'').split(':');
   if(kind==='service'){
