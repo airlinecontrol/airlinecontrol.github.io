@@ -411,12 +411,22 @@
       if(optionId==='alternate_destination') return `new destination plan · ${diversionConsequenceText(incident)}`;
     }
     if(task.key==='dispatch-performance-strategy'){
-      if(optionId==='payload_reduce') return `possible +20 min delay · about ${incident.context?.payloadReductionPct||12}% payload offload`;
-      if(optionId==='delay_conditions') return `${consequenceDelayText(incident.context?.delayMin||45)} · waits for runway/weather performance margin`;
+      const cause=typeof performanceLimitCauseForContext==='function'?performanceLimitCauseForContext(incident.context||{}):(incident.context?.performanceCause||'margin');
+      if(optionId==='payload_reduce'){
+        const pct=incident.context?.payloadReductionPct||12;
+        if(flight.flightType==='ferry'||!(Number(flight.pax)||0)) return 'not useful for empty/ferry flights · choose substitute, delay, or cancel';
+        if(cause==='mel') return `possible +20 min delay · about ${pct}% payload offload offsets MEL performance penalty`;
+        if(cause==='fuel') return `possible +20 min delay · about ${pct}% payload offload reduces trip fuel demand`;
+        if(cause==='range') return `possible +20 min delay · about ${pct}% payload offload restores range margin`;
+        return `possible +20 min delay · about ${pct}% payload offload`;
+      }
+      if(optionId==='delay_conditions') return cause==='weather'
+        ? `${consequenceDelayText(incident.context?.delayMin||45)} · waits for runway/weather performance margin`
+        : `usually no benefit for ${cause} limitation · use payload reduction, substitute, or cancel`;
       if(optionId==='substitute') return replacementConsequenceText(incident);
     }
     if(task.key==='station-destination-handling-strategy'){
-      if(optionId==='request_handling') return 'requires destination ground-handling personnel · small arrival coordination delay';
+      if(optionId==='request_handling') return 'requires own-station or contract handling acceptance · small arrival coordination delay';
       if(optionId==='delay_departure') return `${consequenceDelayText(incident.context?.delayMin||35)} · protects arrival acceptance`;
     }
     if(task.key==='station-security-strategy'){
@@ -426,10 +436,12 @@
     if(task.key==='dispatch-medical-decision'){
       if(optionId==='continue') return 'flight deck continues · possible +20 min arrival medical coordination delay';
       if(optionId==='divert') return `medical diversion requested · ${diversionConsequenceText(incident,{medical:true})}`;
+      if(optionId==='return_origin') return `medical return requested · ${diversionConsequenceText(incident,{returnOrigin:true,medical:true})}`;
     }
     if(task.key==='dispatch-tech-decision'){
       if(optionId==='continue') return 'flight deck continues · possible +10-15 min flight-watch coordination · arrival inspection may be needed';
       if(optionId==='divert') return `technical diversion requested · ${diversionConsequenceText(incident)}`;
+      if(optionId==='return_origin') return `technical return requested · ${diversionConsequenceText(incident,{returnOrigin:true})}`;
     }
     if(task.key==='dispatch-fuel-decision'){
       if(optionId==='conserve') return 'flight deck reports conservation profile · no planned route delay · fuel margin watched';
@@ -449,6 +461,7 @@
     if(task.key==='dispatch-cabin-decision'){
       if(optionId==='continue') return 'flight deck continues · possible +15 min arrival security coordination delay';
       if(optionId==='divert') return `security diversion requested · ${diversionConsequenceText(incident)}`;
+      if(optionId==='return_origin') return `security return requested · ${diversionConsequenceText(incident,{returnOrigin:true})}`;
     }
     if(task.key==='dispatch-weather-decision'){
       if(optionId==='monitor') return 'flight deck monitors destination · no immediate diversion · approach minima watched';
@@ -473,6 +486,7 @@
     if(task.key==='dispatch-lightning-decision'){
       if(optionId==='continue') return 'flight deck continues · arrival inspection required · aircraft may be held after landing';
       if(optionId==='divert') return `inspection diversion requested · ${diversionConsequenceText(incident)}`;
+      if(optionId==='return_origin') return `inspection return requested · ${diversionConsequenceText(incident,{returnOrigin:true})}`;
     }
     if(task.key==='dispatch-bird-decision'){
       if(optionId==='continue') return 'flight deck continues · arrival inspection required · aircraft may be held after landing';
@@ -482,6 +496,7 @@
     if(task.key==='dispatch-pressure-decision'){
       if(optionId==='continue_low') return 'flight deck continues lower · possible +25 min delay · higher fuel burn';
       if(optionId==='divert') return `technical diversion requested · ${diversionConsequenceText(incident)}`;
+      if(optionId==='return_origin') return `technical return requested · ${diversionConsequenceText(incident,{returnOrigin:true})}`;
     }
     return '';
   }

@@ -20,6 +20,9 @@
       : step);
   }
 
+  const OCC_DESK=[{type:'occ_desk',amount:1}];
+  const DESTINATION_MAINTENANCE=[{type:'maintenance_support',location:'destination',amount:1}];
+
   const KIND_META={
     aircraft_substitution:{eligibility:{phase:'pre_departure_unfueled'},resources:[{type:'aircraft',mode:'replacement'}]},
     maintenance_check_scheduling:{resources:[]},
@@ -37,20 +40,20 @@
     alternate_selection:{resources:[{type:'alternate',mode:'operational'}]},
     return_origin_selection:{resources:[{type:'alternate',mode:'return_origin'}]},
     alternate_handling:{resources:[]},
-    inbound_wait:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
-    authority_decision:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
-    flightdeck_recommendation:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
-    diversion_clearance:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
-    medical_assessment:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
-    medical_coordination:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
-    flight_watch_assessment:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
-    flight_watch_coordination:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
-    fuel_monitoring:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
-    performance_coordination:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
-    reroute_coordination:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
-    crew_extension_record:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
-    cabin_security_coordination:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
-    arrival_maintenance_check:{resources:[{type:'personnel',role:'groundHandling',location:'destination',amount:1}]},
+    inbound_wait:{resources:OCC_DESK},
+    authority_decision:{resources:OCC_DESK},
+    flightdeck_recommendation:{resources:OCC_DESK},
+    diversion_clearance:{resources:OCC_DESK},
+    medical_assessment:{resources:OCC_DESK},
+    medical_coordination:{resources:OCC_DESK},
+    flight_watch_assessment:{resources:OCC_DESK},
+    flight_watch_coordination:{resources:OCC_DESK},
+    fuel_monitoring:{resources:OCC_DESK},
+    performance_coordination:{resources:OCC_DESK},
+    reroute_coordination:{resources:OCC_DESK},
+    crew_extension_record:{resources:OCC_DESK},
+    cabin_security_coordination:{resources:OCC_DESK},
+    arrival_maintenance_check:{resources:DESTINATION_MAINTENANCE},
     destination_handling:{resources:[]}
   };
 
@@ -310,19 +313,23 @@
       {key:'dispatch-medical-assess',department:'dispatch',kind:'medical_assessment',label:'Assess onboard medical case',detail:'Coordinate with the flight deck and medical advisory service.'},
       {key:'dispatch-medical-decision',department:'dispatch',kind:'authority_decision',label:'Record medical / flight deck plan',detail:'Medical advisory and the captain determine the operating plan; OCC records it and coordinates support.',dependsOn:['dispatch-medical-assess'],action:'medical',options:[
         {id:'continue',label:'Record destination continuation',detail:'Flight deck continues; OCC arranges medical assistance at planned arrival.'},
-        {id:'divert',label:'Record medical diversion request',detail:'Flight deck requests diversion; OCC prepares a suitable airport and medical reception.'}
+        {id:'divert',label:'Record medical diversion request',detail:'Flight deck requests diversion; OCC prepares a suitable airport and medical reception.'},
+        {id:'return_origin',label:'Record medical return request',detail:'Flight deck requests return; OCC confirms fuel, ATC, handling, and medical reception at origin.'}
       ]},
       {key:'dispatch-medical-continue',department:'dispatch',kind:'medical_coordination',label:'Coordinate destination medical meet',detail:'Arrange medical assistance on arrival and update the flight deck.',dependsOn:['dispatch-medical-decision'],branch:'continue',action:'continue'},
       {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate medical diversion airport',detail:'Choose a suitable airport with fuel, weather, and handling support.',dependsOn:['dispatch-medical-decision'],branch:'divert'},
+      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, weather, medical reception, and handling for a return to the departure airport.',dependsOn:['dispatch-medical-decision'],branch:'return_origin'},
     ]},
     inflight_technical_fault:{classification:'incident',steps:[
       {key:'dispatch-tech-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess inflight technical fault',detail:'Coordinate with the flight deck and maintenance control to classify the fault.'},
-      {key:'dispatch-tech-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck technical plan',detail:'The captain decides continuation or diversion after maintenance-control guidance; OCC records and supports the plan.',dependsOn:['dispatch-tech-assess'],action:'flightdeck',options:[
+      {key:'dispatch-tech-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck technical plan',detail:'The captain decides continuation, diversion, or return after maintenance-control guidance; OCC records and supports the plan.',dependsOn:['dispatch-tech-assess'],action:'flightdeck',options:[
         {id:'continue',label:'Record monitored continuation',detail:'Flight deck continues; OCC maintains flight watch and prepares arrival maintenance.'},
-        {id:'divert',label:'Record technical diversion request',detail:'Flight deck requests diversion; OCC prepares engineering and passenger handling.'}
+        {id:'divert',label:'Record technical diversion request',detail:'Flight deck requests diversion; OCC prepares engineering and passenger handling.'},
+        {id:'return_origin',label:'Record technical return request',detail:'Flight deck requests return; OCC confirms fuel, ATC, handling, and engineering support at origin.'}
       ]},
       {key:'dispatch-tech-monitor',department:'dispatch',kind:'flight_watch_coordination',label:'Coordinate continued flight watch',detail:'Confirm abnormal checklist status, arrival priority, and maintenance readiness at destination.',dependsOn:['dispatch-tech-decision'],branch:'continue',action:'continue'},
       {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate technical diversion airport',detail:'Choose a suitable airport with fuel, weather, range, and handling support.',dependsOn:['dispatch-tech-decision'],branch:'divert'},
+      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, weather, handling, and maintenance support for a return to the departure airport.',dependsOn:['dispatch-tech-decision'],branch:'return_origin'},
     ]},
     fuel_margin_low:{classification:'derived',steps:[
       {key:'dispatch-fuel-assess',department:'dispatch',kind:'fuel_monitoring',label:'Assess fuel margin',detail:'Compare projected landing fuel against dispatch reserve and current delay exposure.'},
@@ -356,12 +363,14 @@
     ]},
     unruly_passenger:{classification:'incident',steps:[
       {key:'dispatch-cabin-assess',department:'dispatch',kind:'cabin_security_coordination',label:'Assess cabin security report',detail:'Coordinate with the flight deck, cabin lead, and destination security support.'},
-      {key:'dispatch-cabin-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck security plan',detail:'The captain decides whether the situation is contained or requires diversion; OCC coordinates security support.',dependsOn:['dispatch-cabin-assess'],action:'flightdeck',options:[
+      {key:'dispatch-cabin-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck security plan',detail:'The captain decides whether the situation is contained, diversion is needed, or return is requested; OCC coordinates security support.',dependsOn:['dispatch-cabin-assess'],action:'flightdeck',options:[
         {id:'continue',label:'Record destination continuation',detail:'Flight deck continues; OCC arranges police/security reception at destination.'},
-        {id:'divert',label:'Record security diversion request',detail:'Flight deck requests diversion; OCC prepares an airport for immediate security handover.'}
+        {id:'divert',label:'Record security diversion request',detail:'Flight deck requests diversion; OCC prepares an airport for immediate security handover.'},
+        {id:'return_origin',label:'Record security return request',detail:'Flight deck requests return; OCC coordinates ATC, handling, and security reception at origin.'}
       ]},
       {key:'dispatch-cabin-continue',department:'dispatch',kind:'cabin_security_coordination',label:'Coordinate arrival security meet',detail:'Arrange destination security/law enforcement and update the flight deck.',dependsOn:['dispatch-cabin-decision'],branch:'continue',action:'continue'},
       {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate security diversion airport',detail:'Choose a suitable airport with handling and security support.',dependsOn:['dispatch-cabin-decision'],branch:'divert'},
+      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, ATC, handling, and security reception at the departure airport.',dependsOn:['dispatch-cabin-decision'],branch:'return_origin'},
     ]},
     destination_below_minima:{classification:'derived',steps:[
       {key:'dispatch-minima-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess landing-minima picture',detail:'Review destination minima, fuel state, alternates, and return-to-origin feasibility.'},
@@ -387,21 +396,25 @@
     ]},
     lightning_strike:{classification:'derived',steps:[
       {key:'dispatch-lightning-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess reported lightning strike',detail:'Coordinate with flight deck and maintenance control for systems status.'},
-      {key:'dispatch-lightning-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck lightning plan',detail:'The captain decides continued flight or diversion after aircraft status checks; OCC coordinates inspection support.',dependsOn:['dispatch-lightning-assess'],action:'flightdeck',options:[
+      {key:'dispatch-lightning-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck lightning plan',detail:'The captain decides continued flight, diversion, or return after aircraft status checks; OCC coordinates inspection support.',dependsOn:['dispatch-lightning-assess'],action:'flightdeck',options:[
         {id:'continue',label:'Record continuation with inspection',detail:'Flight deck continues; OCC arranges arrival inspection if systems remain normal.'},
-        {id:'divert',label:'Record inspection diversion request',detail:'Flight deck requests diversion; OCC prepares a suitable airport for immediate inspection.'}
+        {id:'divert',label:'Record inspection diversion request',detail:'Flight deck requests diversion; OCC prepares a suitable airport for immediate inspection.'},
+        {id:'return_origin',label:'Record inspection return request',detail:'Flight deck requests return; OCC confirms fuel, ATC, handling, and inspection support at origin.'}
       ]},
       {key:'mx-arrival-check',department:'maintenance',kind:'arrival_maintenance_check',label:'Arrange arrival inspection',detail:'Ensure receiving station can inspect the aircraft after landing.',dependsOn:['dispatch-lightning-decision'],branch:'continue',action:'arrival_check'},
       {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate inspection diversion airport',detail:'Choose a suitable airport with fuel, weather, range, and handling support.',dependsOn:['dispatch-lightning-decision'],branch:'divert'},
+      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, weather, handling, and inspection support for a return to the departure airport.',dependsOn:['dispatch-lightning-decision'],branch:'return_origin'},
     ]},
     pressurization_issue:{classification:'incident',steps:[
       {key:'dispatch-pressure-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess pressurization issue',detail:'Coordinate with the flight deck after abnormal pressurization indications.'},
-      {key:'dispatch-pressure-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck pressurization plan',detail:'The captain decides low-altitude continuation or diversion after checklist actions; OCC coordinates fuel and support.',dependsOn:['dispatch-pressure-assess'],action:'flightdeck',options:[
+      {key:'dispatch-pressure-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck pressurization plan',detail:'The captain decides low-altitude continuation, diversion, or return after checklist actions; OCC coordinates fuel and support.',dependsOn:['dispatch-pressure-assess'],action:'flightdeck',options:[
         {id:'continue_low',label:'Record lower-altitude continuation',detail:'Flight deck continues at lower altitude; OCC monitors fuel burn and prepares destination support.'},
-        {id:'divert',label:'Record technical diversion request',detail:'Flight deck requests diversion; OCC prepares a suitable airport for technical inspection.'}
+        {id:'divert',label:'Record technical diversion request',detail:'Flight deck requests diversion; OCC prepares a suitable airport for technical inspection.'},
+        {id:'return_origin',label:'Record technical return request',detail:'Flight deck requests return; OCC confirms fuel, ATC, handling, and technical support at origin.'}
       ]},
       {key:'dispatch-pressure-continue',department:'dispatch',kind:'flight_watch_coordination',label:'Coordinate lower-altitude profile',detail:'Coordinate fuel burn, ATC clearance, and arrival support for continued flight.',dependsOn:['dispatch-pressure-decision'],branch:'continue_low',action:'continue_low'},
       {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate pressurization diversion airport',detail:'Choose a suitable airport with fuel, weather, range, and handling support.',dependsOn:['dispatch-pressure-decision'],branch:'divert'},
+      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, weather, handling, and technical support for a return to the departure airport.',dependsOn:['dispatch-pressure-decision'],branch:'return_origin'},
     ]}
   };
 

@@ -4,6 +4,18 @@
     return (state.resourceAssignments||[]).filter(item=>['assigned','committed'].includes(item.status)&&item.releaseAt>t);
   }
 
+  function occDeskCapacity(){
+    return Object.keys(state.personnel?.assignments||{})
+      .reduce((sum,code)=>sum+staffAt(code,'operations'),0);
+  }
+
+  function occDeskBlocker(amount=1){
+    const required=Math.max(1,Number(amount)||1);
+    return occDeskCapacity()>=required
+      ? ''
+      : `No OCC/dispatch desk capacity is available. Request operations personnel in Corporate Resources.`;
+  }
+
   function crewPoolOptions(incident){
     const flight=state.flights.find(item=>item.id===incident.flightId);
     const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
@@ -368,8 +380,7 @@
       const flight=state.flights.find(item=>item.id===incident.flightId&&!item.cancelled);
       if(!flight) return 'The affected flight is no longer available.';
       if(typeof flightCanBeCancelled==='function'&&!flightCanBeCancelled(flight)) return flightCancellationUnavailableReason(flight)||'Cancellation is only available before the aircraft is airborne.';
-      if(staffAt(flight.from,'operations')<=0) return `No operations/dispatch personnel are available at ${flight.from}. Add personnel in the Personnel widget.`;
-      return '';
+      return occDeskBlocker(1);
     }
     if(['mx-strategy','mx-postflight-strategy'].includes(task.key)&&optionId==='defer'&&incident.technicalContext?.deferAllowed===false){
       return 'This finding is not deferrable under MEL. Schedule a technical repair, substitute aircraft, or cancel before departure.';
@@ -396,8 +407,11 @@
       if(blocker) return `${next.id}: ${blocker}`;
     }
     const flight=state.flights.find(item=>item.id===incident.flightId);
-    if(['dispatch-capacity-strategy','dispatch-groundstop-strategy','dispatch-night-curfew-strategy','dispatch-ground-destination-strategy'].includes(task.key)&&staffAt(flight?.from,'operations')<=0){
-      return `No operations/dispatch personnel are available at ${flight?.from||'the origin'}. Add personnel in the Personnel widget.`;
+    if(['dispatch-capacity-strategy','dispatch-groundstop-strategy','dispatch-night-curfew-strategy','dispatch-ground-destination-strategy'].includes(task.key)) return occDeskBlocker(1);
+    if(task.key==='dispatch-performance-strategy'){
+      const cause=typeof performanceLimitCauseForContext==='function'?performanceLimitCauseForContext(incident.context||{}):(incident.context?.performanceCause||'margin');
+      if(optionId==='delay_conditions'&&cause!=='weather') return 'Delay is unlikely to improve this limitation; use payload reduction, substitution, or cancellation.';
+      if(optionId==='payload_reduce'&&(flight?.flightType==='ferry'||!(Number(flight?.pax)||0))) return 'Payload reduction is not available for ferry or empty positioning flights.';
     }
     if(task.key==='station-stand-strategy'&&staffAt(flight?.from,'groundHandling')<=0){
       return `No ground handling team is available at ${flight?.from||'the origin'}. Add personnel in the Personnel widget.`;
@@ -436,6 +450,17 @@
   }
 
   function taskResourceRequirementBlocker(requirement,task,incident,flight){
+    if(requirement.type==='occ_desk') return occDeskBlocker(requirement.amount);
+    if(requirement.type==='maintenance_support'){
+      const location=taskResourceLocation(requirement,incident,flight);
+      const aircraft=state.aircraft.find(item=>item.id===flight?.aircraftId);
+      const support=location&&aircraft&&typeof maintenanceSupportAtAirport==='function'
+        ? maintenanceSupportAtAirport(location,aircraft,simNow())
+        : null;
+      return support?.available
+        ? ''
+        : `No line-maintenance support is available at ${location||'the operational airport'}. Move the aircraft, send mobile maintenance, or use a maintenance-capable alternate.`;
+    }
     if(requirement.type==='personnel'){
       const location=taskResourceLocation(requirement,incident,flight);
       const amount=Math.max(1,Number(requirement.amount)||1);
@@ -514,13 +539,14 @@
     if([
       'inbound_wait','medical_assessment','medical_coordination',
       'flight_watch_assessment','flight_watch_coordination','fuel_monitoring','reroute_coordination','crew_extension_record','cabin_security_coordination'
-    ].includes(task.kind)&&staffAt(flight.from,'operations')<=0) return `No operations/dispatch personnel are available at ${flight.from}. Add personnel in the Personnel widget.`;
+    ].includes(task.kind)) return occDeskBlocker(1);
     return '';
   }
 
   const api={
     activeWorkflowAssignments,crewPoolOptions,crewPoolOptionsAtAirport,remoteCrewPoolOptions,
     diversionRouteDurationMs,diversionFuelEstimate,diversionHandlingAvailability,handlingServiceCostForFlight,buildDestinationHandlingPlan,destinationHandlingPlanForFlight,ensureDiversionHandlingPlan,confirmDestinationHandlingPlan,destinationHandlingServiceAvailable,diversionCandidateArrivalAt,diversionAnchorForIncident,diversionCandidatesForIncident,diversionOptionsForIncident,alternateSelectionQueryForTask,alternateSelectionOptionsForTask,diversionRejectionSummaryForIncident,alternateUnavailableMessage,alternateSelectionUnavailableMessage,
+    occDeskCapacity,occDeskBlocker,
     crewAugmentationBlocker,legalCrewConfirmationBlocker,branchStrategyOptionBlocker,taskResourceBlocker,
     taskEligibilityBlocker,taskResourceRequirementBlocker
   };

@@ -64,6 +64,19 @@
       return {aircraft,flight,incident};
     };
     const completeWaits=()=>w.processOperationalWorkflows(Number.MAX_SAFE_INTEGER);
+    {
+      w.changeStaff('LHR','operations',-w.staffAt('LHR','operations'));
+      const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'LHR');
+      const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'LHR',to:'FRA',departure:now+3*60*60_000,fare:{economy:150,business:390,first:750}});
+      const incident=w.createIncident('destination_closure_ground',flight,{training:true,detectedAt:now,context:{sourceId:flight.id,airport:'FRA',delayMin:60,active:true}});
+      assert(incident,'central OCC resource fixture did not create a ground destination-closure incident');
+      const strategy=w.incidentTasks(incident.id).find(task=>task.key==='dispatch-ground-destination-strategy');
+      assert(w.occDeskCapacity()>0,'fixture needs central OCC capacity somewhere in the network');
+      assert(w.branchStrategyOptionBlocker(strategy,incident,'delay_reopen')==='','central OCC tasks should not require origin-airport operations staff');
+      incident.status='resolved';
+      w.incidentTasks(incident.id).forEach(task=>task.status='cancelled');
+    }
+
     const resolveCrew=(role)=>{
       const {flight,incident}=makeCase('crew_sick');
       incident.affectedRole=role;
@@ -307,6 +320,19 @@
     assert(originAlternate.diversionReturnOrigin,'Origin return selected from alternate selector was not recorded as return-origin');
     assert(originAlternate.status==='resolved','Origin return selected from alternate selector did not resolve the incident');
     assert(originAlternateFlight.diversionAirport===originAlternateFlight.from,'Origin return selected from alternate selector did not update the flight destination');
+
+    const {flight:medicalReturnFlight,incident:medicalReturn}=makeAirborneCase('onboard_medical','LHR',{authorityDecision:'return_origin'});
+    assert(w.performOperationalTask(`${medicalReturn.id}:dispatch-medical-assess`),'Medical return assessment was rejected');
+    completeWaits();
+    const medicalDecision=w.incidentTasks(medicalReturn.id).find(task=>task.key==='dispatch-medical-decision');
+    assert(medicalDecision.strategyOptions.some(option=>option.id==='return_origin'),'Medical flight-deck decision does not offer return to origin');
+    assert(w.operationalOptionConsequence(medicalDecision,medicalReturn,'return_origin').includes('medical return'),'Medical return consequence is missing');
+    assert(w.performOperationalTask(`${medicalReturn.id}:dispatch-medical-decision`),'Medical return flight-deck response was rejected');
+    completeWaits();
+    assert(w.performOperationalTask(`${medicalReturn.id}:dispatch-return-origin`),'Medical return-to-origin selection was rejected');
+    assert(medicalReturn.diversionReturnOrigin,'Medical return-to-origin was not recorded');
+    assert(medicalReturn.status==='resolved','Medical return-to-origin incident did not resolve');
+    assert(medicalReturnFlight.diversionAirport===medicalReturnFlight.from,'Medical return-to-origin did not update the operational destination');
 
     {
       const aircraft=w.assignRequestedAircraft('A330-900',w.defaultCabin('A330-900'),'ATL');

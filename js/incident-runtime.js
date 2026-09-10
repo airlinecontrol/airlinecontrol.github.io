@@ -53,6 +53,15 @@ function applyOperationalDiversionDestination(flight,incident,aircraft,alternate
   return revision;
 }
 
+function applyArrivalInspectionFollowUp(incident,flight){
+  const definition=incident&&INCIDENT_DEFINITIONS[incident.type];
+  if(!definition?.arrivalInspectionOnClose||!flight) return false;
+  flight.arrivalInspectionRequired=true;
+  const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
+  if(aircraft) aircraft.arrivalInspectionRequired=true;
+  return true;
+}
+
 function taskRelevantToIncidentStrategy(task,incident){
   if(!incident) return task.status!=='cancelled';
   if(incident.status&&incident.status!=='open') return false;
@@ -134,11 +143,7 @@ function closeIncidentForPhaseRepair(incident,t,outcome,reason='phase_repair'){
 
 function closeArrivedAirborneIncident(incident,flight,t){
   const definition=INCIDENT_DEFINITIONS[incident.type]||{};
-  if(definition.arrivalInspectionOnClose){
-    flight.arrivalInspectionRequired=true;
-    const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
-    if(aircraft) aircraft.arrivalInspectionRequired=true;
-  }
+  applyArrivalInspectionFollowUp(incident,flight);
   const followUp=definition.arrivalInspectionOnClose?' Arrival inspection is now required.':'';
   closeIncidentForPhaseRepair(
     incident,t,
@@ -290,6 +295,10 @@ function selectIncidentStrategy(incident,strategy){
 }
 
 function completeFinalizedIncident(incident,t=simNow()){
+  const flight=state.flights.find(item=>item.id===incident.flightId);
+  if(applyArrivalInspectionFollowUp(incident,flight)&&incident.outcome&&!/inspection/i.test(incident.outcome)){
+    incident.outcome+=' Arrival inspection is now required.';
+  }
   resolveIncidentImpacts(incident,t,incident.selectedStrategy&&['wait_inbound','accept_next','accept'].includes(incident.selectedStrategy)?'accepted':'handled');
   if(typeof recordResolvedIncidentRecoveryCost==='function') recordResolvedIncidentRecoveryCost(incident);
   incident.status='resolved';
@@ -556,10 +565,10 @@ function finalizeDestinationHandlingIncident({incident,flight,aircraft}){
 }
 
 function finalizeMedicalIncident({incident,flight,aircraft}){
-  if(incident.selectedStrategy==='divert'){
+  if(['divert','return_origin'].includes(incident.selectedStrategy)){
     const alternate=incident.selectedAlternate;
     if(!alternate||!aircraft) return false;
-    const returnOrigin=alternate===flight.from||incident.diversionReturnOrigin;
+    const returnOrigin=incident.selectedStrategy==='return_origin'||alternate===flight.from||incident.diversionReturnOrigin;
     applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{
       mode:returnOrigin?'return_origin':'diversion',
       reason:returnOrigin?`Medical return to ${alternate}`:`Medical diversion to ${alternate}`
@@ -824,10 +833,10 @@ function authorityDecisionForIncident(task,incident,flight){
       strategy=hasReturn&&(progress<.35||!hasAlternate||roll<.25)?'return_origin':'alternate';
       break;
     case 'onboard_medical':
-      strategy=hasAlternate&&progress<.82&&roll<.48?'divert':'continue';
+      strategy=hasReturn&&progress<.3&&roll<.25?'return_origin':hasAlternate&&progress<.82&&roll<.52?'divert':'continue';
       break;
     case 'inflight_technical_fault':
-      strategy=hasAlternate&&(poorCondition||roll<.32||progress<.25)?'divert':'continue';
+      strategy=hasReturn&&progress<.3&&(poorCondition||roll<.18)?'return_origin':hasAlternate&&(poorCondition||roll<.34||progress<.25)?'divert':'continue';
       break;
     case 'fuel_margin_low':
       strategy=hasReturn&&progress<.45&&(poorFuel||!hasAlternate||roll<.22)?'return_origin':hasAlternate&&(poorFuel||roll<.35)?'divert':roll<.72?'direct':'conserve';
@@ -836,7 +845,7 @@ function authorityDecisionForIncident(task,incident,flight){
       strategy=hasAlternate&&(poorFuel||Number(context.holdingDelayMin||0)>=35||roll<.42)?'divert':'direct';
       break;
     case 'unruly_passenger':
-      strategy=hasAlternate&&roll<.36?'divert':'continue';
+      strategy=hasReturn&&progress<.25&&roll<.18?'return_origin':hasAlternate&&roll<.36?'divert':'continue';
       break;
     case 'destination_weather_deterioration':
       strategy=poorWeather&&hasAlternate?'divert':highDelay||roll<.38?'hold':'monitor';
@@ -851,13 +860,13 @@ function authorityDecisionForIncident(task,incident,flight){
       strategy=hasAlternate?'reselect':hasReturn?'return_origin':'hold';
       break;
     case 'lightning_strike':
-      strategy=hasAlternate&&(context.severity==='severe'||poorCondition||roll<.28)?'divert':'continue';
+      strategy=hasReturn&&progress<.25&&(context.severity==='severe'||poorCondition||roll<.18)?'return_origin':hasAlternate&&(context.severity==='severe'||poorCondition||roll<.3)?'divert':'continue';
       break;
     case 'bird_strike':
       strategy=hasReturn&&progress<.35&&(poorCondition||roll<.4)?'return_origin':hasAlternate&&(poorCondition||roll<.58)?'divert':'continue';
       break;
     case 'pressurization_issue':
-      strategy=hasAlternate&&(progress<.78||poorFuel||roll<.72)?'divert':'continue_low';
+      strategy=hasReturn&&progress<.35&&(poorFuel||roll<.25)?'return_origin':hasAlternate&&(progress<.78||poorFuel||roll<.72)?'divert':'continue_low';
       break;
     default:
       strategy=options[Math.floor(roll*Math.max(1,options.length))]||'';
@@ -1385,8 +1394,17 @@ function handleCabinSecurityCoordinationTask({task,incident,flight,actionId}){
 
 function handleArrivalMaintenanceCheckTask({task,flight}){
   const destination=flightOperationalDestination(flight);
-  task.selection={airport:destination};
-  createExternalWorkflowRequest(task,`${destination} station / maintenance`,12,'Arrival inspection and post-flight technical hold arranged.');
+  const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
+  const support=aircraft&&typeof maintenanceSupportAtAirport==='function'
+    ? maintenanceSupportAtAirport(destination,aircraft,simNow())
+    : null;
+  task.selection={airport:destination,source:support?.source||'maintenance'};
+  createExternalWorkflowRequest(
+    task,
+    `${destination} ${support?.source==='contract'?'contract line maintenance':'maintenance control'}`,
+    Math.max(12,Number(support?.responseMin)||12),
+    `Arrival inspection and post-flight technical hold arranged${support?.label?` via ${support.label}`:''}.`
+  );
   return true;
 }
 
@@ -1713,7 +1731,7 @@ function applyDefaultFlightdeckConsequence(incident,flight,decision,t){
     const delay=['direct','conserve','monitor','continue'].includes(strategy)?10:incident.coordinatedDelayMin;
     flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,delay);
     if(['fuel_margin_low','atc_holding_fuel_conflict'].includes(incident.type)) flight.fuelMarginReviewed=true;
-    if(['lightning_strike','bird_strike','inflight_technical_fault'].includes(incident.type)) flight.arrivalInspectionRequired=true;
+    applyArrivalInspectionFollowUp(incident,flight);
     return {ok:true,outcome:decision.outcome||'Flight deck plan recorded by default.'};
   }
   return {ok:true,outcome:decision.outcome||'Flight-watch plan recorded by default.'};

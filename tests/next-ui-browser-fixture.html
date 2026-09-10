@@ -145,6 +145,17 @@
     w.refreshAll(); await wait(120);
     const expectedConnectorGap=w.formatDuration(w.flightActualDeparture(connectorSecond)-w.flightActualArrival(connectorFirst));
     assert([...d.querySelectorAll('#schedule-board .connection-label')].some(item=>item.textContent.trim()===expectedConnectorGap),'schedule connector does not show ground-time distance');
+    const actualShortTurnAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const actualShortTurnFirst=w.createFlightRecord({aircraftId:actualShortTurnAc.id,from:'FRA',to:'LHR',departure:w.simNow()+4*60*60_000,fare:{economy:120,business:300,first:600}});
+    w.recalculateOperations();
+    const actualShortTurnSecond=w.createFlightRecord({aircraftId:actualShortTurnAc.id,from:'LHR',to:'FRA',departure:w.flightActualArrival(actualShortTurnFirst)+25*60_000,fare:{economy:120,business:300,first:600}});
+    actualShortTurnSecond.manualDelayMin=35;
+    w.recalculateOperations();
+    w.refreshAll(); await wait(120);
+    const projectedTurn=w.turnaroundGapInfo(actualShortTurnFirst,actualShortTurnSecond,actualShortTurnAc);
+    assert(projectedTurn.plannedBelowMinimum&&projectedTurn.actualGapMin>projectedTurn.plannedGapMin,'connector fixture should have a planned short turn with a longer actual turn');
+    const expectedProjectedTurn=`${Math.max(0,projectedTurn.actualGapMin)}/${projectedTurn.minimumMin}m`;
+    assert([...d.querySelectorAll('#schedule-board .connection-label.short-turn')].some(item=>item.title.includes(`${actualShortTurnFirst.id} to ${actualShortTurnSecond.id}`)&&item.textContent.trim()===expectedProjectedTurn),'short-turn connector label should show projected/actual turn time, not planned turn time');
     const lateConnectorAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'AMS');
     const lateInbound=w.createFlightRecord({aircraftId:lateConnectorAc.id,from:'AMS',to:'FRA',departure:w.simNow()+2*60*60_000,fare:{economy:120,business:300,first:600}});
     w.recalculateOperations();

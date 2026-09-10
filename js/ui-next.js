@@ -1210,14 +1210,18 @@ function taskActions(task,incident){
     const flight=state.flights.find(item=>item.id===incident?.flightId&&!item.cancelled);
     const options=task.strategyOptions||[];
     const cancelOption=options.find(option=>option.id==='cancel');
-    const optionLabels=options.filter(option=>option.id!=='cancel').map(option=>`<span>${esc(option.label||option.id)}</span>`).join('');
+    const optionPreviews=options.filter(option=>option.id!=='cancel').map(option=>{
+      const consequence=operationalOptionConsequence(task,incident,option.id);
+      const cost=typeof costPreviewText==='function'?costPreviewText(task,incident,option.id):'';
+      return `<div class="choice-preview-card"><b>${esc(option.label||option.id)}</b><span>${esc(option.detail||'Possible flight deck response.')}</span>${consequence?`<em class="choice-consequence">${esc(consequence)}</em>`:''}${cost?`<em class="choice-cost">${esc(cost)}</em>`:''}</div>`;
+    }).join('');
     const cancelBlocker=cancelOption?branchStrategyOptionBlocker(task,incident,'cancel'):'';
     const cancelConsequence=cancelOption?operationalOptionConsequence(task,incident,'cancel'):'';
     const cancelCost=cancelOption&&typeof costPreviewText==='function'?costPreviewText(task,incident,'cancel'):'';
     const cancelMarkup=cancelOption&&(!flight||flightCanBeCancelled(flight))
       ? `<button class="choice-button danger" type="button" data-task-action="cancel" ${cancelBlocker?'disabled':''}><b>${esc(cancelOption.label)}</b><span>${esc(cancelBlocker||cancelOption.detail)}</span>${cancelConsequence?`<em class="choice-consequence">${esc(cancelConsequence)}</em>`:''}${cancelCost?`<em class="choice-cost">${esc(cancelCost)}</em>`:''}</button>`
       : '';
-    return `<div class="authority-task"><button class="primary-button" type="button" data-task-action="complete">${esc(task.label)}</button>${optionLabels?`<div>${optionLabels}</div>`:''}${cancelMarkup}</div>`;
+    return `<div class="authority-task"><button class="primary-button" type="button" data-task-action="complete">${esc(task.label)}</button>${optionPreviews?`<div class="choice-list authority-choice-list">${optionPreviews}</div>`:''}${cancelMarkup?`<div class="choice-list">${cancelMarkup}</div>`:''}</div>`;
   }
   if(task.kind==='technical_strategy'||task.kind==='recovery_strategy'){
     const fallback=[{id:'defer',label:'Defer under MEL',detail:'Continue with documented restrictions.'},{id:'schedule_check',label:'Schedule technical repair',detail:'Plan a repair window.'},{id:'substitute',label:'Use replacement aircraft',detail:'Assign a serviceable spare or borrowed aircraft.'}];

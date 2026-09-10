@@ -494,7 +494,7 @@ function refreshScheduleTimeline(force=false){
                 connectorLateInbound?'late inbound rotation warning':null
               ].filter(Boolean);
               const label=connectorShortTurn&&turn
-                ? `${Math.max(0,turn.plannedGapMin)}/${turn.minimumMin}m`
+                ? `${Math.max(0,turn.actualGapMin)}/${turn.minimumMin}m`
                 : formatDuration(gapMs);
               html+=`<span class="connection-label ${connectorLateInbound?'late-inbound':''} ${connectorShortTurn?'short-turn':''} ${connectionFocused?'focus':''}" title="${esc(titleParts.join(' · '))}" style="left:${connLeft+connWidth/2}px">${esc(label)}</span>`;
               html+=`<span class="connection-line ${same?'':'mismatch'} ${connectorLateInbound?'late-inbound':''} ${connectorShortTurn?'short-turn':''} ${connectionFocused?'focus':''}" title="${esc(titleParts.join(' · '))}" style="left:${connLeft}px;width:${connWidth}px"></span>`;

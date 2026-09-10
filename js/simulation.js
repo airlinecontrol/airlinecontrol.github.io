@@ -382,12 +382,17 @@ function turnaroundGapInfo(previous,next,aircraft=null){
   const shortageMin=Math.max(0,minimumMin-limitingGapMin);
   const plannedShortageMin=Math.max(0,minimumMin-plannedGapMin);
   const actualShortageMin=Math.max(0,minimumMin-actualGapMin);
-  const limitingGapLabel=limitingGapMin<0?'overlap':`${limitingGapMin} min`;
+  const visibleGapLabel=value=>value<0?'overlap':`${value} min`;
+  const limitingGapLabel=actualBelowMinimum
+    ? `actual turnaround ${visibleGapLabel(actualGapMin)}`
+    : plannedBelowMinimum
+      ? `planned turnaround ${visibleGapLabel(plannedGapMin)}`
+      : `turnaround ${visibleGapLabel(actualGapMin)}`;
   return {
     sameStation,minimumMin,actualGapMin,plannedGapMin,limitingGapMin,
     belowMinimum,plannedBelowMinimum,actualBelowMinimum,shortageMin,plannedShortageMin,actualShortageMin,
     title:belowMinimum
-      ? `${previous.id} to ${next.id}: turnaround ${limitingGapLabel}, minimum ${minimumMin} min for ${ac.model} · planned ${plannedGapMin} min · actual ${actualGapMin} min`
+      ? `${previous.id} to ${next.id}: ${limitingGapLabel}, minimum ${minimumMin} min for ${ac.model} · planned ${plannedGapMin} min · actual ${actualGapMin} min`
       : `${previous.id} to ${next.id}: ground time ${actualGapMin} min, minimum ${minimumMin} min for ${ac.model}`
   };
 }
@@ -1622,6 +1627,16 @@ function atcGroundStopContextForFlight(flight,t=simNow()){
   };
 }
 
+function performanceLimitCauseForContext(context={}){
+  if(context.performanceCause) return context.performanceCause;
+  if(Number(context.rangeMarginKm)<0) return 'range';
+  if(Number(context.fuelMarginGal)<0) return 'fuel';
+  if(Number(context.melPenalty)>0) return 'mel';
+  const weather=String(context.weather||context.conditions||'').toLowerCase();
+  if(context.weatherLevel==='severe'||context.weatherLevel==='caution'||/wind|storm|rain|snow|ice|visibility|ceiling|runway/.test(weather)) return 'weather';
+  return 'margin';
+}
+
 function performanceLimitContextForFlight(flight,t=simNow()){
   if(flight.departureLogged||t<flight.departure-8*HOUR) return null;
   const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
@@ -1640,6 +1655,7 @@ function performanceLimitContextForFlight(flight,t=simNow()){
   const active=rangeMarginKm<180||fuelMarginGal<performance.fuelCapacityGal*.08;
   if(!active) return null;
   const payloadReductionPct=clamp(Math.ceil((Math.max(0,180-rangeMarginKm)/Math.max(1,routeKm))*100+8),8,22);
+  const performanceCause=performanceLimitCauseForContext({rangeMarginKm,fuelMarginGal,melPenalty,weather:weather.conditions,weatherLevel:weather.level});
   return {
     sourceId:flight.id,
     routeKm:Math.round(routeKm),
@@ -1649,7 +1665,11 @@ function performanceLimitContextForFlight(flight,t=simNow()){
     fuelCapacityGal:Math.round(performance.fuelCapacityGal),
     fuelMarginGal:Math.round(fuelMarginGal),
     weather:weather.conditions,
+    weatherLevel:weather.level,
     melPenalty,
+    performanceCause,
+    delayUseful:performanceCause==='weather',
+    payloadReductionUseful:flight.flightType!=='ferry'&&Number(flight.pax||0)>0&&['range','fuel','mel','margin'].includes(performanceCause),
     payloadReductionPct,
     delayMin:weather.level==='normal'?20:45,
     active:true

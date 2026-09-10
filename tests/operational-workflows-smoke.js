@@ -29,6 +29,7 @@ assert.equal(tasks[0].status,'available');
 assert.equal(tasks[1].status,'blocked');
 assert.equal(tasks[0].kind,'flight_watch_assessment');
 assert.equal(tasks[1].kind,'authority_decision');
+assert.deepEqual(tasks[0].resources,[{type:'occ_desk',amount:1}]);
 assert.deepEqual(tasks[1].strategyOptions.map(option=>option.id),['alternate','return_origin']);
 assertRecordedAuthorityOptions(tasks[1]);
 assert.equal(tasks.some(task=>task.kind==='dispatch_release'),false);
@@ -141,15 +142,17 @@ assert.equal(handlingTasks.some(task=>task.kind==='alternate_handling'),false);
 
 const medicalTasks=workflows.tasksForIncident({id:'INC17',type:'onboard_medical',flightId:'AS17',aircraftId:'AC17',detectedAt:1000});
 assert.equal(medicalTasks.find(task=>task.key==='dispatch-medical-decision').kind,'authority_decision');
-assert.deepEqual(medicalTasks.find(task=>task.key==='dispatch-medical-decision').strategyOptions.map(option=>option.id),['continue','divert']);
+assert.deepEqual(medicalTasks.find(task=>task.key==='dispatch-medical-decision').strategyOptions.map(option=>option.id),['continue','divert','return_origin']);
 assertRecordedAuthorityOptions(medicalTasks.find(task=>task.key==='dispatch-medical-decision'));
+assert.equal(medicalTasks.find(task=>task.key==='dispatch-return-origin').kind,'return_origin_selection');
 assert.equal(medicalTasks.some(task=>task.kind==='flight_cancellation'),false);
 
 const inflightTechTasks=workflows.tasksForIncident({id:'INC18',type:'inflight_technical_fault',flightId:'AS18',aircraftId:'AC18',detectedAt:1000});
 assert.equal(inflightTechTasks.find(task=>task.key==='dispatch-tech-decision').kind,'authority_decision');
-assert.deepEqual(inflightTechTasks.find(task=>task.key==='dispatch-tech-decision').strategyOptions.map(option=>option.id),['continue','divert']);
+assert.deepEqual(inflightTechTasks.find(task=>task.key==='dispatch-tech-decision').strategyOptions.map(option=>option.id),['continue','divert','return_origin']);
 assertRecordedAuthorityOptions(inflightTechTasks.find(task=>task.key==='dispatch-tech-decision'));
 assert.equal(inflightTechTasks.find(task=>task.key==='dispatch-alternate').branch,'divert');
+assert.equal(inflightTechTasks.find(task=>task.key==='dispatch-return-origin').branch,'return_origin');
 assert.equal(inflightTechTasks.some(task=>task.kind==='flight_cancellation'),false);
 
 const fuelTasks=workflows.tasksForIncident({id:'INC19',type:'fuel_margin_low',flightId:'AS19',aircraftId:'AC19',detectedAt:1000});
@@ -169,8 +172,9 @@ assert.deepEqual(rerouteTasks.find(task=>task.key==='dispatch-reroute-strategy')
 
 const cabinTasks=workflows.tasksForIncident({id:'INC21',type:'unruly_passenger',flightId:'AS21',aircraftId:'AC21',detectedAt:1000});
 assert.equal(cabinTasks.find(task=>task.key==='dispatch-cabin-decision').kind,'authority_decision');
-assert.deepEqual(cabinTasks.find(task=>task.key==='dispatch-cabin-decision').strategyOptions.map(option=>option.id),['continue','divert']);
+assert.deepEqual(cabinTasks.find(task=>task.key==='dispatch-cabin-decision').strategyOptions.map(option=>option.id),['continue','divert','return_origin']);
 assertRecordedAuthorityOptions(cabinTasks.find(task=>task.key==='dispatch-cabin-decision'));
+assert.equal(cabinTasks.find(task=>task.key==='dispatch-return-origin').kind,'return_origin_selection');
 
 const minimaTasks=workflows.tasksForIncident({id:'INC22B',type:'destination_below_minima',flightId:'AS22B',aircraftId:'AC22B',detectedAt:1000});
 assert.equal(minimaTasks.find(task=>task.key==='dispatch-minima-decision').kind,'authority_decision');
@@ -184,9 +188,11 @@ assertRecordedAuthorityOptions(diversionAirportTasks.find(task=>task.key==='disp
 
 const lightningTasks=workflows.tasksForIncident({id:'INC23',type:'lightning_strike',flightId:'AS23',aircraftId:'AC23',detectedAt:1000});
 assert.equal(lightningTasks.find(task=>task.key==='dispatch-lightning-decision').kind,'authority_decision');
-assert.deepEqual(lightningTasks.find(task=>task.key==='dispatch-lightning-decision').strategyOptions.map(option=>option.id),['continue','divert']);
+assert.deepEqual(lightningTasks.find(task=>task.key==='dispatch-lightning-decision').strategyOptions.map(option=>option.id),['continue','divert','return_origin']);
 assertRecordedAuthorityOptions(lightningTasks.find(task=>task.key==='dispatch-lightning-decision'));
 assert.equal(lightningTasks.find(task=>task.kind==='arrival_maintenance_check').branch,'continue');
+assert.deepEqual(lightningTasks.find(task=>task.kind==='arrival_maintenance_check').resources,[{type:'maintenance_support',location:'destination',amount:1}]);
+assert.equal(lightningTasks.find(task=>task.key==='dispatch-return-origin').kind,'return_origin_selection');
 
 const birdTasks=workflows.tasksForIncident({id:'INC23B',type:'bird_strike',flightId:'AS23B',aircraftId:'AC23B',detectedAt:1000});
 assert.equal(birdTasks.find(task=>task.key==='dispatch-bird-decision').kind,'authority_decision');
@@ -197,8 +203,9 @@ assert.equal(birdTasks.find(task=>task.kind==='arrival_maintenance_check').branc
 
 const pressureTasks=workflows.tasksForIncident({id:'INC24',type:'pressurization_issue',flightId:'AS24',aircraftId:'AC24',detectedAt:1000});
 assert.equal(pressureTasks.find(task=>task.key==='dispatch-pressure-decision').kind,'authority_decision');
-assert.deepEqual(pressureTasks.find(task=>task.key==='dispatch-pressure-decision').strategyOptions.map(option=>option.id),['continue_low','divert']);
+assert.deepEqual(pressureTasks.find(task=>task.key==='dispatch-pressure-decision').strategyOptions.map(option=>option.id),['continue_low','divert','return_origin']);
 assertRecordedAuthorityOptions(pressureTasks.find(task=>task.key==='dispatch-pressure-decision'));
+assert.equal(pressureTasks.find(task=>task.key==='dispatch-return-origin').kind,'return_origin_selection');
 
 assert.equal(workflows.progress({status:'in_progress',startedAt:1000,completesAt:2000},1500),.5);
 assert.equal(workflows.progress({status:'completed'},1500),1);
