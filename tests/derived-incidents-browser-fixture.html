@@ -72,6 +72,20 @@
       assert(!w.openIncidentsForFlight(groundFlight.id).some(item=>item.type==='destination_handling_unavailable'),'planned destination handling gap should not open an incident before departure');
       assert(w.operationWarnings(now).some(item=>item.type==='destination_handling_warning'&&item.flightId===groundFlight.id),'planned destination handling gap did not become a warning');
 
+      const divertedAircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const divertedFlight=w.createFlightRecord({aircraftId:divertedAircraft.id,from:'FRA',to:'AMS',departure:now-90*60_000,fare:{economy:120,business:300,first:0}});
+      w.recalculateOperations();
+      divertedFlight.departureLogged=true;
+      divertedFlight.actualDeparture=now-90*60_000;
+      divertedFlight.actualArrival=now+90*60_000;
+      divertedFlight.operationalDurationMs=divertedFlight.actualArrival-divertedFlight.actualDeparture;
+      divertedFlight.diversionAirport='LGW';
+      const divertedHandlingContext=w.destinationHandlingContextForFlight(divertedFlight,now);
+      assert(!divertedHandlingContext?.active,`diversion with modeled contract handling should not require a destination-handling incident: ${JSON.stringify(divertedHandlingContext)}`);
+      assert(divertedFlight.diversionHandlingPlan?.available&&divertedFlight.diversionHandlingPlan.source==='contract','diverted flight did not create a contract handling plan');
+      w.processDerivedOperationalIncidents(now);
+      assert(!w.openIncidentsForFlight(divertedFlight.id).some(item=>item.type==='destination_handling_unavailable'),'diversion with contract handling still escalated to destination handling unavailable');
+
       const airborneAircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
       const airborneFlight=w.createFlightRecord({aircraftId:airborneAircraft.id,from:'FRA',to:'LGW',departure:now-90*60_000,fare:{economy:120,business:300,first:0}});
       w.recalculateOperations();
@@ -85,6 +99,21 @@
       assert(w.destinationHandlingIncidentRequired(airborneFlight,airborneHandlingContext),'airborne destination handling context was not classified as incident-required');
       w.processDerivedOperationalIncidents(now);
       assert(w.openIncidentsForFlight(airborneFlight.id).some(item=>item.type==='destination_handling_unavailable'),'airborne destination handling gap should escalate to an incident');
+
+      const originalLgwMarket={...w.eval('AIRPORT_MARKETS.LGW')};
+      w.eval('AIRPORT_MARKETS.LGW.size=0; AIRPORT_MARKETS.LGW.hub=0; AIRPORT_MARKETS.LGW.business=0; AIRPORT_MARKETS.LGW.tourism=0;');
+      const noHandlerAircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const noHandlerFlight=w.createFlightRecord({aircraftId:noHandlerAircraft.id,from:'FRA',to:'AMS',departure:now-70*60_000,fare:{economy:120,business:300,first:0}});
+      w.recalculateOperations();
+      noHandlerFlight.departureLogged=true;
+      noHandlerFlight.actualDeparture=now-70*60_000;
+      noHandlerFlight.actualArrival=now+80*60_000;
+      noHandlerFlight.operationalDurationMs=noHandlerFlight.actualArrival-noHandlerFlight.actualDeparture;
+      noHandlerFlight.diversionAirport='LGW';
+      const noHandlerContext=w.destinationHandlingContextForFlight(noHandlerFlight,now);
+      assert(noHandlerContext?.active,`diversion without modeled handler should create active handling context: ${JSON.stringify(noHandlerContext)}`);
+      assert(w.destinationHandlingIncidentRequired(noHandlerFlight,noHandlerContext),'diversion without modeled handler was not classified as incident-required');
+      w.eval(`Object.assign(AIRPORT_MARKETS.LGW,${JSON.stringify(originalLgwMarket)})`);
     }
 
     {

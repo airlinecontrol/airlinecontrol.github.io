@@ -29,6 +29,18 @@ function applyOperationalDiversionDestination(flight,incident,aircraft,alternate
   flight.diversionAirport=alternate;
   flight.operationalDurationMs=incidentDiversionDurationMs(incident,flight,aircraft,alternate);
   flight.weatherChecked=false;
+  const handlingPlan=typeof ensureDiversionHandlingPlan==='function'
+    ? ensureDiversionHandlingPlan(flight,alternate,{incident,reason:selectedMode==='return_origin'?'Return-origin handling':'Diversion arrival handling'})
+    : null;
+  if(handlingPlan){
+    incident.diversionHandlingPlan={
+      airport:handlingPlan.airport,
+      source:handlingPlan.source,
+      status:handlingPlan.status,
+      cost:handlingPlan.cost||0,
+      confirmsAt:handlingPlan.confirmsAt||0
+    };
+  }
   const revision=window.AeroRoutePlanning?.applyDiversionRouteRevision?.(flight,alternate,{
     incident,
     mode:selectedMode,
@@ -526,8 +538,14 @@ function finalizeDestinationHandlingIncident({incident,flight,aircraft}){
   if(incident.selectedStrategy==='prepare_alternate'){
     const alternate=incident.selectedAlternate;
     if(!alternate||!aircraft) return false;
-    applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{reason:`Handling alternate ${alternate}`});
-    incident.outcome=`Handling alternate ${alternate} coordinated with flight deck, ATC, and station handling.`;
+    const returnOrigin=alternate===flight.from||incident.diversionReturnOrigin;
+    applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{
+      mode:returnOrigin?'return_origin':'diversion',
+      reason:returnOrigin?`Return to ${alternate} for handling recovery`:`Handling alternate ${alternate}`
+    });
+    incident.outcome=returnOrigin
+      ? `Return to ${alternate} coordinated with flight deck, ATC, and station handling.`
+      : `Handling alternate ${alternate} coordinated with flight deck, ATC, and station handling.`;
     return true;
   }
   applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||incident.context?.delayMin||25);
@@ -541,8 +559,14 @@ function finalizeMedicalIncident({incident,flight,aircraft}){
   if(incident.selectedStrategy==='divert'){
     const alternate=incident.selectedAlternate;
     if(!alternate||!aircraft) return false;
-    applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{reason:`Medical diversion to ${alternate}`});
-    incident.outcome=`Medical diversion to ${alternate} coordinated with flight deck, ATC, and station handling.`;
+    const returnOrigin=alternate===flight.from||incident.diversionReturnOrigin;
+    applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{
+      mode:returnOrigin?'return_origin':'diversion',
+      reason:returnOrigin?`Medical return to ${alternate}`:`Medical diversion to ${alternate}`
+    });
+    incident.outcome=returnOrigin
+      ? `Medical return to ${alternate} coordinated with flight deck, ATC, and station handling.`
+      : `Medical diversion to ${alternate} coordinated with flight deck, ATC, and station handling.`;
     return true;
   }
   flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||20);
@@ -554,8 +578,9 @@ function finalizeInflightDiversionIncident({incident,flight,aircraft}){
   if(['divert','return_origin','reselect'].includes(incident.selectedStrategy)){
     const alternate=incident.selectedAlternate;
     if(!alternate||!aircraft) return false;
-    applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{mode:incident.selectedStrategy==='return_origin'?'return_origin':'diversion'});
-    incident.outcome=incident.selectedStrategy==='return_origin'
+    const returnOrigin=incident.selectedStrategy==='return_origin'||incident.diversionReturnOrigin||alternate===flight.from;
+    applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{mode:returnOrigin?'return_origin':'diversion'});
+    incident.outcome=returnOrigin
       ? `Return to ${alternate} coordinated with flight deck, ATC, and station handling.`
       : `Diversion to ${alternate} coordinated with flight deck, ATC, and station handling.`;
     return true;
@@ -683,6 +708,11 @@ function processOperationalWorkflows(t=simNow()){
       const flight=incident&&state.flights.find(item=>item.id===incident.flightId);
       const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
       if(aircraft){ aircraft.defectUntil=0; aircraft.defectReason=''; aircraft.condition=clamp((aircraft.condition??100)+5,0,100); }
+    }
+    if(['destination_handling','alternate_handling'].includes(task.kind)&&typeof confirmDestinationHandlingPlan==='function'){
+      const incident=state.incidents.find(item=>item.id===task.incidentId);
+      const flight=incident&&state.flights.find(item=>item.id===incident.flightId);
+      if(flight) confirmDestinationHandlingPlan(flight,task.selection?.airport||incident?.selectedAlternate||flightOperationalDestination(flight),t);
     }
     completeOperationalTask(task,'',t); changed=true;
   }
@@ -1215,9 +1245,16 @@ function handlePerformanceCoordinationTask({task,incident,actionId}){
 function handleDestinationHandlingTask({task,incident,flight,actionId}){
   const destination=flightOperationalDestination(flight);
   const action=actionId||task.action||'request_handling';
-  incident.coordinatedDelayMin=15;
-  task.selection={action,airport:destination,delayMin:15};
-  createExternalWorkflowRequest(task,`${destination} station / handler`,12,`${destination} confirms stand, ramp, and passenger-handling acceptance.`);
+  const plan=typeof destinationHandlingPlanForFlight==='function'
+    ? destinationHandlingPlanForFlight(flight,{airport:destination,incident,reason:'Destination handling request',ensure:true})
+    : null;
+  if(!plan?.available) return toast(`No own-station or contract handling service is available at ${destination}.`);
+  const waitMin=plan.source==='station'?8:Math.max(12,Number(plan.responseMin)||12);
+  incident.coordinatedDelayMin=Math.max(10,waitMin);
+  incident.destinationHandlingPlan={airport:destination,source:plan.source,status:plan.status,cost:plan.cost||0};
+  task.selection={action,airport:destination,handlingSource:plan.source,delayMin:incident.coordinatedDelayMin,cost:plan.cost||0};
+  const label=plan.source==='station'?'own station handling':plan.source==='contract'?'contract handling':'external handling';
+  createExternalWorkflowRequest(task,`${destination} ${label}`,waitMin,`${destination} ${label} confirms stand, ramp, and passenger-handling acceptance.`);
   return true;
 }
 
@@ -1233,7 +1270,7 @@ function applyDiversionSelectionToIncident(task,incident,option){
 }
 
 function handleAlternateSelectionTask({task,incident,payload}){
-  const option=diversionOptionsForIncident(incident,{includeReturnOrigin:false}).find(item=>item.code===payload.airport);
+  const option=alternateSelectionOptionsForTask(incident,task).find(item=>item.code===payload.airport);
   if(!option) return toast('That alternate is no longer operationally suitable.');
   applyDiversionSelectionToIncident(task,incident,option);
   completeOperationalTask(task,`${option.returnOrigin?'Return to origin':option.code} selected; flight deck, ATC, and handling coordination bundled into the recovery plan.`);
@@ -1261,7 +1298,14 @@ function handleDiversionClearanceTask({task,incident}){
 }
 
 function handleAlternateHandlingTask({task,incident}){
-  createExternalWorkflowRequest(task,`${incident.selectedAlternate} station / handler`,12,incident.diversionReturnOrigin?`${incident.selectedAlternate} confirms return stand and handling acceptance.`:`${incident.selectedAlternate} confirms stand and handling acceptance.`);
+  const flight=state.flights.find(item=>item.id===incident.flightId&&!item.cancelled);
+  const plan=flight&&typeof destinationHandlingPlanForFlight==='function'
+    ? destinationHandlingPlanForFlight(flight,{airport:incident.selectedAlternate,incident,reason:'Alternate handling request',ensure:true})
+    : null;
+  if(!plan?.available) return toast(`No own-station or contract handling service is available at ${incident.selectedAlternate||'the selected alternate'}.`);
+  const waitMin=plan.source==='station'?8:Math.max(12,Number(plan.responseMin)||12);
+  task.selection={airport:incident.selectedAlternate,handlingSource:plan.source,cost:plan.cost||0};
+  createExternalWorkflowRequest(task,`${incident.selectedAlternate} ${plan.source==='station'?'station':'contract'} handler`,waitMin,incident.diversionReturnOrigin?`${incident.selectedAlternate} confirms return stand and handling acceptance.`:`${incident.selectedAlternate} confirms stand and handling acceptance.`);
   return true;
 }
 

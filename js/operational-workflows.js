@@ -36,7 +36,7 @@
     security_coordination:{resources:[{type:'personnel',role:'groundHandling',location:'origin',amount:1},{type:'personnel',role:'customerService',location:'origin',amount:1}]},
     alternate_selection:{resources:[{type:'alternate',mode:'operational'}]},
     return_origin_selection:{resources:[{type:'alternate',mode:'return_origin'}]},
-    alternate_handling:{resources:[{type:'personnel',role:'groundHandling',location:'selectedAlternate',amount:1}]},
+    alternate_handling:{resources:[]},
     inbound_wait:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
     authority_decision:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
     flightdeck_recommendation:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
@@ -51,7 +51,7 @@
     crew_extension_record:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
     cabin_security_coordination:{resources:[{type:'personnel',role:'operations',location:'origin',amount:1}]},
     arrival_maintenance_check:{resources:[{type:'personnel',role:'groundHandling',location:'destination',amount:1}]},
-    destination_handling:{resources:[{type:'personnel',role:'groundHandling',location:'destination',amount:1}]}
+    destination_handling:{resources:[]}
   };
 
   function metadataForStep(step){
@@ -279,7 +279,7 @@
     ])},
     destination_handling_unavailable:{classification:'derived',steps:withCancellation([
       {key:'station-destination-handling-strategy',department:'station',kind:'recovery_strategy',label:'Choose destination handling recovery',detail:'Select how to protect arrival when destination station handling is unavailable.',options:[
-        {id:'request_handling',label:'Request destination handling',detail:'Secure destination handling acceptance before the flight arrives.'},
+        {id:'request_handling',label:'Request destination handling',detail:'Secure own-station or contract handling acceptance before the flight arrives.'},
         {id:'delay_departure',label:'Delay until handling is available',detail:'Hold the departure until the destination station can accept the aircraft.'},
         {id:'prepare_alternate',label:'Prepare arrival alternate',detail:'For airborne flights, prepare an alternate if destination handling cannot accept.'}
       ]},

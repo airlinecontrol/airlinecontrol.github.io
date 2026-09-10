@@ -1297,14 +1297,16 @@ function taskActions(task,incident){
     'performance_coordination','cabin_security_coordination','arrival_maintenance_check','destination_handling','authority_decision'
   ].includes(task.kind)) return `<button class="primary-button" type="button" data-task-action="complete">${esc(task.label)}</button>`;
   if(task.kind==='alternate_selection'){
-    const options=diversionOptionsForIncident(incident,{includeReturnOrigin:false});
+    const options=typeof alternateSelectionOptionsForTask==='function'
+      ? alternateSelectionOptionsForTask(incident,task)
+      : diversionOptionsForIncident(incident,{includeReturnOrigin:false});
     return options.length?`<div class="task-form"><label>Operational alternate<select data-task-alternate>${options.map(option=>{
       const distanceLabel=option.anchor?.type==='aircraft'
         ? `${Math.round(option.km)} km from aircraft`
         : `${Math.round(option.destinationKm)} km from destination`;
       const handlingLabel=option.handling?.source==='station'?'own station':'contract handling';
-      return `<option value="${option.code}">${option.returnOrigin?'Return to origin':option.code} · ${option.returnOrigin?'origin airport':distanceLabel} · ${handlingLabel} · fuel ${option.fuel.estimated?'estimated':'planned'}</option>`;
-    }).join('')}</select></label><button class="primary-button" type="button" data-task-action="alternate">Select alternate</button></div>`:`<div class="attention-summary critical"><b>No suitable alternate available</b><span>${esc(diversionRejectionSummaryForIncident(incident,{includeReturnOrigin:false}))}</span></div>`;
+      return `<option value="${option.code}">${option.returnOrigin?`${option.code} · return to origin`:option.code} · ${option.returnOrigin?'origin airport':distanceLabel} · ${handlingLabel} · fuel ${option.fuel.estimated?'estimated':'planned'}</option>`;
+    }).join('')}</select></label><button class="primary-button" type="button" data-task-action="alternate">Select alternate</button></div>`:`<div class="attention-summary critical"><b>No suitable alternate available</b><span>${esc(typeof alternateSelectionUnavailableMessage==='function'?alternateSelectionUnavailableMessage(incident,task):diversionRejectionSummaryForIncident(incident,{includeReturnOrigin:false}))}</span></div>`;
   }
   if(task.kind==='return_origin_selection'){
     const option=diversionOptionsForIncident(incident,{onlyReturnOrigin:true})[0];
@@ -1975,6 +1977,29 @@ function dispatchIncidentBadgesMarkup(flight){
   }).join('');
 }
 
+function dispatchHandlingPlanMarkup(flight){
+  if(!flight?.diversionAirport) return '';
+  const plan=typeof destinationHandlingPlanForFlight==='function'
+    ? destinationHandlingPlanForFlight(flight,{ensure:true})
+    : flight.diversionHandlingPlan;
+  if(!plan) return '';
+  const remaining=plan.status==='requested'&&plan.confirmsAt?Math.max(0,Math.ceil((plan.confirmsAt-simNow())/MIN)):0;
+  const title=plan.status==='confirmed'
+    ? 'Arrival handling confirmed'
+    : plan.status==='requested'
+      ? 'Arrival handling requested'
+      : 'Arrival handling unavailable';
+  const source=plan.source==='station'?'own station':plan.source==='contract'?'contract handler':'no handler';
+  const detail=plan.status==='requested'
+    ? `${source} at ${plan.airport} · ${remaining} min remaining`
+    : `${source} at ${plan.airport} · ${plan.label||''}`;
+  const cost=Number(plan.cost)||0;
+  return `<div class="desk-list-row ${plan.available?'':'highlight'}">
+    <div><b>${esc(title)}</b><span>${esc(detail)}</span></div>
+    <em>${cost?esc(money(cost)):plan.available?'included':'blocking'}</em>
+  </div>`;
+}
+
 function dispatchTurnaroundRowsMarkup(flight,aircraft){
   const index=operationalIndex();
   const previous=index.previousFlightById.get(flight.id)||previousAircraftFlight(flight);
@@ -2009,6 +2034,7 @@ function dispatchSelectedFlightStatusMarkup(){
       ${aircraft?`<button class="desk-action-link" type="button" data-context-aircraft="${esc(aircraft.id)}">Open aircraft</button>`:'<em>unassigned</em>'}
     </div>
     <div class="dispatch-badge-row">${dispatchIncidentBadgesMarkup(flight)}</div>
+    ${dispatchHandlingPlanMarkup(flight)}
     <div class="dispatch-progress" title="${esc(`${status.replaceAll('_',' ')} · ${shortClock(flightActualDeparture(flight))}-${shortClock(flightActualArrival(flight))}`)}">
       <div class="progress-track"><span style="width:${formatPct(progress)}"></span></div>
       <div class="progress-caption"><span>Flight progress</span><b>${esc(progressLabel)}</b></div>

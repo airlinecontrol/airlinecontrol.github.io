@@ -1664,6 +1664,23 @@ function performanceLimitIncidentRequired(context){
 function destinationHandlingContextForFlight(flight,t=simNow()){
   if(flight.flightType==='ferry'||t<flight.departure-6*HOUR||flight.settled) return null;
   const destination=flightOperationalDestination(flight);
+  if(flight.diversionAirport){
+    const plan=typeof destinationHandlingPlanForFlight==='function'
+      ? destinationHandlingPlanForFlight(flight,{airport:destination,t,reason:'Diversion arrival handling',ensure:true})
+      : null;
+    const available=Boolean(plan?.available);
+    if(available) return null;
+    return {
+      sourceId:flight.id,
+      airport:destination,
+      handling:0,
+      handlingPlan:plan,
+      contractedStation:plan?.source==='contract',
+      reason:plan?.label||'No own-station or contract handler is available',
+      delayMin:flight.departureLogged?25:35,
+      active:true
+    };
+  }
   const trackedStation=Boolean(state.personnel.assignments?.[destination]);
   const handling=staffAt(destination,'groundHandling');
   const relevant=trackedStation||Boolean(flight.diversionAirport);
@@ -1672,7 +1689,9 @@ function destinationHandlingContextForFlight(flight,t=simNow()){
     sourceId:flight.id,
     airport:destination,
     handling,
+    handlingPlan:null,
     contractedStation:!trackedStation,
+    reason:'No destination handling team is assigned',
     delayMin:flight.departureLogged?25:35,
     active:true
   };
@@ -1680,7 +1699,7 @@ function destinationHandlingContextForFlight(flight,t=simNow()){
 
 function destinationHandlingIncidentRequired(flight,context){
   if(!context?.active||!flight) return false;
-  return Boolean(flight.departureLogged||flight.diversionAirport);
+  return Boolean((flight.departureLogged||flight.diversionAirport)&&!context.handlingPlan?.available);
 }
 
 function diversionAirportUnavailableContextForFlight(flight,t=simNow()){

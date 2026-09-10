@@ -84,6 +84,103 @@
     };
   }
 
+  function roundHandlingServiceCost(value){
+    const amount=Math.max(0,Number(value)||0);
+    if(amount>=10_000) return Math.round(amount/500)*500;
+    return Math.round(amount/100)*100;
+  }
+
+  function handlingServiceCostForFlight(flight,airport,availability){
+    if(!flight||!airport||!availability?.available) return 0;
+    if(availability.source==='station') return 0;
+    const costs=AIRPORT_COSTS[airport]||{};
+    const pax=flight.flightType==='ferry'?0:Math.max(0,Number(flight.pax)||0);
+    const base=(Number(costs.handlingBase)||1800)+pax*(Number(costs.handlingPerPax)||8);
+    const emergency=Boolean(flight.diversionAirport&&flight.diversionAirport!==flight.to);
+    const multiplier=availability.source==='contract' ? (emergency?1.75:1.25) : 0;
+    return roundHandlingServiceCost(base*multiplier+(emergency?900:0));
+  }
+
+  function updateHandlingPlanStatus(plan,t=simNow()){
+    if(!plan||typeof plan!=='object') return null;
+    if(plan.status==='requested'&&plan.confirmsAt&&t>=plan.confirmsAt) plan.status='confirmed';
+    plan.available=['requested','confirmed'].includes(plan.status);
+    return plan;
+  }
+
+  function buildDestinationHandlingPlan(flight,airport,{incident=null,t=simNow(),reason=''}={}){
+    const availability=diversionHandlingAvailability(airport,t);
+    const responseMin=availability.available ? Math.max(0,Number(availability.responseMin)||0) : 0;
+    const status=availability.available ? availability.source==='station'?'confirmed':'requested' : 'unavailable';
+    const plan={
+      airport,
+      status,
+      available:availability.available,
+      source:availability.source||'none',
+      label:availability.label||'No handling service available',
+      reason:reason||'Arrival handling',
+      incidentId:incident?.id||'',
+      requestedAt:t,
+      confirmsAt:status==='requested'?t+responseMin*MIN:t,
+      responseMin,
+      cost:handlingServiceCostForFlight(flight,airport,availability),
+      costEventId:''
+    };
+    return updateHandlingPlanStatus(plan,t);
+  }
+
+  function bookDestinationHandlingPlanCost(flight,incident,plan){
+    if(!flight||!plan?.available||!plan.cost||plan.costEventId||typeof recordRecoveryCostEvent!=='function') return plan;
+    const event=recordRecoveryCostEvent({
+      flight,incident,
+      category:'station',
+      kind:'diversion_handling',
+      amount:plan.cost,
+      airport:plan.airport,
+      description:`${plan.airport} ${plan.source==='contract'?'contract':'external'} handling for ${flight.id}`
+    });
+    if(event) plan.costEventId=event.id;
+    return plan;
+  }
+
+  function destinationHandlingPlanForFlight(flight,{airport=null,incident=null,t=simNow(),reason='',ensure=false,force=false}={}){
+    if(!flight) return null;
+    const destination=airport||flightOperationalDestination(flight);
+    if(!destination||!AIRPORTS[destination]) return null;
+    const existing=flight.diversionHandlingPlan;
+    if(existing?.airport===destination&&!force&&existing.status!=='unavailable'){
+      updateHandlingPlanStatus(existing,t);
+      if(ensure) bookDestinationHandlingPlanCost(flight,incident,existing);
+      return existing;
+    }
+    const plan=buildDestinationHandlingPlan(flight,destination,{incident,t,reason});
+    if(ensure){
+      flight.diversionHandlingPlan=plan;
+      bookDestinationHandlingPlanCost(flight,incident,plan);
+    }
+    return plan;
+  }
+
+  function ensureDiversionHandlingPlan(flight,airport=null,options={}){
+    return destinationHandlingPlanForFlight(flight,{...options,airport:airport||(flight?flightOperationalDestination(flight):''),ensure:true});
+  }
+
+  function confirmDestinationHandlingPlan(flight,airport=null,t=simNow()){
+    const plan=flight?.diversionHandlingPlan;
+    const destination=airport||(flight?flightOperationalDestination(flight):'');
+    if(!plan||plan.airport!==destination||!plan.available) return null;
+    plan.status='confirmed';
+    plan.confirmedAt=t;
+    plan.confirmsAt=Math.min(Number(plan.confirmsAt)||t,t);
+    return updateHandlingPlanStatus(plan,t);
+  }
+
+  function destinationHandlingServiceAvailable(flight,airport=null,t=simNow()){
+    if(!flight) return false;
+    const plan=destinationHandlingPlanForFlight(flight,{airport,t,ensure:Boolean(flight?.diversionAirport)});
+    return Boolean(plan?.available);
+  }
+
   function diversionAnchorForIncident(incident,flight,aircraft,t=simNow()){
     const airborne=Boolean(
       flight?.departureLogged&&
@@ -158,11 +255,44 @@
     }).filter(Boolean);
   }
 
+  function diversionCandidateSuitable(item){
+    return Boolean(item?.rangeOk&&item.weatherOk&&item.handling?.available&&item.fuel?.ok);
+  }
+
   function diversionOptionsForIncident(incident,options={}){
     return diversionCandidatesForIncident(incident,options)
-      .filter(item=>item.rangeOk&&item.weatherOk&&item.handling?.available&&item.fuel.ok)
+      .filter(diversionCandidateSuitable)
       .sort((a,b)=>b.suitability-a.suitability)
       .slice(0,5);
+  }
+
+  function alternateSelectionQueryForTask(incident,task,options={}){
+    const query={...options};
+    if(query.onlyReturnOrigin) return query;
+    if(query.includeReturnOrigin!==undefined) return query;
+    const flight=state.flights.find(item=>item.id===incident?.flightId&&!item.cancelled);
+    const branch=task?.branch||incident?.selectedStrategy||'';
+    query.includeReturnOrigin=Boolean(
+      flight&&
+      branch!=='alternate_destination'&&
+      (typeof flightIsAirborne==='function'?flightIsAirborne(flight):flight.departureLogged&&flightActualDeparture(flight)<=simNow()&&simNow()<flightActualArrival(flight))
+    );
+    return query;
+  }
+
+  function alternateSelectionOptionsForTask(incident,task,options={}){
+    const query=alternateSelectionQueryForTask(incident,task,options);
+    const optionsList=diversionOptionsForIncident(incident,query);
+    if(!query.includeReturnOrigin||query.onlyReturnOrigin||optionsList.some(option=>option.returnOrigin)) return optionsList;
+    const originOption=diversionCandidatesForIncident(incident,{onlyReturnOrigin:true})
+      .filter(diversionCandidateSuitable)
+      .sort((a,b)=>b.suitability-a.suitability)[0];
+    if(!originOption) return optionsList;
+    return [...optionsList.slice(0,4),originOption].sort((a,b)=>b.suitability-a.suitability);
+  }
+
+  function alternateSelectionUnavailableMessage(incident,task,options={}){
+    return alternateUnavailableMessage(incident,alternateSelectionQueryForTask(incident,task,options));
   }
 
   function diversionRejectionSummaryForIncident(incident,options={}){
@@ -276,7 +406,7 @@
       const flight=state.flights.find(item=>item.id===incident.flightId&&!item.cancelled);
       if(flight?.departureLogged) return 'The flight is already airborne. Secure destination handling or prepare an alternate instead.';
     }
-    if(task.key==='station-destination-handling-strategy'&&optionId==='prepare_alternate'&&!diversionOptionsForIncident(incident,{includeReturnOrigin:false}).length) return `${alternateUnavailableMessage(incident,{includeReturnOrigin:false})} Request destination handling or choose another strategy.`;
+    if(task.key==='station-destination-handling-strategy'&&optionId==='prepare_alternate'&&!alternateSelectionOptionsForTask(incident,{kind:'alternate_selection',branch:'prepare_alternate'}).length) return `${alternateSelectionUnavailableMessage(incident,{kind:'alternate_selection',branch:'prepare_alternate'})} Request destination handling or choose another strategy.`;
     if(task.key==='dispatch-ground-destination-strategy'&&optionId==='alternate_destination'&&!diversionOptionsForIncident(incident,{includeReturnOrigin:false}).length) return `${alternateUnavailableMessage(incident,{includeReturnOrigin:false})} Delay or cancel the flight if no airport is workable.`;
     if(['crew-diversion-strategy','crew-report-delay-strategy'].includes(task.key)&&optionId==='replace'&&!crewPoolOptions(incident).length){
       const remote=remoteCrewPoolOptions(incident);
@@ -324,7 +454,7 @@
     }
     if(requirement.type==='augmented_crew') return crewAugmentationBlocker(incident);
     if(requirement.type==='aircraft'&&requirement.mode==='replacement'&&!incidentAircraftReplacementOptionsForTask(incident,task).length) return 'No suitable replacement aircraft is available. Request aircraft or position a spare in Dispatch.';
-    if(requirement.type==='alternate'&&requirement.mode==='operational'&&!diversionOptionsForIncident(incident,{includeReturnOrigin:false}).length) return alternateUnavailableMessage(incident,{includeReturnOrigin:false});
+    if(requirement.type==='alternate'&&requirement.mode==='operational'&&!alternateSelectionOptionsForTask(incident,task).length) return alternateSelectionUnavailableMessage(incident,task);
     if(requirement.type==='alternate'&&requirement.mode==='return_origin'&&!diversionOptionsForIncident(incident,{onlyReturnOrigin:true}).length) return 'Return to origin is not currently suitable. Fuel, weather, or handling is not available.';
     return '';
   }
@@ -374,7 +504,8 @@
     if(['stand_request','station_coordination'].includes(task.kind)&&staffAt(flight.from,'groundHandling')<=0) return `No ground handling team is available at ${flight.from}. Add personnel in the Personnel widget.`;
     if(['station_recovery','fuel_recovery','security_coordination','turnaround_expedite'].includes(task.kind)&&staffAt(flight.from,'groundHandling')<=0) return `No ground handling team is available at ${flight.from}. Add personnel in the Personnel widget.`;
     if(task.kind==='security_coordination'&&staffAt(flight.from,'customerService')<=0) return `No customer-service team is available at ${flight.from}. Add personnel in the Personnel widget.`;
-    if(task.kind==='alternate_selection'&&!diversionOptionsForIncident(incident,{includeReturnOrigin:false}).length) return alternateUnavailableMessage(incident,{includeReturnOrigin:false});
+    if(task.kind==='destination_handling'&&!destinationHandlingServiceAvailable(flight,flightOperationalDestination(flight))) return `No own-station or contract handling service is available at ${flightOperationalDestination(flight)}. Prepare an alternate or delay until support is available.`;
+    if(task.kind==='alternate_selection'&&!alternateSelectionOptionsForTask(incident,task).length) return alternateSelectionUnavailableMessage(incident,task);
     if(task.kind==='return_origin_selection'&&!diversionOptionsForIncident(incident,{onlyReturnOrigin:true}).length) return 'Return to origin is not currently suitable. Fuel, weather, or handling is not available.';
     if(task.kind==='alternate_handling'){
       const handling=incident.selectedAlternate?diversionHandlingAvailability(incident.selectedAlternate):null;
@@ -389,7 +520,7 @@
 
   const api={
     activeWorkflowAssignments,crewPoolOptions,crewPoolOptionsAtAirport,remoteCrewPoolOptions,
-    diversionRouteDurationMs,diversionFuelEstimate,diversionHandlingAvailability,diversionCandidateArrivalAt,diversionAnchorForIncident,diversionCandidatesForIncident,diversionOptionsForIncident,diversionRejectionSummaryForIncident,alternateUnavailableMessage,
+    diversionRouteDurationMs,diversionFuelEstimate,diversionHandlingAvailability,handlingServiceCostForFlight,buildDestinationHandlingPlan,destinationHandlingPlanForFlight,ensureDiversionHandlingPlan,confirmDestinationHandlingPlan,destinationHandlingServiceAvailable,diversionCandidateArrivalAt,diversionAnchorForIncident,diversionCandidatesForIncident,diversionOptionsForIncident,alternateSelectionQueryForTask,alternateSelectionOptionsForTask,diversionRejectionSummaryForIncident,alternateUnavailableMessage,alternateSelectionUnavailableMessage,
     crewAugmentationBlocker,legalCrewConfirmationBlocker,branchStrategyOptionBlocker,taskResourceBlocker,
     taskEligibilityBlocker,taskResourceRequirementBlocker
   };

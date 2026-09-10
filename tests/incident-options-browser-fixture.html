@@ -259,6 +259,11 @@
     assert(groundClosure.status==='resolved','Ground destination closure did not resolve after hold');
     assert(groundClosureFlight.incidentDelayMin>=60,'Ground destination closure did not apply a departure delay');
 
+    const originalWeatherAt=w.AeroManagement.weatherAt;
+    w.AeroManagement.weatherAt=(code,t)=>code==='FRA'
+      ? {...originalWeatherAt(code,t),type:'clear',conditions:'Normal operations',level:'normal',capacityFactor:1,delayMin:0}
+      : originalWeatherAt(code,t);
+
     const {flight:closureFlight,incident:closure}=makeAirborneCase('destination_closure','LHR',{authorityDecision:'alternate'});
     assert(w.performOperationalTask(`${closure.id}:dispatch-diversion-assess`),'Destination closure assessment was rejected');
     completeWaits();
@@ -268,16 +273,15 @@
     assert(w.operationalOptionConsequence(closureDecision,closure,'alternate').includes('flight deck requested'),'Destination closure consequence is not framed as a flight-deck request');
     assert(w.performOperationalTask(`${closure.id}:dispatch-flightdeck-decision`),'Destination closure flight-deck response was rejected');
     completeWaits();
-    const alternate=w.diversionOptionsForIncident(closure,{includeReturnOrigin:false})[0]?.code;
+    const closureAlternateTask=w.incidentTasks(closure.id).find(task=>task.key==='dispatch-alternate');
+    const closureSelectorOptions=w.alternateSelectionOptionsForTask(closure,closureAlternateTask);
+    assert(closureSelectorOptions.some(option=>option.returnOrigin&&option.code===closureFlight.from),'Airborne alternate selector does not offer the origin airport as a return option');
+    const alternate=closureSelectorOptions.find(option=>!option.returnOrigin)?.code||closureSelectorOptions[0]?.code;
     assert(alternate,'Destination closure offered no suitable alternate');
     assert(w.performOperationalTask(`${closure.id}:dispatch-alternate`,'',{airport:alternate}),'Destination closure alternate selection was rejected');
     assert(closure.status==='resolved','Destination closure incident did not resolve');
     assert(closureFlight.diversionAirport===alternate,'Destination closure did not apply the selected diversion');
 
-    const originalWeatherAt=w.AeroManagement.weatherAt;
-    w.AeroManagement.weatherAt=(code,t)=>code==='FRA'
-      ? {...originalWeatherAt(code,t),type:'clear',conditions:'Normal operations',level:'normal',capacityFactor:1,delayMin:0}
-      : originalWeatherAt(code,t);
     const {flight:returnFlight,incident:returnClosure}=makeAirborneCase('destination_closure','LHR',{authorityDecision:'return_origin'});
     assert(w.performOperationalTask(`${returnClosure.id}:dispatch-diversion-assess`),'Destination closure return-to-origin assessment was rejected');
     completeWaits();
@@ -290,6 +294,19 @@
     assert(returnClosure.diversionReturnOrigin,'Destination closure return-to-origin selection was not recorded');
     assert(returnClosure.status==='resolved','Destination closure return-to-origin incident did not resolve');
     assert(returnFlight.diversionAirport===returnFlight.from,'Destination closure did not apply return to origin');
+
+    const {flight:originAlternateFlight,incident:originAlternate}=makeAirborneCase('destination_closure','LHR',{authorityDecision:'alternate'});
+    assert(w.performOperationalTask(`${originAlternate.id}:dispatch-diversion-assess`),'Destination closure origin-in-alternate assessment was rejected');
+    completeWaits();
+    assert(w.performOperationalTask(`${originAlternate.id}:dispatch-flightdeck-decision`),'Destination closure origin-in-alternate flight-deck response was rejected');
+    completeWaits();
+    const originAlternateTask=w.incidentTasks(originAlternate.id).find(task=>task.key==='dispatch-alternate');
+    const originFromSelector=w.alternateSelectionOptionsForTask(originAlternate,originAlternateTask).find(option=>option.returnOrigin&&option.code===originAlternateFlight.from);
+    assert(originFromSelector,'Origin return option is missing from the airborne alternate selector');
+    assert(w.performOperationalTask(`${originAlternate.id}:dispatch-alternate`,'',{airport:originFromSelector.code}),'Origin return from alternate selector was rejected');
+    assert(originAlternate.diversionReturnOrigin,'Origin return selected from alternate selector was not recorded as return-origin');
+    assert(originAlternate.status==='resolved','Origin return selected from alternate selector did not resolve the incident');
+    assert(originAlternateFlight.diversionAirport===originAlternateFlight.from,'Origin return selected from alternate selector did not update the flight destination');
 
     {
       const aircraft=w.assignRequestedAircraft('A330-900',w.defaultCabin('A330-900'),'ATL');
@@ -358,9 +375,11 @@
       const contractOption=options.find(option=>option.handling?.source==='contract')||options[0];
       assert(w.performOperationalTask(`${incident.id}:dispatch-alternate`,'',{airport:contractOption.code}),'JFK-area contract alternate selection was rejected');
       assert(flight.diversionAirport===contractOption.code,'JFK-area contract alternate did not apply to the flight');
+      assert(flight.diversionHandlingPlan?.available,`contract alternate did not create an arrival handling plan: ${JSON.stringify(flight.diversionHandlingPlan)}`);
       assert(!w.diversionAirportUnavailableContextForFlight(flight,now+60_000),`Selected contract alternate was immediately marked unavailable: ${w.diversionAirportUnavailableContextForFlight(flight,now+60_000)?.reason}`);
       w.processDerivedOperationalIncidents(now+60_000);
       assert(!w.openIncidentsForFlight(flight.id).some(item=>item.type==='diversion_airport_unavailable'),'Selected contract alternate spawned a diversion-airport-unavailable incident immediately after selection');
+      assert(!w.openIncidentsForFlight(flight.id).some(item=>item.type==='destination_handling_unavailable'),'Selected contract alternate spawned a destination-handling incident immediately after selection');
     }
 
     const {flight:fuelReturnFlight,incident:fuelReturn}=makeAirborneCase('fuel_margin_low','LHR',{authorityDecision:'return_origin',projectedLandingFuelGal:1200,reserveGal:1800,marginPct:55});
