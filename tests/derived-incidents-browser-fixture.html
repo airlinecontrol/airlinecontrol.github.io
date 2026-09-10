@@ -93,11 +93,18 @@
       w.recalculateOperations();
       const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'BOS',to:'LIS',departure:now+3*60*60_000,fare:{economy:130,business:340,first:0}});
       w.recalculateOperations();
+      const originalWeather=w.AeroWeatherEngine.weatherAt;
+      w.AeroWeatherEngine.weatherAt=(code,t)=>({
+        airport:code,level:'normal',label:'Normal',type:'clear',icon:'CLR',conditions:'Normal operations',
+        windKph:12,windDirection:250,gustKph:18,visibilityKm:20,ceilingFt:7000,
+        delayMin:0,capacityFactor:1,validFrom:t,validUntil:t+3*60*60_000
+      });
       const context=w.performanceLimitContextForFlight(flight,now);
       assert(context?.active&&!w.performanceLimitIncidentRequired(context),`fixture expected degraded-but-dispatchable performance margin: ${JSON.stringify(context)}`);
       w.processDerivedOperationalIncidents(now);
       assert(!w.openIncidentsForFlight(flight.id).some(item=>item.type==='performance_limited'),'dispatchable performance margin should not open a performance-limited incident');
       assert(w.operationWarnings(now).some(item=>item.type==='performance_margin_warning'&&item.flightId===flight.id),'dispatchable performance margin did not become a warning');
+      w.AeroWeatherEngine.weatherAt=originalWeather;
     }
 
     {

@@ -22,6 +22,25 @@ function incidentDiversionDurationMs(incident,flight,aircraft,alternate){
   return anchor.type==='aircraft' ? elapsed+duration : duration;
 }
 
+function applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{mode='',reason=''}={}){
+  if(!flight||!incident||!aircraft||!alternate) return null;
+  window.AeroRoutePlanning?.ensureFlightRoutePlan?.(flight,aircraft);
+  const selectedMode=mode || (alternate===flight.from?'return_origin':'diversion');
+  flight.diversionAirport=alternate;
+  flight.operationalDurationMs=incidentDiversionDurationMs(incident,flight,aircraft,alternate);
+  flight.weatherChecked=false;
+  const revision=window.AeroRoutePlanning?.applyDiversionRouteRevision?.(flight,alternate,{
+    incident,
+    mode:selectedMode,
+    reason:reason || (selectedMode==='return_origin'?`Return to ${alternate}`:`Diversion to ${alternate}`)
+  });
+  if(revision){
+    incident.routeRevisionId=revision.id;
+    incident.routeRevisionReason=revision.reason;
+  }
+  return revision;
+}
+
 function taskRelevantToIncidentStrategy(task,incident){
   if(!incident) return task.status!=='cancelled';
   if(incident.status&&incident.status!=='open') return false;
@@ -309,9 +328,7 @@ function finalizeOperationalCase(incident){
   }else if(incident.type==='destination_closure'){
     const alternate=incident.selectedAlternate;
     if(!alternate||!aircraft) return false;
-    flight.diversionAirport=alternate;
-    flight.operationalDurationMs=incidentDiversionDurationMs(incident,flight,aircraft,alternate);
-    flight.weatherChecked=false;
+    applyOperationalDiversionDestination(flight,incident,aircraft,alternate);
     incident.outcome=alternate===flight.from
       ? `Captain and ATC accepted return to ${alternate}; handling confirmed and the diversion plan was updated.`
       : `Captain and ATC accepted ${alternate}; alternate handling confirmed and the diversion plan was updated.`;
@@ -319,9 +336,7 @@ function finalizeOperationalCase(incident){
     if(incident.selectedStrategy==='alternate_destination'){
       const alternate=incident.selectedAlternate;
       if(!alternate||!aircraft) return false;
-      flight.diversionAirport=alternate;
-      flight.operationalDurationMs=incidentDiversionDurationMs(incident,flight,aircraft,alternate);
-      flight.weatherChecked=false;
+      applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{mode:'diversion',reason:`Ground replan to ${alternate}`});
       incident.outcome=`OCC re-planned ${flight.id} to ${alternate} before departure because ${incident.context?.airport||flight.to} was unavailable.`;
     }else{
       applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||incident.context?.delayMin||90);
@@ -416,9 +431,7 @@ function finalizeOperationalCase(incident){
     if(incident.selectedStrategy==='prepare_alternate'){
       const alternate=incident.selectedAlternate;
       if(!alternate||!aircraft) return false;
-      flight.diversionAirport=alternate;
-      flight.operationalDurationMs=incidentDiversionDurationMs(incident,flight,aircraft,alternate);
-      flight.weatherChecked=false;
+      applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{reason:`Handling alternate ${alternate}`});
       incident.outcome=`Handling alternate ${alternate} coordinated with flight deck, ATC, and station handling.`;
     }else{
       applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||incident.context?.delayMin||25);
@@ -430,8 +443,7 @@ function finalizeOperationalCase(incident){
     if(incident.selectedStrategy==='divert'){
       const alternate=incident.selectedAlternate;
       if(!alternate||!aircraft) return false;
-      flight.diversionAirport=alternate;
-      flight.operationalDurationMs=incidentDiversionDurationMs(incident,flight,aircraft,alternate);
+      applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{reason:`Medical diversion to ${alternate}`});
       incident.outcome=`Medical diversion to ${alternate} coordinated with flight deck, ATC, and station handling.`;
     }else{
       flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||20);
@@ -441,14 +453,20 @@ function finalizeOperationalCase(incident){
     if(['divert','return_origin','reselect'].includes(incident.selectedStrategy)){
       const alternate=incident.selectedAlternate;
       if(!alternate||!aircraft) return false;
-      flight.diversionAirport=alternate;
-      flight.operationalDurationMs=incidentDiversionDurationMs(incident,flight,aircraft,alternate);
-      flight.weatherChecked=false;
+      applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{mode:incident.selectedStrategy==='return_origin'?'return_origin':'diversion'});
       incident.outcome=incident.selectedStrategy==='return_origin'
         ? `Return to ${alternate} coordinated with flight deck, ATC, and station handling.`
         : `Diversion to ${alternate} coordinated with flight deck, ATC, and station handling.`;
     }else if(['fuel_margin_low','atc_holding_fuel_conflict'].includes(incident.type)){
-      if(incident.selectedStrategy==='direct') flight.enrouteDelayMin=Math.max(0,Math.min(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||10));
+      if(incident.selectedStrategy==='direct'){
+        flight.enrouteDelayMin=Math.max(0,Math.min(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||10));
+        window.AeroRoutePlanning?.createRouteRevision?.(flight,{
+          mode:'direct',
+          reason:'Fuel watch direct-routing request coordinated',
+          createdAt:simNow(),
+          metadata:{incidentId:incident.id,incidentType:incident.type}
+        });
+      }
       flight.fuelMarginReviewed=true;
       incident.outcome=incident.selectedStrategy==='conserve'
         ? 'Fuel-conservation profile coordinated and landing fuel monitoring continues.'
@@ -1044,6 +1062,13 @@ function performOperationalTask(taskId,actionId='',payload={}){
     const baseDelay=Math.max(8,incident.context?.delayMin||15);
     const delay=action==='direct'?Math.max(5,Math.round(baseDelay*.45)):baseDelay;
     flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,delay);
+    window.AeroRoutePlanning?.createRouteRevision?.(flight,{
+      mode:action==='direct'?'direct':'weather_detour',
+      reason:action==='direct'?'ATC returned a shorter routing opportunity':'ATC amended route around weather',
+      hazards:incident.context?.hazards||[],
+      createdAt:simNow(),
+      metadata:{incidentId:incident.id,incidentType:incident.type,action}
+    });
     incident.coordinatedDelayMin=delay;
     task.selection={action,delayMin:delay};
     createExternalWorkflowRequest(task,'ATC via flight crew',10,action==='direct'?'ATC returned a shorter routing opportunity.':'ATC amended route accepted and arrival estimate updated.');
@@ -1207,9 +1232,7 @@ function setDefaultDiversionTarget(incident,flight,strategy){
   incident.diversionAnchor=selected.anchor||null;
   incident.diversionDurationMs=selected.duration||incidentDiversionDurationMs(incident,flight,aircraft,selected.code);
   incident.diversionFuelRequiredGal=selected.fuel?.required||0;
-  flight.diversionAirport=selected.code;
-  flight.operationalDurationMs=incident.diversionDurationMs;
-  flight.weatherChecked=false;
+  applyOperationalDiversionDestination(flight,incident,aircraft,selected.code,{mode:onlyReturnOrigin?'return_origin':'diversion',reason:`Default ${onlyReturnOrigin?'return to origin':'diversion'} to ${selected.code}`});
   return selected;
 }
 

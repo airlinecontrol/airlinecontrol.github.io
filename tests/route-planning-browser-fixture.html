@@ -1,0 +1,161 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Airline OCC route planning browser fixture</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result');
+  const frame=document.getElementById('game');
+  const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+  try{
+    localStorage.removeItem('aerosim_mvp_v6');
+    localStorage.removeItem('aerosim_occ_ui_v1');
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=route-planning&cache='+Date.now();
+    await loaded;
+    const w=frame.contentWindow,d=frame.contentDocument;
+    w.resetLocalSave();
+    w.eval(`
+      state.ops.automaticDisruptions=false;
+      state.aircraft=[];
+      state.flights=[];
+      state.incidents=[];
+      state.coordinationTasks=[];
+      state.externalRequests=[];
+    `);
+    await wait(150);
+    const now=w.simNow();
+
+    assert(w.AeroRoutePlanning?.ensureFlightRoutePlan,'route planning module is not exposed');
+    const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const flight=w.createFlightRecord({
+      aircraftId:aircraft.id,
+      from:'FRA',
+      to:'JFK',
+      departure:now+60*60_000,
+      fare:{economy:180,business:480,first:900}
+    });
+    const plan=flight.routePlan;
+    const filed=w.AeroRoutePlanning.activeRevision(plan);
+    assert(plan&&filed,'new flight did not receive a filed route plan');
+    assert(filed.waypoints.length>=4,'filed route does not contain operational waypoints');
+    assert(filed.to==='JFK'&&filed.from==='FRA','filed route endpoints are wrong');
+    assert(w.AeroRoutePlanning.routeCoordinatesForFlight(flight).length===filed.waypoints.length,'map route coordinates do not come from the active revision');
+    assert(w.AeroRoutePlanning.flightRouteSummary(flight).routeText.includes('FRA'),'route summary does not expose route labels');
+    w.refreshAircraftSelect(true);
+    d.getElementById('aircraft').value=aircraft.id;
+    d.getElementById('origin').value='FRA';
+    d.getElementById('destination').value='JFK';
+    d.getElementById('departureTime').value=w.hhmm(flight.departure);
+    w.refreshSchedulePreview();
+    assert(d.querySelector('#schedulePreview .route-preview-card .route-preview-path'),'flight planning form does not show a visual route preview');
+    assert(d.querySelector('#schedulePreview .route-preview-endpoint.origin text')?.textContent.trim()==='FRA','route preview does not label the origin');
+    assert(d.querySelector('#schedulePreview .route-preview-endpoint.destination text')?.textContent.trim()==='JFK','route preview does not label the destination');
+    w.setDeskOpen('planning',true,{persist:false});
+    w.settleSelectedFlight(flight.id);
+    w.refreshAll();
+    await wait(100);
+    assert(d.querySelector(`[data-dispatch-selected-flight="${flight.id}"] [data-dispatch-route="${flight.id}"] .dispatch-route-path.active`),'dispatch widget does not show the selected flight route graphic');
+    assert(!d.querySelector(`[data-dispatch-selected-flight="${flight.id}"] .dispatch-route-visual.has-revision`),'unchanged filed route should not be shown as a revised dispatch route');
+
+    const activeAircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'LHR');
+    const activeFlight=w.createFlightRecord({
+      aircraftId:activeAircraft.id,
+      from:'LHR',
+      to:'CDG',
+      departure:now-40*60_000,
+      fare:{economy:120,business:320,first:650}
+    });
+    activeFlight.departureLogged=true;
+    activeFlight.actualDeparture=activeFlight.departure;
+    activeFlight.actualArrival=now+70*60_000;
+    activeFlight.arrival=activeFlight.actualArrival;
+    activeFlight.operationalDurationMs=activeFlight.actualArrival-activeFlight.actualDeparture;
+    w.recalculateOperations();
+    const sampled=w.AeroRoutePlanning.sampleRoutePosition(activeFlight,now);
+    const position=w.currentAircraftPosition(activeAircraft,now);
+    assert(position.status==='airborne','active fixture flight is not airborne');
+    assert(Math.abs(position.lat-sampled.lat)<.001&&Math.abs(position.lon-sampled.lon)<.001,'aircraft map position is not sampled from the active route revision');
+    for(let i=0;i<60&&!w.__aeroMapReady;i++) await wait(100);
+    w.settleSelectedFlight(activeFlight.id);
+    w.updateMapData();
+    await wait(80);
+    const flownFeature=w.eval(`map.getSource('selected-route-flown')?.data?.features?.[0]`);
+    const remainingFeature=w.eval(`map.getSource('selected-route-remaining')?.data?.features?.[0]`);
+    assert(flownFeature?.properties?.phase==='flown','selected airborne flight does not render a solid flown route segment');
+    assert(remainingFeature?.properties?.phase==='remaining','selected airborne flight does not render a dashed projected route segment');
+    assert(flownFeature.geometry.coordinates.length>=2,'flown selected route segment has too few coordinates');
+    assert(remainingFeature.geometry.coordinates.length>=2,'remaining selected route segment has too few coordinates');
+    w.settleSelectedFlight(flight.id);
+    w.updateMapData();
+    await wait(80);
+    assert(!w.eval(`map.getSource('selected-route-flown')?.data?.features?.length`),'future selected flight should not have a flown route segment');
+    assert(w.eval(`map.getSource('selected-route-remaining')?.data?.features?.[0]?.geometry?.coordinates?.length`)>=2,'future selected flight should show the full projected route as remaining');
+
+    const originalCells=w.AeroWeatherEngine.weatherCells;
+    const hazardPoint=filed.waypoints[Math.min(2,filed.waypoints.length-2)];
+    w.AeroWeatherEngine.weatherCells=()=>[{
+      id:'ROUTE-WX',
+      lat:hazardPoint.lat,
+      lon:hazardPoint.lon,
+      radiusKm:160,
+      type:'storm',
+      severity:'severe',
+      label:'Thunderstorm cells',
+      delayMin:32,
+      capacityFactor:.58,
+      polygon:[
+        {lat:hazardPoint.lat+.5,lon:hazardPoint.lon-.5},
+        {lat:hazardPoint.lat+.5,lon:hazardPoint.lon+.5},
+        {lat:hazardPoint.lat-.5,lon:hazardPoint.lon+.5},
+        {lat:hazardPoint.lat-.5,lon:hazardPoint.lon-.5}
+      ]
+    }];
+    const routeWeather=w.AeroRoutePlanning.routeHazardSummaryForFlight(flight,flight.departure,{forecast:true});
+    assert(routeWeather.hazards.some(item=>item.id==='ROUTE-WX'),'route weather was not sampled against the waypoint route');
+    assert(routeWeather.delayMin>=20&&routeWeather.level==='severe','route weather summary did not preserve hazard severity');
+    w.AeroWeatherEngine.weatherCells=originalCells;
+
+    const diversionAircraft=w.assignRequestedAircraft('A330-900',w.defaultCabin('A330-900'),'ATL');
+    const diversionFlight=w.createFlightRecord({
+      aircraftId:diversionAircraft.id,
+      from:'ATL',
+      to:'FRA',
+      departure:now-4*60*60_000,
+      fare:{economy:240,business:620,first:1200}
+    });
+    diversionFlight.departureLogged=true;
+    diversionFlight.actualDeparture=diversionFlight.departure;
+    diversionFlight.actualArrival=now+4*60*60_000;
+    diversionFlight.operationalDurationMs=diversionFlight.actualArrival-diversionFlight.actualDeparture;
+    const beforeDiversion=w.AeroRoutePlanning.activeRevision(w.AeroRoutePlanning.ensureFlightRoutePlan(diversionFlight));
+    const incident=w.createIncident('destination_closure',diversionFlight,{training:true,detectedAt:now,context:{airport:'FRA'}});
+    const revision=w.applyOperationalDiversionDestination(diversionFlight,incident,diversionAircraft,'DUB');
+    assert(revision&&revision.id!==beforeDiversion.id,'diversion did not create a new route revision');
+    assert(diversionFlight.routePlan.revisions.length>=2,'diversion overwrote the filed route instead of revising it');
+    assert(w.AeroRoutePlanning.activeRevision(diversionFlight.routePlan).to==='DUB','active route target did not change to the alternate');
+    assert(revision.startedAirborne&&revision.waypoints[0].kind==='current_position','airborne diversion route did not start from current aircraft position');
+    assert(incident.routeRevisionId===revision.id,'incident did not retain the applied route revision id');
+    const comparison=w.AeroRoutePlanning.flightRouteComparison(diversionFlight,now);
+    assert(comparison?.revised&&comparison.filed?.to==='FRA'&&comparison.active?.to==='DUB','route comparison does not expose filed vs active diversion routes');
+    w.settleSelectedFlight(diversionFlight.id);
+    w.refreshAll();
+    await wait(100);
+    const dispatchComparison=d.querySelector(`[data-dispatch-selected-flight="${diversionFlight.id}"] .dispatch-route-visual.has-revision`);
+    assert(dispatchComparison,'dispatch widget does not switch to route comparison after a diversion revision');
+    assert(dispatchComparison.querySelector('.dispatch-route-path.filed'),'dispatch route comparison does not draw the original filed route');
+    assert(dispatchComparison.querySelector('.dispatch-route-path.active'),'dispatch route comparison does not draw the active revised route');
+
+    const previousRevisionCount=diversionFlight.routePlan.revisions.length;
+    w.AeroRoutePlanning.noteRecoveryRouteRevision(diversionFlight,{id:'direct',label:'Ask direct routing'},{accepted:true,t:now+10*60_000});
+    assert(diversionFlight.routePlan.revisions.length===previousRevisionCount+1,'direct routing recovery did not create a route revision');
+
+    assert(w.flightInlineDetailsMarkup(flight).includes('Route plan'),'selected flight details do not expose the route plan section');
+    result.textContent='PASS route planning, route weather, map position, and route revisions validated';
+  }catch(error){
+    result.textContent='FAIL '+(error.stack||error);
+  }
+})();
+</script>

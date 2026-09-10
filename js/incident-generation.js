@@ -124,7 +124,9 @@ function maybeApplyWeatherDelay(f,t){
   const departureWeather=Management.weatherAt(f.from,f.departure);
   const arrivalAt=flightActualArrival(f);
   const arrivalWeather=Management.weatherAt(destination,arrivalAt);
-  const routeWeather=window.AeroWeatherEngine?.routeHazardSummary?.(f.from,destination,f.departure)||{delayMin:0,hazards:[]};
+  const routeWeather=window.AeroRoutePlanning?.routeHazardSummaryForFlight?.(f,f.departure,{forecast:true})
+    ||window.AeroWeatherEngine?.routeHazardSummary?.(f.from,destination,f.departure)
+    ||{delayMin:0,hazards:[]};
   const routeDelay=Math.min(35,routeWeather.delayMin||0);
   const primary=departureWeather.delayMin>=arrivalWeather.delayMin?departureWeather:arrivalWeather;
   f.weatherDelayMin=Math.max(primary.delayMin,routeDelay);
@@ -174,6 +176,13 @@ function maybeApplyLiveWeatherImpact(f,t){
     const delay=Math.min(35,Math.max(8,routeContext.delayMin));
     f.enrouteDelayMin=Math.max(Number(f.enrouteDelayMin)||0,delay);
     f.liveWeatherDelayMin=Math.max(Number(f.liveWeatherDelayMin)||0,Math.round(delay*.35));
+    window.AeroRoutePlanning?.createRouteRevision?.(f,{
+      mode:'weather_detour',
+      reason:'Weather avoidance route assigned',
+      hazards:routeContext.hazards||[],
+      createdAt:t,
+      metadata:{source:'live_route_weather'}
+    });
     const source=weatherSourceRecord('live_route','Live route weather',{routeWeather:{...routeContext,label:routeContext.cause},timestamp:t,from:f.from,to:destination,delayMin:delay});
     appendFlightWeatherCause(f,source,t);
     f.weatherLiveChecks.routeApplied=true;

@@ -787,6 +787,7 @@ function migrateState(parsed){
     if(!f.weatherLiveChecks || typeof f.weatherLiveChecks!=='object') f.weatherLiveChecks={};
     if(f.weatherRouteHazard===undefined) f.weatherRouteHazard='';
     if(f.weatherCause===undefined) f.weatherCause=null;
+    if(!f.routePlan || typeof f.routePlan!=='object') f.routePlan=null;
     if(f.slotLogged===undefined) f.slotLogged=false;
     if(f.baseCosts===undefined) f.baseCosts=f.costs||0;
     if(f.fueled===undefined) f.fueled=Boolean(f.settled||f.departureLogged);

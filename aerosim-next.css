@@ -790,22 +790,113 @@ body,
   border-radius:7px;
   background:#10242d;
 }
-.dispatch-scope-card span{
+.dispatch-scope-card>span{
   color:#91a7b0;
   font-size:9px;
   font-weight:850;
   text-transform:uppercase;
   letter-spacing:.06em;
 }
-.dispatch-scope-card b{
+.dispatch-scope-card>b{
   color:#eef8fb;
   font-size:12px;
 }
-.dispatch-scope-card em{
+.dispatch-scope-card>em{
   color:#a9bbc3;
   font-size:10px;
   font-style:normal;
   line-height:1.35;
+}
+.dispatch-route-visual{
+  display:grid;
+  gap:6px;
+  margin-top:7px;
+  padding:7px;
+  border-radius:6px;
+  background:#081821;
+}
+.dispatch-route-map{
+  display:block;
+  width:100%;
+  height:96px;
+  border-radius:5px;
+  background:
+    linear-gradient(rgba(125,158,172,.07) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(125,158,172,.07) 1px,transparent 1px),
+    #061017;
+  background-size:30px 24px;
+}
+.dispatch-route-path{
+  fill:none;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+.dispatch-route-path.filed{
+  stroke:#8b9ca5;
+  stroke-width:2;
+  stroke-dasharray:5 5;
+  opacity:.58;
+}
+.dispatch-route-path.active{
+  stroke:#88e8ff;
+  stroke-width:2.7;
+  opacity:.95;
+}
+.dispatch-route-visual.has-revision .dispatch-route-path.active{
+  stroke:#f0d06e;
+}
+.dispatch-route-fix{
+  fill:#102c38;
+  stroke:#b2e8f5;
+  stroke-width:1;
+}
+.dispatch-route-endpoint circle{
+  fill:#0e2a35;
+  stroke:#e8f9ff;
+  stroke-width:1.4;
+}
+.dispatch-route-endpoint.destination circle{
+  fill:#2f2b10;
+  stroke:#f0d06e;
+}
+.dispatch-route-endpoint text{
+  fill:#e6f5fa;
+  font-size:8.5px;
+  font-weight:850;
+  text-anchor:middle;
+  paint-order:stroke;
+  stroke:#061017;
+  stroke-width:3px;
+}
+.dispatch-route-legend{
+  min-width:0;
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px 10px;
+  color:#a7bac3;
+  font-size:10px;
+  line-height:1.3;
+}
+.dispatch-route-legend span{
+  display:inline-flex;
+  align-items:center;
+  min-width:0;
+  gap:5px;
+}
+.dispatch-route-legend i{
+  width:16px;
+  height:0;
+  border-top:2px solid #88e8ff;
+}
+.dispatch-route-legend .filed i{
+  border-top-color:#8b9ca5;
+  border-top-style:dashed;
+}
+.dispatch-route-legend .active i{
+  border-top-color:#88e8ff;
+}
+.dispatch-route-visual.has-revision .dispatch-route-legend .active i{
+  border-top-color:#f0d06e;
 }
 .corporate-resources-section .desk-action-bar{
   display:flex;
@@ -2008,6 +2099,92 @@ body,
 .weather-forecast-row.critical b{color:#ffb5c1}
 .weather-cell.selected{
   filter:drop-shadow(0 0 14px rgba(161,231,251,.42));
+}
+.schedule-preview-summary{
+  display:grid;
+  gap:3px;
+}
+.schedule-preview-summary b,
+.schedule-preview-summary span{
+  min-width:0;
+  overflow-wrap:anywhere;
+}
+.route-preview-card{
+  display:grid;
+  gap:6px;
+  margin:9px 0 0;
+  padding:8px;
+  border-radius:7px;
+  background:#0b1820;
+}
+.route-preview-map{
+  display:block;
+  width:100%;
+  height:88px;
+  border-radius:6px;
+  background:
+    linear-gradient(rgba(125,158,172,.08) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(125,158,172,.08) 1px,transparent 1px),
+    #071118;
+  background-size:26px 22px;
+}
+.route-preview-shadow,
+.route-preview-path{
+  fill:none;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+.route-preview-shadow{
+  stroke:rgba(0,0,0,.45);
+  stroke-width:5;
+}
+.route-preview-path{
+  stroke:#76d6ee;
+  stroke-width:2.2;
+}
+.route-preview-fix{
+  fill:#1b3441;
+  stroke:#9acddc;
+  stroke-width:1;
+}
+.route-preview-endpoint circle{
+  fill:#0d2630;
+  stroke:#e7f7fb;
+  stroke-width:1.5;
+}
+.route-preview-endpoint.destination circle{
+  fill:#233414;
+  stroke:#d4e986;
+}
+.route-preview-endpoint text{
+  fill:#d9e9ef;
+  font-size:9px;
+  font-weight:850;
+  text-anchor:middle;
+  paint-order:stroke;
+  stroke:#071118;
+  stroke-width:3px;
+}
+.route-preview-card figcaption{
+  min-width:0;
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr) auto;
+  align-items:center;
+  gap:6px;
+  color:#9eb2bb;
+  font-size:10px;
+}
+.route-preview-card figcaption b,
+.route-preview-card figcaption em{
+  color:#dcecf1;
+  font-style:normal;
+  white-space:nowrap;
+}
+.route-preview-card figcaption span{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
 }
 
 /* Responsive shell sizing: both work rails carry equal weight. */

@@ -344,6 +344,8 @@ function currentAircraftPosition(ac,t=simNow(),index=null){
     return {...pos,heading:bearing(pos,stand),status:'taxi_in',flight:f};
   }
   const p=flightProgress(f,t);
+  const routePosition=window.AeroRoutePlanning?.sampleRoutePosition?.(f,t);
+  if(routePosition) return {...routePosition,status:'airborne',flight:f};
   const pos=interpolateGreatCircle(aa,bb,p), pos2=interpolateGreatCircle(aa,bb,Math.min(1,p+.002));
   return {...pos,heading:bearing(pos,pos2),status:'airborne',flight:f};
 }
@@ -466,9 +468,12 @@ function connectionStatusForFlight(flight,onwardFlights=null){
 
 function networkConstraintsForFlight(flight){
   const departureWeather=Management.weatherAt(flight.from,flight.departure);
-  const distance=distanceKm(AIRPORTS[flight.from],AIRPORTS[flightOperationalDestination(flight)]);
+  const routePlan=window.AeroRoutePlanning?.ensureFlightRoutePlan?.(flight);
+  const activeRoute=window.AeroRoutePlanning?.activeRevision?.(routePlan);
+  const distance=activeRoute?.distanceKm||distanceKm(AIRPORTS[flight.from],AIRPORTS[flightOperationalDestination(flight)]);
   const airspace=OperationalIntelligence.airspaceConstraint(flight.from,flightOperationalDestination(flight),flight.departure,distance);
-  const routeWeather=window.AeroWeatherEngine?.routeHazardSummary?.(flight.from,flightOperationalDestination(flight),flight.departure);
+  const routeWeather=window.AeroRoutePlanning?.routeHazardSummaryForFlight?.(flight,flight.departure,{forecast:true})
+    ||window.AeroWeatherEngine?.routeHazardSummary?.(flight.from,flightOperationalDestination(flight),flight.departure);
   const night=flightNightRestriction(flight,flight.departure);
   if(routeWeather?.delayMin){
     const weatherDelay=Math.min(25,routeWeather.delayMin);
@@ -1142,7 +1147,8 @@ function enrouteRecoveryContextForFlight(flight,t=simNow()){
   const request=flight?.enrouteRecoveryRequest||null;
   const pending=request?.status==='pending'?request:null;
   const completed=request&&request.status!=='pending'?request:null;
-  const routeWeather=flight&&window.AeroWeatherEngine?.routeHazardSummary?.(flight.from,flightOperationalDestination(flight),t);
+  const routeWeather=flight&&(window.AeroRoutePlanning?.routeHazardSummaryForFlight?.(flight,t)
+    ||window.AeroWeatherEngine?.routeHazardSummary?.(flight.from,flightOperationalDestination(flight),t));
   const fuel=flight?fuelMarginContextForFlight(flight,t):null;
   const performance=aircraft?aircraftFuelPerformance(MODELS[aircraft.model]):null;
   const price=Number(state.fuelMarket?.pricePerGallon)||FUEL_MARKET_BASE_EUR_GAL;
@@ -1272,6 +1278,7 @@ function processEnrouteRecoveryRequests(t=simNow()){
     const beforeRecovery=Number(flight.enrouteRecoveryMin)||0;
     const beforeCost=Number(flight.enrouteRecoveryCost)||0;
     const applied=applyEnrouteRecovery(flight,option,{recoverFactor:factor,costFactor:partial?.75:1,t,outcome:approval});
+    if(applied) window.AeroRoutePlanning?.noteRecoveryRouteRevision?.(flight,option,{accepted:true,t});
     const recoveredMin=Math.max(0,(Number(flight.enrouteRecoveryMin)||0)-beforeRecovery);
     const appliedCost=Math.max(0,(Number(flight.enrouteRecoveryCost)||0)-beforeCost);
     flight.enrouteRecoveryRequest={
@@ -1302,7 +1309,8 @@ function holdingFuelConflictContextForFlight(flight,t=simNow()){
 
 function routeRerouteContextForFlight(flight,t=simNow()){
   const destination=flightOperationalDestination(flight);
-  const routeWeather=window.AeroWeatherEngine?.routeHazardSummary?.(flight.from,destination,t);
+  const routeWeather=window.AeroRoutePlanning?.routeHazardSummaryForFlight?.(flight,t)
+    ||window.AeroWeatherEngine?.routeHazardSummary?.(flight.from,destination,t);
   if(!routeWeather?.hazards?.length) return null;
   const delayMin=Math.min(45,Math.max(8,routeWeather.delayMin||0));
   const source=weatherSourceRecord('live_route','Live route weather',{routeWeather,timestamp:t,from:flight.from,to:destination,delayMin});
@@ -1316,7 +1324,7 @@ function routeRerouteContextForFlight(flight,t=simNow()){
     weatherSummary:weatherSourceText(source),
     hazards:routeWeather.hazards.slice(0,3).map(item=>({
       id:item.id,type:item.type,severity:item.severity,label:item.label,delayMin:item.delayMin,
-      distanceKm:Math.round(item.distanceKm||0)
+      distanceKm:Math.round(item.distanceKm||0),lat:item.lat,lon:item.lon,radiusKm:item.radiusKm
     }))
   };
 }

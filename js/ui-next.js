@@ -236,17 +236,20 @@ function flightDelayedForFilter(flight){
 function weatherFilterFlightIds(now=simNow()){
   const filter=operationFilter();
   const cellId=filter.weatherCell?.id;
-  if(!cellId||!window.AeroWeatherEngine?.routeHazards) return new Set();
+  if(!cellId||(!window.AeroRoutePlanning?.routeHazardSummaryForFlight&&!window.AeroWeatherEngine?.routeHazards)) return new Set();
   const period=Math.floor(now/(30*MIN));
   const flights=(state.flights||[]).filter(flight=>!flight.cancelled&&!flight.settled&&flightActualArrival(flight)>now-2*HOUR);
   const key=[
     cellId,period,
-    flights.map(flight=>`${flight.id}:${flight.from}:${flightOperationalDestination(flight)}:${flightActualDeparture(flight)}:${flightActualArrival(flight)}`).join(',')
+    flights.map(flight=>`${flight.id}:${flight.from}:${flightOperationalDestination(flight)}:${window.AeroRoutePlanning?.activeRevision?.(window.AeroRoutePlanning?.ensureFlightRoutePlan?.(flight))?.id||'direct'}:${flightActualDeparture(flight)}:${flightActualArrival(flight)}`).join(',')
   ].join('|');
   if(operationFilterCache.key===key) return operationFilterCache.weatherFlightIds;
   const ids=new Set();
   for(const flight of flights){
-    const hazards=window.AeroWeatherEngine.routeHazards(flight.from,flightOperationalDestination(flight),now)||[];
+    const hazardsById=new Map();
+    for(const hazard of window.AeroRoutePlanning?.routeHazardSummaryForFlight?.(flight,now)?.hazards||[]) hazardsById.set(hazard.id,hazard);
+    for(const hazard of window.AeroWeatherEngine?.routeHazards?.(flight.from,flightOperationalDestination(flight),now)||[]) hazardsById.set(hazard.id,hazard);
+    const hazards=[...hazardsById.values()];
     if(hazards.some(cell=>cell.id===cellId)) ids.add(flight.id);
   }
   operationFilterCache={key,weatherFlightIds:ids,weatherCount:ids.size};
@@ -985,7 +988,9 @@ function flightWeatherForecastMarkup(flight){
   const forecastTime=flightActualDeparture(flight)<=now&&now<flightActualArrival(flight)?now:flightActualDeparture(flight);
   const origin=Management.weatherAt(flight.from,forecastTime);
   const destinationWeather=Management.weatherAt(destination,flightActualArrival(flight));
-  const routeWeather=window.AeroWeatherEngine?.routeHazardSummary?.(flight.from,destination,forecastTime)||{hazards:[],delayMin:0,level:'normal',label:''};
+  const routeWeather=window.AeroRoutePlanning?.routeHazardSummaryForFlight?.(flight,forecastTime,{forecast:true})
+    ||window.AeroWeatherEngine?.routeHazardSummary?.(flight.from,destination,forecastTime)
+    ||{hazards:[],delayMin:0,level:'normal',label:''};
   const hazards=(routeWeather.hazards||[]).slice(0,2);
   const routeTone=routeWeather.level==='severe'?'critical':routeWeather.level==='caution'?'warning':'';
   const routeText=hazards.length
@@ -1003,6 +1008,19 @@ function flightWeatherForecastMarkup(flight){
   </section>`;
 }
 
+function flightRoutePlanMarkup(flight){
+  const summary=window.AeroRoutePlanning?.flightRouteSummary?.(flight);
+  if(!summary) return '';
+  const revisionText=summary.activeRevisionCount>1
+    ? `${summary.reason||summary.mode} · ${summary.revisionId}`
+    : `${summary.reason||'Filed route'} · ${summary.cruiseLevel||'cruise level pending'}`;
+  return `<section class="context-section flight-route-plan"><h2>Route plan</h2>
+    <div class="simple-row"><span>Active route</span><b>${esc(revisionText)}</b></div>
+    <div class="simple-row"><span>Waypoints</span><b>${esc(summary.waypointCount)} · ${esc(summary.routeText)}</b></div>
+    <div class="simple-row"><span>Distance</span><b>${esc(summary.distanceKm)} km${summary.cruiseLevel?` · ${esc(summary.cruiseLevel)}`:''}</b></div>
+  </section>`;
+}
+
 function flightInlineDetailsMarkup(flight){
   const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
   const issue=attentionForFlight(flight);
@@ -1016,6 +1034,7 @@ function flightInlineDetailsMarkup(flight){
   return `<article class="left-inline-details" data-left-flight-details="${esc(flight.id)}">
     ${issue?`<section class="attention-summary ${issue.critical?'critical':'warning'}"><b>${esc(issue.label)}</b>${incident?`<span>${esc(incidentCopy(incident).summary)}</span>`:''}</section>`:''}
     <div class="fact-grid">${fact('Scheduled',`${shortClock(flight.departure)}-${shortClock(flight.arrival)}`)}${fact('Expected',`${shortClock(flightActualDeparture(flight))}-${shortClock(flightActualArrival(flight))}`)}${fact('Delay',delay?`+${delay} min`:'On time')}${fact('Aircraft',aircraft?`${aircraft.tail} · ${aircraft.model}`:'Unassigned')}</div>
+    ${flightRoutePlanMarkup(flight)}
     ${flightWeatherForecastMarkup(flight)}
     <section class="context-section"><h2>Ground progress</h2>${operation?phaseMarkup(operation):flightActualDeparture(flight)<=now&&now<flightActualArrival(flight)?`<div class="simple-row"><span>Current phase</span><b>${esc(statusOfFlight(flight,now)==='taxi_out'?'Taxi out':statusOfFlight(flight,now)==='taxi_in'?'Taxi in':'Airborne')}</b></div>`:phaseMarkup(null)}</section>
     ${active?flightFuelBarMarkup(flight):''}
@@ -1874,6 +1893,53 @@ function crewSwapPanelMarkup(){
     <p class="panel-note">${blocker?esc(blocker):`Requires 1 captain, 1 first officer${cabinNeed?`, and ${cabinNeed} cabin crew`:''}. The old duty ends before this flight and the new crew takes this sector.`}</p>`;
 }
 
+function routeRevisionDispatchLabel(route){
+  if(!route) return '';
+  if(route.mode==='diversion') return `Diversion to ${route.to}`;
+  if(route.mode==='return_origin') return `Return to ${route.to}`;
+  if(route.mode==='weather_detour') return 'Weather avoidance';
+  if(route.mode==='direct') return 'Direct routing';
+  if(route.mode==='priority') return 'Priority routing';
+  return route.reason||'Filed route';
+}
+
+function dispatchRouteComparisonMarkup(flight){
+  const comparison=window.AeroRoutePlanning?.flightRouteComparison?.(flight,simNow());
+  const active=comparison?.active;
+  if(!active?.waypoints?.length) return '';
+  const tracks=[];
+  if(comparison.revised&&comparison.filed?.waypoints?.length){
+    tracks.push({key:'filed',className:'filed',label:'Original',waypoints:comparison.filed.waypoints});
+  }
+  tracks.push({key:'active',className:'active',label:comparison.revised?'Active':'Filed',waypoints:active.waypoints});
+  const graphic=routeGraphicProjection(tracks,{width:300,height:96,pad:13});
+  if(!graphic.tracks.length) return '';
+  const filedTrack=graphic.tracks.find(track=>track.key==='filed');
+  const activeTrack=graphic.tracks.find(track=>track.key==='active')||graphic.tracks[0];
+  const activeD=routeGraphicPath(activeTrack.points);
+  const filedD=filedTrack?routeGraphicPath(filedTrack.points):'';
+  const sampledFixes=(activeTrack.points||[]).slice(1,-1).filter((_,index)=>index%Math.max(1,Math.ceil(activeTrack.points.length/6))===0).slice(0,5);
+  const endpoints=[activeTrack.points[0],activeTrack.points[activeTrack.points.length-1]].filter(Boolean);
+  const status=comparison.revised
+    ? `${routeRevisionDispatchLabel(active)} · ${active.distanceKm.toLocaleString()} km`
+    : `${active.waypointCount} waypoint filed route · ${active.distanceKm.toLocaleString()} km`;
+  const title=comparison.revised
+    ? `Original ${comparison.filed.from || flight.from} to ${comparison.filed.to || flight.to}; active ${routeRevisionDispatchLabel(active)}`
+    : `${flight.id} filed waypoint route`;
+  return `<div class="dispatch-route-visual ${comparison.revised?'has-revision':'single-route'}" data-dispatch-route="${esc(flight.id)}" title="${esc(title)}">
+    <svg class="dispatch-route-map" viewBox="0 0 ${graphic.width} ${graphic.height}" role="img" aria-label="${esc(title)}">
+      ${filedD?`<path class="dispatch-route-path filed" d="${esc(filedD)}"></path>`:''}
+      <path class="dispatch-route-path active" d="${esc(activeD)}"></path>
+      ${sampledFixes.map(point=>`<circle class="dispatch-route-fix" cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="2"></circle>`).join('')}
+      ${endpoints.map((point,index)=>`<g class="dispatch-route-endpoint ${index?'destination':'origin'}"><circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4.4"></circle><text x="${point.x.toFixed(1)}" y="${(point.y+(point.y<19?14:-8)).toFixed(1)}">${esc(index?(active.to||flightOperationalDestination(flight)):(active.from||flight.from||'POS'))}</text></g>`).join('')}
+    </svg>
+    <div class="dispatch-route-legend">
+      ${comparison.revised&&comparison.filed?`<span class="filed"><i></i>Original · ${esc(comparison.filed.from||flight.from)} → ${esc(comparison.filed.to||flight.to)}</span>`:''}
+      <span class="active"><i></i>${esc(comparison.revised?'Active':'Filed')} · ${esc(status)}${active.cruiseLevel?` · ${esc(active.cruiseLevel)}`:''}</span>
+    </div>
+  </div>`;
+}
+
 function dispatchSelectedFlightMarkup(){
   const flight=selectedFlightId&&state.flights.find(item=>item.id===selectedFlightId&&!item.cancelled);
   if(!flight) return '';
@@ -1895,6 +1961,7 @@ function dispatchSelectedFlightMarkup(){
     <span>Selected flight</span>
     <b>${esc(flight.id)} · ${esc(flight.from)} → ${esc(flightOperationalDestination(flight))}</b>
     <em>${esc(scope)} · ${esc(aircraft?`${aircraft.tail} · ${aircraft.model}`:'unassigned')} · ${esc(status)} · ${esc(timing)}</em>
+    ${dispatchRouteComparisonMarkup(flight)}
   </section>`;
 }
 
@@ -2750,7 +2817,10 @@ function renderDeskStack(force=false){
     (state.services||[]).map(service=>`${service.id}:${service.active?1:0}:${service.aircraftId}:${service.nextDeparture}`).join('|'),
     selectedFlightId?(()=>{
       const f=index.flightsById.get(selectedFlightId);
-      return f?`${f.id}:${flightActualDeparture(f)}:${flightActualArrival(f)}:${f.aircraftId}:${f.cancelled?1:0}:${f.staffingBlocked?1:0}:${f.enrouteRecoveryMin||0}:${f.enrouteRecoveryCost||0}:${f.enrouteRecoveryRequest?.status||''}:${f.enrouteRecoveryRequest?.respondsAt||0}`:'';
+      const routePlan=f?.routePlan;
+      const activeRoute=window.AeroRoutePlanning?.activeRevision?.(routePlan);
+      const revisions=Array.isArray(routePlan?.revisions)?routePlan.revisions:[];
+      return f?`${f.id}:${flightActualDeparture(f)}:${flightActualArrival(f)}:${f.aircraftId}:${f.cancelled?1:0}:${f.staffingBlocked?1:0}:${f.enrouteRecoveryMin||0}:${f.enrouteRecoveryCost||0}:${f.enrouteRecoveryRequest?.status||''}:${f.enrouteRecoveryRequest?.respondsAt||0}:${activeRoute?.id||''}:${activeRoute?.mode||''}:${activeRoute?.to||''}:${revisions.length}`:'';
     })():'',
     warnings.map(item=>`${item.id}:${item.level}:${item.flightId||''}:${item.aircraftId||''}:${item.title}:${item.detail}:${item.sortAt}:${item.clearing?1:0}`).join('|'),
     passengerExposures.map(item=>`${item.flightId}:${item.cost}:${item.arranged?1:0}:${item.reason}:${item.overnightPax}:${item.criticalConnections}:${item.atRiskConnections}:${(item.records||[]).map(record=>`${record.action}:${record.status}:${record.updatedAt}`).join(',')}`).join('|'),
@@ -3035,12 +3105,74 @@ function refreshScheduleMode(){
   }
   refreshSchedulePreview();
 }
+function routeGraphicProjection(rawTracks,{width=260,height=88,pad=12}={}){
+  const sourceTracks=(rawTracks||[]).map(track=>({
+    ...track,
+    waypoints:(track.waypoints||[]).filter(point=>Number.isFinite(point.lat)&&Number.isFinite(point.lon))
+  })).filter(track=>track.waypoints.length>=2);
+  if(!sourceTracks.length) return {width,height,tracks:[]};
+  const anchorLon=sourceTracks[0].waypoints[0].lon;
+  const unwrappedTracks=sourceTracks.map(track=>{
+    let previousLon=anchorLon;
+    return {
+      ...track,
+      waypoints:track.waypoints.map(point=>{
+        let lon=point.lon;
+        while(lon-previousLon>180) lon-=360;
+        while(previousLon-lon>180) lon+=360;
+        previousLon=lon;
+        return {...point,lon};
+      })
+    };
+  });
+  const all=unwrappedTracks.flatMap(track=>track.waypoints);
+  const minLon=Math.min(...all.map(point=>point.lon));
+  const maxLon=Math.max(...all.map(point=>point.lon));
+  const minLat=Math.min(...all.map(point=>point.lat));
+  const maxLat=Math.max(...all.map(point=>point.lat));
+  const spanLon=Math.max(.01,maxLon-minLon);
+  const spanLat=Math.max(.01,maxLat-minLat);
+  return {
+    width,
+    height,
+    tracks:unwrappedTracks.map(track=>({
+      ...track,
+      points:track.waypoints.map(point=>({
+        ...point,
+        x:pad+(point.lon-minLon)/spanLon*(width-pad*2),
+        y:pad+(maxLat-point.lat)/spanLat*(height-pad*2)
+      }))
+    }))
+  };
+}
+function routeGraphicPath(points){
+  return (points||[]).map((point,index)=>`${index?'L':'M'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(' ');
+}
+function routePreviewPathMarkup(routePreview,from,to){
+  const graphic=routeGraphicProjection([{key:'preview',waypoints:routePreview?.waypoints||[]}]);
+  const projected=graphic.tracks[0]?.points||[];
+  if(projected.length<2) return '';
+  const d=routeGraphicPath(projected);
+  const sampledFixes=projected.slice(1,-1).filter((_,index)=>index%Math.max(1,Math.ceil(projected.length/7))===0).slice(0,6);
+  const labels=projected.filter((_,index)=>index===0||index===projected.length-1);
+  const title=`${from} to ${to} · ${routePreview.waypointCount} waypoints · ${routePreview.cruiseLevel||'planned cruise'} · ${Math.round(routePreview.distanceKm||0).toLocaleString()} km`;
+  return `<figure class="route-preview-card" title="${esc(title)}">
+    <svg class="route-preview-map" viewBox="0 0 ${graphic.width} ${graphic.height}" role="img" aria-label="${esc(title)}">
+      <path class="route-preview-shadow" d="${esc(d)}"></path>
+      <path class="route-preview-path" d="${esc(d)}"></path>
+      ${sampledFixes.map(point=>`<circle class="route-preview-fix" cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="2.2"></circle>`).join('')}
+      ${labels.map((point,index)=>`<g class="route-preview-endpoint ${index?'destination':'origin'}"><circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4.5"></circle><text x="${point.x.toFixed(1)}" y="${(point.y+(point.y<18?14:-8)).toFixed(1)}">${esc(index?to:from)}</text></g>`).join('')}
+    </svg>
+    <figcaption><b>${esc(routePreview.mode==='filed'?'Filed route':'Route preview')}</b><span>${esc(routePreview.routeText||`${from} → ${to}`)}</span><em>${esc(routePreview.cruiseLevel||'')}</em></figcaption>
+  </figure>`;
+}
 function refreshSchedulePreview(){
   const ac=state.aircraft.find(item=>item.id===aircraftEl.value),from=originEl.value,to=destEl.value,departure=nextTimestampForClock(departureTimeEl.value);
   if(!ac||!departure||from===to){document.getElementById('schedulePreview').textContent='Choose an aircraft, two airports, and a departure time.';return;}
   const ferry=scheduleTypeEl.value==='ferry',estimate=ferry?estimateFerryFlight(from,to,ac,departure):estimateFlight(from,to,ac,currentScheduleFares(),{departure});
   let message=`${Math.round(estimate.km)} km · ${formatDuration(estimate.duration)} block time · ${estimate.rangeOk?'within range':'outside aircraft range'}`;
   if(!ferry) message+=` · projected ${estimate.pax||0} passengers`;
+  const routePreview=window.AeroRoutePlanning?.previewRoute?.(from,to,ac,departure);
   const routeMinimumTurn=minimumTurnMinutes(ac,to);
   message+=` · min turn at ${to} ${routeMinimumTurn} min`;
   const night=flightNightRestriction({from,to,departure,arrival:departure+estimate.duration,operationalDurationMs:estimate.duration,enrouteDelayMin:0},departure);
@@ -3056,7 +3188,7 @@ function refreshSchedulePreview(){
       : ` · requested turn ${effectiveTurnaround} min`;
     message+=missing.length?` · slot series will be requested: ${missing.join(', ')}`:' · both slot series owned';
   }
-  document.getElementById('schedulePreview').innerHTML=`<b>${esc(ac.tail)} · ${esc(from)} → ${esc(to)}</b><br>${esc(message)}`;
+  document.getElementById('schedulePreview').innerHTML=`<div class="schedule-preview-summary"><b>${esc(ac.tail)} · ${esc(from)} → ${esc(to)}</b><span>${esc(message)}</span></div>${routePreviewPathMarkup(routePreview,from,to)}`;
 }
 
 function optionList(values,label){ return values.map(value=>`<option value="${esc(value)}">${esc(label(value))}</option>`).join(''); }

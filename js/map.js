@@ -45,6 +45,7 @@ window.__aeroMapReady=false;
 const airportMarkers = new Map();
 const aircraftMarkers = new Map();
 let routeSignature = '';
+let selectedRouteSignature = '';
 let weatherMapSignature = '';
 let latestWeatherCells = [];
 const mapPopup = new maplibregl.Popup({
@@ -178,7 +179,8 @@ function routeLineFeature(f,routeWeather,t){
   const destination=flightOperationalDestination(f);
   const selected=f.id===selectedFlightId;
   const st=statusOfFlight(f,t);
-  const coords=routeCoords(AIRPORTS[f.from], AIRPORTS[destination], 80);
+  const coords=window.AeroRoutePlanning?.routeCoordinatesForFlight?.(f)
+    ||routeCoords(AIRPORTS[f.from], AIRPORTS[destination], 80);
   return {
     type:'Feature',
     id:f.id,
@@ -199,6 +201,8 @@ function routeWeatherFeature(f,routeWeather){
   const destination=flightOperationalDestination(f);
   if(!routeWeather.hazards?.length) return null;
   const selected=f.id===selectedFlightId;
+  const coords=window.AeroRoutePlanning?.routeCoordinatesForFlight?.(f)
+    ||routeCoords(AIRPORTS[f.from], AIRPORTS[destination], 80);
   return {
     type:'Feature',
     id:`${f.id}-weather`,
@@ -210,8 +214,50 @@ function routeWeatherFeature(f,routeWeather){
       width:selected ? 8 : 6,
       opacity:selected ? .55 : .36
     },
-    geometry:{type:'LineString',coordinates:routeCoords(AIRPORTS[f.from], AIRPORTS[destination], 80)}
+    geometry:{type:'LineString',coordinates:coords}
   };
+}
+
+function selectedRouteFeature(f,coords,phase,split){
+  if(!f||!coords?.length||coords.length<2) return null;
+  const destination=flightOperationalDestination(f);
+  const progressPct=Math.round((split?.progress||0)*100);
+  return {
+    type:'Feature',
+    id:`${f.id}-${phase}`,
+    properties:{
+      id:f.id,
+      phase,
+      tooltip:phase==='flown'
+        ? `${f.id} · ${progressPct}% flown · ${f.from} -> ${destination}`
+        : `${f.id} · projected waypoint path · ${f.from} -> ${destination}`
+    },
+    geometry:{type:'LineString',coordinates:coords}
+  };
+}
+
+function rebuildSelectedRouteIfNeeded(){
+  if(!mapReady) return;
+  const t=simNow();
+  const flight=selectedFlightId&&state.flights.find(item=>item.id===selectedFlightId&&!item.cancelled);
+  const plan=flight&&window.AeroRoutePlanning?.ensureFlightRoutePlan?.(flight);
+  const revision=plan&&window.AeroRoutePlanning?.activeRevision?.(plan);
+  const progress=flight&&window.AeroRoutePlanning?.routeProgressForFlight?.(flight,t);
+  const signature=flight&&revision
+    ? `${flight.id}:${revision.id}:${flightOperationalDestination(flight)}:${flightActualDeparture(flight)}:${flightActualArrival(flight)}:${Math.floor((progress||0)*1000)}`
+    : '';
+  if(signature===selectedRouteSignature) return;
+  selectedRouteSignature=signature;
+  if(!flight||!revision){
+    clearMapSource('selected-route-flown');
+    clearMapSource('selected-route-remaining');
+    return;
+  }
+  const split=window.AeroRoutePlanning?.splitRouteCoordinatesForFlight?.(flight,t);
+  const flown=selectedRouteFeature(flight,split?.flown,'flown',split);
+  const remaining=selectedRouteFeature(flight,split?.remaining,'remaining',split);
+  setMapSourceData('selected-route-flown',mapFeatureCollection(flown?[flown]:[]));
+  setMapSourceData('selected-route-remaining',mapFeatureCollection(remaining?[remaining]:[]));
 }
 
 function rebuildRoutesIfNeeded() {
@@ -221,7 +267,7 @@ function rebuildRoutesIfNeeded() {
     .filter(f => !f.cancelled && flightActualDeparture(f) <= t + 2*HOUR && flightActualArrival(f) > t - 15*MIN)
     .sort((a,b) => a.id.localeCompare(b.id));
   const signature = visible.map(f =>
-    `${f.id}:${statusOfFlight(f,t)}:${flightOperationalDestination(f)}:${f.id===selectedFlightId?1:0}:${window.AeroWeatherEngine?.routeHazardSummary?.(f.from,flightOperationalDestination(f),t)?.level||'normal'}`
+    `${f.id}:${statusOfFlight(f,t)}:${flightOperationalDestination(f)}:${window.AeroRoutePlanning?.activeRevision?.(window.AeroRoutePlanning?.ensureFlightRoutePlan?.(f))?.id||'direct'}:${f.id===selectedFlightId?1:0}:${(window.AeroRoutePlanning?.routeHazardSummaryForFlight?.(f,t)||window.AeroWeatherEngine?.routeHazardSummary?.(f.from,flightOperationalDestination(f),t))?.level||'normal'}`
   ).join('|');
 
   if (signature === routeSignature) return;
@@ -231,7 +277,9 @@ function rebuildRoutesIfNeeded() {
   const routeWeather=[];
   for (const f of visible) {
     const destination=flightOperationalDestination(f);
-    const weather=window.AeroWeatherEngine?.routeHazardSummary?.(f.from,destination,t)||{hazards:[],level:'normal',delayMin:0,label:''};
+    const weather=window.AeroRoutePlanning?.routeHazardSummaryForFlight?.(f,t)
+      ||window.AeroWeatherEngine?.routeHazardSummary?.(f.from,destination,t)
+      ||{hazards:[],level:'normal',delayMin:0,label:''};
     routes.push(routeLineFeature(f,weather,t));
     const weatherFeature=routeWeatherFeature(f,weather);
     if(weatherFeature) routeWeather.push(weatherFeature);
@@ -335,6 +383,7 @@ function updateMapData() {
   if(!mapReady) return;
   rebuildWeatherMapIfNeeded();
   rebuildRoutesIfNeeded();
+  rebuildSelectedRouteIfNeeded();
   const t = simNow();
   const index=operationalIndex(t);
   const liveIds = new Set();
@@ -400,7 +449,7 @@ function showLayerPopup(event){
 }
 
 function bindMapLayerInteractions(){
-  for(const layerId of ['routes','weather-cells-fill','airport-weather-fill']){
+  for(const layerId of ['routes','selected-route-flown','selected-route-remaining','weather-cells-fill','airport-weather-fill']){
     map.on('mouseenter',layerId,()=>{ map.getCanvas().style.cursor='pointer'; });
     map.on('mousemove',layerId,showLayerPopup);
     map.on('mouseleave',layerId,()=>{
@@ -412,6 +461,12 @@ function bindMapLayerInteractions(){
     const id=event.features?.[0]?.properties?.id;
     if(id) settleSelectedFlight(id);
   });
+  for(const layerId of ['selected-route-flown','selected-route-remaining']){
+    map.on('click',layerId,event=>{
+      const id=event.features?.[0]?.properties?.id;
+      if(id) settleSelectedFlight(id);
+    });
+  }
   map.on('click','weather-cells-fill',event=>{
     const id=event.features?.[0]?.properties?.id;
     const cell=latestWeatherCells.find(item=>item.id===id);
@@ -424,6 +479,8 @@ function initialiseMapLayers(){
   addGeoJsonSource('weather-cells');
   addGeoJsonSource('route-weather');
   addGeoJsonSource('routes');
+  addGeoJsonSource('selected-route-flown');
+  addGeoJsonSource('selected-route-remaining');
 
   addFillLayer('airport-weather-fill','airport-weather',{
     'fill-color':['get','fillColor'],
@@ -455,11 +512,22 @@ function initialiseMapLayers(){
     'line-width':['get','width'],
     'line-dasharray':[1.8,1.8]
   });
+  addLineLayer('selected-route-flown','selected-route-flown',{
+    'line-color':'#9eeaff',
+    'line-opacity':.92,
+    'line-width':4
+  });
+  addLineLayer('selected-route-remaining','selected-route-remaining',{
+    'line-color':'#9eeaff',
+    'line-opacity':.78,
+    'line-width':3,
+    'line-dasharray':[2,1.6]
+  });
 
   bindMapLayerInteractions();
 }
 
-const routeLayer={clearLayers:()=>{ routeSignature=''; clearMapSource('routes'); clearMapSource('route-weather'); }};
+const routeLayer={clearLayers:()=>{ routeSignature=''; selectedRouteSignature=''; clearMapSource('routes'); clearMapSource('route-weather'); clearMapSource('selected-route-flown'); clearMapSource('selected-route-remaining'); }};
 const aircraftLayer={clearLayers:()=>{ for(const record of aircraftMarkers.values()) record.marker.remove(); aircraftMarkers.clear(); }};
 const weatherLayer={clearLayers:()=>{ weatherMapSignature=''; clearMapSource('weather-cells'); }};
 const airportWeatherLayer={clearLayers:()=>{ weatherMapSignature=''; clearMapSource('airport-weather'); }};

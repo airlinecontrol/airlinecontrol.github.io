@@ -268,8 +268,9 @@ function createFlightRecord({aircraftId,from,to,departure,fare,serviceId=null,se
     connectionPax:0,connectionCriticalPax:0,connectionAtRiskPax:0,connectionMissedPax:0,
     passengerAccommodationArrangedAt:0,passengerRecoveryArrangedAt:0,passengerReleasedAt:0,recoveryCostBooked:0,cancellationCostBooked:'',
     weatherLiveChecks:{},weatherRouteHazard:'',weatherCause:null,
-    slotMissed:false,opsChecked:false,enrouteChecked:false,slotLogged:false
+    routePlan:null,slotMissed:false,opsChecked:false,enrouteChecked:false,slotLogged:false
   };
+  if(window.AeroRoutePlanning?.ensureFlightRoutePlan) window.AeroRoutePlanning.ensureFlightRoutePlan(f,ac);
   state.flights.push(f);
   return f;
 }

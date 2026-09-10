@@ -42,6 +42,7 @@
     flight.actualArrival=now+5*60*60_000;
     flight.operationalDurationMs=flight.actualArrival-flight.actualDeparture;
     const originalRoute=w.AeroWeatherEngine.routeHazardSummary;
+    const originalRoutePlanSummary=w.AeroRoutePlanning.routeHazardSummaryForFlight;
     const originalWeather=w.AeroWeatherEngine.weatherAt;
     const forecastAircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
     const forecastFlight=w.createFlightRecord({
@@ -68,7 +69,7 @@
       validFrom:t,
       validUntil:t+3*60*60_000
     });
-    w.AeroWeatherEngine.routeHazardSummary=()=>({
+    w.AeroRoutePlanning.routeHazardSummaryForFlight=()=>({
       hazards:[{id:'DEP-WX',label:'Thunderstorm cells',severity:'caution',delayMin:24,distanceKm:80}],
       delayMin:24,
       severe:false,
@@ -80,8 +81,9 @@
     assert(w.slotMissContextForFlight(forecastFlight).causeBreakdown.some(item=>item.label==='Weather delay'&&item.detail.includes('Route forecast')&&item.detail.includes('DEP-WX')),'slot/weather cause detail does not explain weather source and timestamp');
     w.AeroWeatherEngine.weatherAt=originalWeather;
     w.AeroWeatherEngine.routeHazardSummary=originalRoute;
+    w.AeroRoutePlanning.routeHazardSummaryForFlight=originalRoutePlanSummary;
 
-    w.AeroWeatherEngine.routeHazardSummary=()=>({
+    w.AeroRoutePlanning.routeHazardSummaryForFlight=()=>({
       hazards:[{id:'TEST-WX',label:'Thunderstorm cells',severity:'severe',delayMin:28,lat:47,lon:-12,radiusKm:250}],
       delayMin:28,
       severe:true,
@@ -94,6 +96,7 @@
     assert(flight.weatherCause?.sources?.some(item=>item.kind==='live_route'&&item.hazards.some(hazard=>hazard.id==='TEST-WX')),'live route weather provenance did not store the triggering cell');
     assert(w.openIncidentsForFlight(flight.id).some(item=>item.type==='airborne_atc_reroute'&&item.context.hazards.some(hazard=>hazard.id==='TEST-WX')),'route weather did not open a derived airborne reroute incident');
 
+    w.AeroRoutePlanning.routeHazardSummaryForFlight=originalRoutePlanSummary;
     w.AeroWeatherEngine.routeHazardSummary=()=>({hazards:[],delayMin:0,severe:false,label:'',level:'normal'});
     w.AeroWeatherEngine.weatherAt=(code,t)=>({
       airport:code,
@@ -207,6 +210,7 @@
     assert(w.openIncidentsForFlight(lightningFlight.id).some(item=>item.type==='lightning_strike'&&item.context.cellId==='TEST-CB'),'lightning strike was not derived from crossing a thunderstorm cell');
 
     w.AeroWeatherEngine.routeHazardSummary=originalRoute;
+    w.AeroRoutePlanning.routeHazardSummaryForFlight=originalRoutePlanSummary;
     w.AeroWeatherEngine.weatherAt=originalWeather;
     w.AeroWeatherEngine.cellsAtPoint=originalCellsAtPoint;
     w.AeroWeatherEngine.stableUnit=originalStable;
