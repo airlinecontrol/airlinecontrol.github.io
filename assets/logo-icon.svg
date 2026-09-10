@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Airline Operations Control Center">
+  <rect width="512" height="512" rx="92" fill="#000"/>
+  <g fill="none" stroke="#fff" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M84 142 174 108v176L84 326z"/>
+    <path d="M338 108 428 142v184l-90-42z"/>
+    <rect x="184" y="88" width="144" height="148" rx="16"/>
+    <path d="M112 170h36M112 216h36M112 262h36"/>
+    <path d="M364 170h36M364 216h36M364 262h36"/>
+  </g>
+  <path fill="#fff" d="M256 115c8 0 13 19 13 63l60 33c5 3 7 9 4 14l-4 8-60-16-4 54 25 17v15l-34-10-34 10v-15l25-17-4-54-60 16-4-8c-3-5-1-11 4-14l60-33c0-44 5-63 13-63z"/>
+  <path fill="#fff" d="M221 328a35 35 0 1 1 70 0 35 35 0 0 1-70 0z"/>
+  <path fill="#fff" d="M169 437c13-48 46-75 87-75s74 27 87 75z"/>
+  <path fill="none" stroke="#fff" stroke-width="18" stroke-linecap="round" d="M108 376c89-31 207-31 296 0"/>
+</svg>
