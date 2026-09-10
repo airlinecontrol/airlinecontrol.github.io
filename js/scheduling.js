@@ -588,8 +588,11 @@ function resolveRemovedScheduleArtifacts(flightIds,label,t=simNow()){
   }
   for(const transfer of state.personnelTransfers||[]){
     if(removedFlightIds.has(transfer.flightId)&&!['completed','cancelled'].includes(transfer.status)){
-      transfer.status='cancelled';
-      transfer.cancelledAt=t;
+      if(typeof cancelPersonnelTransfer==='function') cancelPersonnelTransfer(transfer,t,'Booked flight was removed from the schedule');
+      else{
+        transfer.status='cancelled';
+        transfer.cancelledAt=t;
+      }
     }
   }
 }

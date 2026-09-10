@@ -117,23 +117,31 @@
     return airport&&anchor ? distanceKm(anchor,airport) : Infinity;
   }
 
+  function diversionCandidateArrivalAt(flight,anchor,duration,t=simNow()){
+    if(anchor?.type==='aircraft') return t+duration;
+    const plannedDeparture=typeof flightActualDeparture==='function' ? flightActualDeparture(flight) : flight?.departure;
+    return Math.max(t,Number(plannedDeparture)||t)+duration;
+  }
+
   function diversionCandidatesForIncident(incident,{includeReturnOrigin=true,onlyReturnOrigin=false}={}){
     const flight=state.flights.find(item=>item.id===incident.flightId);
     const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
     if(!flight||!aircraft) return [];
     const destination=flightOperationalDestination(flight);
     const anchor=diversionAnchorForIncident(incident,flight,aircraft);
+    const t=simNow();
     return Object.keys(AIRPORTS).filter(code=>code!==destination&&(includeReturnOrigin||code!==flight.from)).map(code=>{
       const returnOrigin=code===flight.from;
       if(onlyReturnOrigin&&!returnOrigin) return null;
       const km=Math.max(40,diversionDistanceFromAnchor(anchor,code));
       const destinationKm=distanceKm(AIRPORTS[destination],AIRPORTS[code]);
-      const weather=Management.weatherAt(code,simNow());
+      const duration=diversionRouteDurationMs(km,MODELS[aircraft.model]);
+      const weatherAt=diversionCandidateArrivalAt(flight,anchor,duration,t);
+      const weather=Management.weatherAt(code,weatherAt);
       const rangeOk=km<=MODELS[aircraft.model].maxRangeKm;
       const handling=diversionHandlingAvailability(code);
       const fuel=diversionFuelEstimate(flight,aircraft,km);
       const weatherOk=weather.level!=='severe';
-      const duration=diversionRouteDurationMs(km,MODELS[aircraft.model]);
       const destinationBias=anchor.type==='aircraft' ? destinationKm/180 : destinationKm/80;
       const suitability=(rangeOk?100:0)-km/70-destinationBias+(returnOrigin?12:0)+(weather.level==='normal'?15:weather.level==='caution'?0:-30)+Math.min(12,handling.score/8)+(fuel.ok?0:-80);
       const rejectionReasons=[
@@ -143,7 +151,7 @@
         fuel.ok?'':`fuel ${Math.round(fuel.remaining)} gal remaining / ${Math.round(fuel.required)} gal required`
       ].filter(Boolean);
       return {
-        code,km,destinationKm,weather,weatherOk,handling,rangeOk,fuel,returnOrigin,rejectionReasons,
+        code,km,destinationKm,weather,weatherAt,weatherOk,handling,rangeOk,fuel,returnOrigin,rejectionReasons,
         anchor:{type:anchor.type,label:anchor.label,status:anchor.status||'',airport:anchor.airport||''},
         duration,durationMode:anchor.type==='aircraft'?'remaining_from_anchor':'total_from_origin',suitability
       };
@@ -381,7 +389,7 @@
 
   const api={
     activeWorkflowAssignments,crewPoolOptions,crewPoolOptionsAtAirport,remoteCrewPoolOptions,
-    diversionRouteDurationMs,diversionFuelEstimate,diversionHandlingAvailability,diversionAnchorForIncident,diversionCandidatesForIncident,diversionOptionsForIncident,diversionRejectionSummaryForIncident,alternateUnavailableMessage,
+    diversionRouteDurationMs,diversionFuelEstimate,diversionHandlingAvailability,diversionCandidateArrivalAt,diversionAnchorForIncident,diversionCandidatesForIncident,diversionOptionsForIncident,diversionRejectionSummaryForIncident,alternateUnavailableMessage,
     crewAugmentationBlocker,legalCrewConfirmationBlocker,branchStrategyOptionBlocker,taskResourceBlocker,
     taskEligibilityBlocker,taskResourceRequirementBlocker
   };

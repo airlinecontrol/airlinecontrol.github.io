@@ -1686,21 +1686,33 @@ function destinationHandlingIncidentRequired(flight,context){
 function diversionAirportUnavailableContextForFlight(flight,t=simNow()){
   if(!flight.diversionAirport||!flightIsAirborne(flight,t)) return null;
   const airport=flight.diversionAirport;
-  const weather=Management.weatherAt(airport,t+30*MIN);
-  const handling=staffAt(airport,'groundHandling');
-  const weatherBlocked=weather.level==='severe'&&weather.capacityFactor<.72;
-  const handlingBlocked=handling<=0;
+  const arrivalAt=Math.max(t,Number(flightActualArrival(flight))||t+30*MIN);
+  const weather=Management.weatherAt(airport,arrivalAt);
+  const fallbackStaff=staffAt(airport,'groundHandling');
+  const handlingAvailability=typeof diversionHandlingAvailability==='function'
+    ? diversionHandlingAvailability(airport,t)
+    : {available:fallbackStaff>0,source:fallbackStaff>0?'station':'none',staff:fallbackStaff,label:fallbackStaff>0?`own station handling · ${fallbackStaff} team${fallbackStaff===1?'':'s'}`:'no modeled diversion handler'};
+  const weatherBlocked=weather.level==='severe';
+  const handlingBlocked=!handlingAvailability.available;
   const active=weatherBlocked||handlingBlocked;
   if(!active) return null;
+  const reasons=[
+    weatherBlocked?`${airport} weather deteriorated below acceptance`:null,
+    handlingBlocked?`${airport} ${handlingAvailability.label||'handling no longer available'}`:null
+  ].filter(Boolean);
   return {
     ...airborneContextForFlight(flight,t),
     sourceId:flight.id,
     airport,
     conditions:weather.conditions,
     level:weather.level,
+    forecastAt:arrivalAt,
     capacityPct:Math.round(weather.capacityFactor*100),
-    handling,
-    reason:weatherBlocked?`${airport} weather deteriorated below acceptance`:`${airport} handling no longer available`,
+    handling:fallbackStaff,
+    handlingAvailable:Boolean(handlingAvailability.available),
+    handlingSource:handlingAvailability.source,
+    handlingLabel:handlingAvailability.label,
+    reason:reasons.join(' · '),
     active:true
   };
 }

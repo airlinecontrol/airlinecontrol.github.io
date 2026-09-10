@@ -453,11 +453,44 @@ function qualificationTransferMix(airport,role,amount){
   const mix={};
   const ratings=Object.entries(state.personnel.qualifications?.[airport]?.[role]||{}).sort((a,b)=>b[1]-a[1]);
   for(const [family,count] of ratings){
-    const moved=Math.min(remaining,Math.max(0,Number(count)||0));
+    const moved=Math.min(remaining,availableQualificationAt(airport,role,family));
     if(moved){ mix[family]=moved; remaining-=moved; }
     if(!remaining) break;
   }
   return remaining?null:mix;
+}
+
+function transferOriginDebited(transfer){
+  return transfer?.originDebited!==false;
+}
+
+function reservedOutboundPersonnelAt(airport,role){
+  return (state.personnelTransfers||[]).reduce((sum,transfer)=>{
+    if(transfer.status!=='scheduled'||transfer.originDebited!==false||transfer.from!==airport||transfer.role!==role) return sum;
+    return sum+Math.max(0,Math.floor(Number(transfer.amount)||0));
+  },0);
+}
+
+function availableStationStaffAt(airport,role){
+  return Math.max(0,staffAt(airport,role)-reservedOutboundPersonnelAt(airport,role));
+}
+
+function reservedOutboundQualificationAt(airport,role,family){
+  if(!['captains','firstOfficers'].includes(role)||!family) return 0;
+  return (state.personnelTransfers||[]).reduce((sum,transfer)=>{
+    if(transfer.status!=='scheduled'||transfer.originDebited!==false||transfer.from!==airport||transfer.role!==role) return sum;
+    return sum+Math.max(0,Math.floor(Number(transfer.qualifications?.[family])||0));
+  },0);
+}
+
+function availableQualificationAt(airport,role,family){
+  return Math.max(0,qualificationAt(airport,role,family)-reservedOutboundQualificationAt(airport,role,family));
+}
+
+function availableQualifiedStationStaffAt(airport,role,family){
+  if(!['captains','firstOfficers'].includes(role)) return availableStationStaffAt(airport,role);
+  if(family==='Multi-fleet') return availableQualificationAt(airport,role,'Multi-fleet');
+  return availableQualificationAt(airport,role,'Multi-fleet')+availableQualificationAt(airport,role,family);
 }
 
 function flightPersonnelTransferCount(flightId){
@@ -473,22 +506,62 @@ function externalTransferPlan(from,to,amount,t=simNow()){
   return {km,cost:0,departure,arrival};
 }
 
+function restorePersonnelTransferOrigin(transfer){
+  if(!transferOriginDebited(transfer)) return false;
+  changeStaff(transfer.from,transfer.role,transfer.amount);
+  for(const [family,count] of Object.entries(transfer.qualifications||{})) changeQualification(transfer.from,transfer.role,family,count);
+  transfer.originDebited=false;
+  return true;
+}
+
+function cancelPersonnelTransfer(transfer,t=simNow(),reason=''){
+  if(transfer.status==='scheduled') restorePersonnelTransferOrigin(transfer);
+  transfer.status='cancelled';
+  transfer.cancelledAt=t;
+  transfer.cancelReason=reason||transfer.cancelReason||'Transfer no longer available';
+  return true;
+}
+
+function debitPersonnelTransferOrigin(transfer,t=simNow()){
+  if(transferOriginDebited(transfer)) return true;
+  if(staffAt(transfer.from,transfer.role)<transfer.amount) return false;
+  for(const [family,count] of Object.entries(transfer.qualifications||{})){
+    if(qualificationAt(transfer.from,transfer.role,family)<count) return false;
+  }
+  changeStaff(transfer.from,transfer.role,-transfer.amount);
+  for(const [family,count] of Object.entries(transfer.qualifications||{})) changeQualification(transfer.from,transfer.role,family,-count);
+  transfer.originDebited=true;
+  transfer.departedAt=transfer.departure||t;
+  return true;
+}
+
 function processPersonnelTransfers(t=simNow()){
   let changed=false;
   for(const transfer of state.personnelTransfers||[]){
-    if(transfer.status!=='scheduled') continue;
+    if(!['scheduled','in_transit'].includes(transfer.status)) continue;
     if(transfer.method==='own'){
       const flight=state.flights.find(f=>f.id===transfer.flightId&&!f.cancelled);
-      if(!flight){
-        changeStaff(transfer.from,transfer.role,transfer.amount);
-        for(const [family,count] of Object.entries(transfer.qualifications||{})) changeQualification(transfer.from,transfer.role,family,count);
-        transfer.status='cancelled'; transfer.cancelledAt=t; changed=true;
+      if(!flight&&transfer.status==='scheduled'){
+        cancelPersonnelTransfer(transfer,t,'Booked flight no longer operates');
+        changed=true;
         continue;
       }
-      transfer.departure=flightActualDeparture(flight);
-      transfer.arrival=flightActualArrival(flight);
+      if(flight){
+        if(transfer.status==='scheduled') transfer.departure=flightActualDeparture(flight);
+        transfer.arrival=flightActualArrival(flight);
+      }
     }
-    if(t>=transfer.arrival){
+    if(transfer.status==='scheduled'&&t>=transfer.departure){
+      if(!debitPersonnelTransferOrigin(transfer,t)){
+        cancelPersonnelTransfer(transfer,t,'Origin personnel no longer available at departure');
+        changed=true;
+        continue;
+      }
+      transfer.status='in_transit';
+      logEvent(`${transfer.id}: ${transfer.amount} ${PERSONNEL[transfer.role].label.toLowerCase()} departed ${transfer.from}.`,transfer.departure);
+      changed=true;
+    }
+    if(transfer.status==='in_transit'&&t>=transfer.arrival){
       const flight=transfer.method==='own'&&state.flights.find(f=>f.id===transfer.flightId);
       const arrivalAirport=flight?flightOperationalDestination(flight):transfer.to;
       transfer.actualTo=arrivalAirport;

@@ -2231,10 +2231,16 @@ function personnelSnapshotMarkup(){
   const codes=[...new Set([...focusCodes,...operationalAirportCodes()])].slice(0,6);
   return `<section class="desk-section"><h2>Staff availability</h2>${codes.length?codes.map(code=>{
     const expanded=isStaffAirportExpanded(code);
+    const committed=['captains','firstOfficers','cabinCrew','groundHandling']
+      .map(role=>[role,reservedOutboundPersonnelAt(code,role)])
+      .filter(([,count])=>count>0)
+      .map(([role,count])=>`${count} ${PERSONNEL[role]?.label?.toLowerCase()||role}`)
+      .join(' · ');
     return `<div class="desk-list-row staff-airport-row ${expanded?'expanded':''}">
       <button class="row-main-button staff-airport-toggle" type="button" data-staff-airport="${esc(code)}" aria-expanded="${expanded}">
         <b><span class="toggle-caret">${expanded?'▾':'▸'}</span>${esc(code)} · ${esc(AIRPORTS[code]?.name||'Station')}</b>
         <span>${staffAt(code,'captains')} captains · ${staffAt(code,'firstOfficers')} first officers · ${staffAt(code,'cabinCrew')} cabin · ${staffAt(code,'groundHandling')} handling</span>
+        ${committed?`<span>Committed to booked moves: ${esc(committed)}</span>`:''}
       </button>
       <em>${selectedFlight?.from===code?'origin':selectedFlight&&flightOperationalDestination(selectedFlight)===code?'arrival':'station'}</em>
       ${expanded?staffAirportDetailMarkup(code,selectedFlight):''}
@@ -2806,19 +2812,18 @@ function refreshPersonnelTransferOptions(){
   const flights=external?[]:eligiblePersonnelFlights(from,to,amount),select=document.getElementById('transferPersonnelFlight'),previous=select.value;
   select.innerHTML=flights.length?flights.map(f=>`<option value="${esc(f.id)}">${esc(f.id)} · ${shortDay(flightActualDeparture(f))} ${shortClock(flightActualDeparture(f))}</option>`).join(''):'<option value="">No suitable own flight</option>';
   if(flights.some(f=>f.id===previous)) select.value=previous;
-  const available=staffAt(from,role),same=from===to,plan=external&&!same?externalTransferPlan(from,to,amount):null,selected=flights.find(f=>f.id===select.value);
-  document.getElementById('personnelTransferPreview').textContent=same?'Choose two different airports.':available<amount?`Only ${available} available at ${from}.`:external?`New external booking · estimated arrival ${formatTime(plan.arrival)}.`:selected?`New non-revenue booking on ${selected.id} · arrival ${formatTime(flightActualArrival(selected))}.`:'No own flight has enough spare seats.';
+  const station=staffAt(from,role),reserved=reservedOutboundPersonnelAt(from,role),available=availableStationStaffAt(from,role),same=from===to,plan=external&&!same?externalTransferPlan(from,to,amount):null,selected=flights.find(f=>f.id===select.value);
+  document.getElementById('personnelTransferPreview').textContent=same?'Choose two different airports.':available<amount?`Only ${available} available at ${from}${reserved?` (${station} at station, ${reserved} committed to booked moves)`:''}.`:external?`New external booking · estimated arrival ${formatTime(plan.arrival)}.`:selected?`New non-revenue booking on ${selected.id} · arrival ${formatTime(flightActualArrival(selected))}.`:'No own flight has enough spare seats.';
   document.getElementById('transferPersonnelBtn').disabled=same||available<amount||(!external&&!selected);
 }
 function createPersonnelTransfer(){
   const role=document.getElementById('transferPersonnelRole').value,from=document.getElementById('transferPersonnelFrom').value,to=document.getElementById('transferPersonnelTo').value,amount=clamp(Math.floor(Number(document.getElementById('transferPersonnelAmount').value)||1),1,50),method=document.getElementById('transferPersonnelMethod').value;
-  const qualifications=qualificationTransferMix(from,role,amount); if(!PERSONNEL[role]||from===to||staffAt(from,role)<amount||qualifications===null) return toast('That personnel transfer is not available.');
+  const qualifications=qualificationTransferMix(from,role,amount); if(!PERSONNEL[role]||from===to||availableStationStaffAt(from,role)<amount||qualifications===null) return toast('That personnel transfer is not available.');
   const id='PT'+state.nextPersonnelTransfer++; let transfer;
   if(method==='own'){
     const flight=eligiblePersonnelFlights(from,to,amount).find(f=>f.id===document.getElementById('transferPersonnelFlight').value); if(!flight) return toast('That own flight is no longer suitable.');
-    transfer={id,role,amount,from,to,method,qualifications,flightId:flight.id,departure:flightActualDeparture(flight),arrival:flightActualArrival(flight),cost:0,status:'scheduled',createdAt:simNow()};
-  }else{ const plan=externalTransferPlan(from,to,amount); transfer={id,role,amount,from,to,method,qualifications,departure:plan.departure,arrival:plan.arrival,cost:0,status:'scheduled',createdAt:simNow()}; }
-  changeStaff(from,role,-amount); for(const [family,count] of Object.entries(qualifications||{})) changeQualification(from,role,family,-count);
+    transfer={id,role,amount,from,to,method,qualifications,flightId:flight.id,departure:flightActualDeparture(flight),arrival:flightActualArrival(flight),cost:0,status:'scheduled',originDebited:false,createdAt:simNow()};
+  }else{ const plan=externalTransferPlan(from,to,amount); transfer={id,role,amount,from,to,method,qualifications,departure:plan.departure,arrival:plan.arrival,cost:0,status:'scheduled',originDebited:false,createdAt:simNow()}; }
   state.personnelTransfers.push(transfer); save(); markUiDirty('all'); toast(`${id} booked.`);
 }
 function renderPersonnelTransfers(){

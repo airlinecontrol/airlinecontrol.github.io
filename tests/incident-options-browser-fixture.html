@@ -355,6 +355,12 @@
       w.refreshAll();
       await wait(120);
       assert(d.querySelector(`[data-incident-case="${incident.id}"] [data-task-alternate]`),'JFK-area incident dialog still renders without an alternate selector');
+      const contractOption=options.find(option=>option.handling?.source==='contract')||options[0];
+      assert(w.performOperationalTask(`${incident.id}:dispatch-alternate`,'',{airport:contractOption.code}),'JFK-area contract alternate selection was rejected');
+      assert(flight.diversionAirport===contractOption.code,'JFK-area contract alternate did not apply to the flight');
+      assert(!w.diversionAirportUnavailableContextForFlight(flight,now+60_000),`Selected contract alternate was immediately marked unavailable: ${w.diversionAirportUnavailableContextForFlight(flight,now+60_000)?.reason}`);
+      w.processDerivedOperationalIncidents(now+60_000);
+      assert(!w.openIncidentsForFlight(flight.id).some(item=>item.type==='diversion_airport_unavailable'),'Selected contract alternate spawned a diversion-airport-unavailable incident immediately after selection');
     }
 
     const {flight:fuelReturnFlight,incident:fuelReturn}=makeAirborneCase('fuel_margin_low','LHR',{authorityDecision:'return_origin',projectedLandingFuelGal:1200,reserveGal:1800,marginPct:55});

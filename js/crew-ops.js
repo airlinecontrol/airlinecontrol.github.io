@@ -233,11 +233,13 @@ function crewRecoveryAvailableStaffAt(airport,role,family='',t=simNow(),excludeF
 }
 
 function availableStaffAt(airport,role,t=simNow(),excludeFlightId=''){
-  return staffAt(airport,role)+crewRecoveryAvailableStaffAt(airport,role,'',t,excludeFlightId);
+  const station=typeof availableStationStaffAt==='function'?availableStationStaffAt(airport,role):staffAt(airport,role);
+  return station+crewRecoveryAvailableStaffAt(airport,role,'',t,excludeFlightId);
 }
 
 function availableQualifiedStaffAt(airport,role,family,t=simNow(),excludeFlightId=''){
-  return qualifiedStaffAt(airport,role,family)+crewRecoveryAvailableStaffAt(airport,role,family,t,excludeFlightId);
+  const station=typeof availableQualifiedStationStaffAt==='function'?availableQualifiedStationStaffAt(airport,role,family):qualifiedStaffAt(airport,role,family);
+  return station+crewRecoveryAvailableStaffAt(airport,role,family,t,excludeFlightId);
 }
 
 function processCrewRecoveries(t=simNow()){
