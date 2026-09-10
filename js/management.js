@@ -52,7 +52,10 @@ window.AeroManagement = (() => {
   }
 
   function aircraftFamily(modelName=''){
+    if(/^Saab 340/.test(modelName)) return 'Saab 340';
+    if(/^Dornier 328/.test(modelName)) return 'Dornier 328';
     if(/^ATR/.test(modelName)) return 'ATR';
+    if(/^DHC-8|^Dash 8/.test(modelName)) return 'Dash 8';
     if(/^E\d/.test(modelName)) return 'Embraer E-Jet';
     if(/^CRJ/.test(modelName)) return 'CRJ';
     if(/^A220/.test(modelName)) return 'Airbus A220';
@@ -61,6 +64,7 @@ window.AeroManagement = (() => {
     if(/^A350/.test(modelName)) return 'Airbus A350';
     if(/^A380/.test(modelName)) return 'Airbus A380';
     if(/^737/.test(modelName)) return 'Boeing 737';
+    if(/^747/.test(modelName)) return 'Boeing 747';
     if(/^787/.test(modelName)) return 'Boeing 787';
     if(/^777/.test(modelName)) return 'Boeing 777';
     return 'Multi-fleet';

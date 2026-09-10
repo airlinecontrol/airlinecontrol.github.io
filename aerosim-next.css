@@ -797,11 +797,15 @@ body,
 }
 .dispatch-scope-card{
   display:grid;
-  gap:3px;
+  gap:5px;
   margin:0 0 10px;
   padding:9px 10px;
   border-radius:7px;
   background:#10242d;
+}
+.dispatch-flight-board .dispatch-route-visual{
+  margin-top:0;
+  margin-bottom:4px;
 }
 .dispatch-scope-card>span{
   color:#91a7b0;
@@ -819,6 +823,32 @@ body,
   font-size:10px;
   font-style:normal;
   line-height:1.35;
+}
+.dispatch-flight-meta-row{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  gap:8px;
+  margin-top:2px;
+  padding:7px 8px;
+  border-radius:6px;
+  background:#0b1820;
+}
+.dispatch-flight-meta-row span,
+.dispatch-flight-meta-row b{
+  display:block;
+}
+.dispatch-flight-meta-row span{
+  color:#8fa4ad;
+  font-size:9px;
+  font-weight:850;
+  text-transform:uppercase;
+  letter-spacing:.05em;
+}
+.dispatch-flight-meta-row b{
+  margin-top:2px;
+  color:#dbe9ee;
+  font-size:11px;
 }
 .dispatch-route-visual{
   display:grid;
@@ -843,6 +873,37 @@ body,
   fill:none;
   stroke-linecap:round;
   stroke-linejoin:round;
+}
+.dispatch-route-weather-cell circle{
+  fill:rgba(229,200,110,.16);
+  stroke:rgba(229,200,110,.72);
+  stroke-width:1.2;
+}
+.dispatch-route-weather-cell.critical circle{
+  fill:rgba(255,117,143,.16);
+  stroke:rgba(255,117,143,.76);
+}
+.dispatch-route-weather-cell text,
+.dispatch-route-weather-airport text{
+  fill:#eef8fb;
+  font-family:"Apple Color Emoji","Segoe UI Emoji",sans-serif;
+  font-size:10px;
+  font-weight:900;
+  text-anchor:middle;
+  stroke:none;
+}
+.dispatch-route-weather-airport rect{
+  fill:#10242d;
+  stroke:rgba(143,208,230,.38);
+  stroke-width:1;
+}
+.dispatch-route-weather-airport.warning rect{
+  fill:#302a16;
+  stroke:rgba(229,200,110,.62);
+}
+.dispatch-route-weather-airport.critical rect{
+  fill:#331924;
+  stroke:rgba(255,117,143,.68);
 }
 .dispatch-route-path.filed{
   stroke:#8b9ca5;
@@ -911,6 +972,30 @@ body,
 .dispatch-route-visual.has-revision .dispatch-route-legend .active i{
   border-top-color:#f0d06e;
 }
+.dispatch-route-legend .weather{
+  flex-basis:100%;
+  color:#a9bbc3;
+}
+.dispatch-route-legend .weather i{
+  height:8px;
+  border:1px solid rgba(143,208,230,.38);
+  border-radius:999px;
+  background:rgba(143,208,230,.08);
+}
+.dispatch-route-legend .weather.warning{
+  color:#e5c86e;
+}
+.dispatch-route-legend .weather.warning i{
+  border-color:rgba(229,200,110,.62);
+  background:rgba(229,200,110,.13);
+}
+.dispatch-route-legend .weather.critical{
+  color:#ffb5c1;
+}
+.dispatch-route-legend .weather.critical i{
+  border-color:rgba(255,117,143,.68);
+  background:rgba(255,117,143,.13);
+}
 .corporate-resources-section .desk-action-bar{
   display:flex;
   flex-wrap:wrap;
@@ -972,7 +1057,7 @@ body,
   display:flex;
   flex-wrap:wrap;
   gap:5px;
-  margin:8px 0 9px;
+  margin:6px 0 5px;
 }
 .dispatch-badge{
   max-width:100%;
@@ -988,7 +1073,7 @@ body,
 .dispatch-badge.critical{background:#3a2028;color:#f1aab7}
 .dispatch-badge.quiet{color:#91a6b0}
 .dispatch-progress{
-  margin:9px 0 4px;
+  margin:7px 0 2px;
 }
 .dispatch-progress .progress-track{
   height:7px;
@@ -1359,6 +1444,10 @@ body,
   padding:8px 9px;
   border-radius:7px;
   background:#10242d;
+}
+.occ-action-context.compact{
+  margin-bottom:6px;
+  padding:7px 8px;
 }
 .occ-action-context b,
 .occ-action-context span,
@@ -1843,6 +1932,9 @@ body,
   gap:8px;
   padding:8px 0;
 }
+.occ-action-row.muted{
+  opacity:.72;
+}
 .occ-action-row+.occ-action-row{
   border-top:1px solid rgba(107,139,154,.12);
 }
@@ -1855,6 +1947,20 @@ body,
   justify-content:flex-end;
   flex-wrap:wrap;
   gap:5px;
+}
+.occ-action-controls .dispatch-row-state{
+  display:inline-flex;
+  align-items:center;
+  min-height:26px;
+  padding:4px 7px;
+  border-radius:5px;
+  background:#102631;
+  color:#9fb2bb;
+  font-size:10px;
+  font-weight:850;
+  line-height:1;
+  text-transform:uppercase;
+  letter-spacing:.04em;
 }
 .enroute-recovery-row{
   align-items:start;

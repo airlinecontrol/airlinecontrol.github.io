@@ -84,7 +84,12 @@
     w.alignScheduleWindowToFlight(quotaFlight);
     w.refreshAll();
     await wait(100);
-    const restrictionBar=await waitFor(`#schedule-board .night-closure-bar.restriction[data-night-flight="${quotaFlight.id}"][data-night-airport="LHR"]`);
+    let restrictionBar=null;
+    for(let i=0;i<24&&!restrictionBar;i++){
+      restrictionBar=[...d.querySelectorAll('#schedule-board .night-closure-bar.restriction[data-night-airport="LHR"]')]
+        .find(node=>(node.dataset.nightFlights||'').split(/\s+/).includes(quotaFlight.id));
+      if(!restrictionBar) await wait(50);
+    }
     assert(restrictionBar,'quota/noise night restriction did not render a lighter schedule bar');
 
     const flight=w.createFlightRecord({

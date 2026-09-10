@@ -434,8 +434,11 @@ const AIRPORT_NIGHT_RULES = {
 };
 
 const MODELS = {
+  'Saab 340B':{manufacturer:'Saab',segment:'Regional turboprop · used market',seats:34,speedKmh:500,maxRangeKm:1730,price:2_500_000,costPerKm:1.8},
+  'Dornier 328-100':{manufacturer:'Dornier',segment:'Regional turboprop · used market',seats:33,speedKmh:620,maxRangeKm:1850,price:4_000_000,costPerKm:2.1},
   'ATR 42-600':{manufacturer:'ATR',segment:'Regional turboprop',seats:48,speedKmh:535,maxRangeKm:1345,price:18_000_000,costPerKm:2.6},
   'ATR 72-600':{manufacturer:'ATR',segment:'Regional turboprop',seats:72,speedKmh:500,maxRangeKm:1370,price:24_000_000,costPerKm:3.2},
+  'DHC-8-Q400':{manufacturer:'De Havilland Canada',segment:'Regional turboprop',seats:78,speedKmh:667,maxRangeKm:2040,price:21_000_000,costPerKm:3.8},
 
   'E170':{manufacturer:'Embraer',segment:'Regional jet · used market',seats:72,speedKmh:870,maxRangeKm:3982,price:18_000_000,costPerKm:4.7},
   'E175':{manufacturer:'Embraer',segment:'Regional jet',seats:78,speedKmh:870,maxRangeKm:4074,price:32_000_000,costPerKm:4.9},
@@ -465,6 +468,7 @@ const MODELS = {
   '737-8':{manufacturer:'Boeing',segment:'Narrowbody',seats:178,speedKmh:839,maxRangeKm:6480,price:55_000_000,costPerKm:8.4},
   '737-9':{manufacturer:'Boeing',segment:'Large narrowbody',seats:185,speedKmh:839,maxRangeKm:6110,price:59_000_000,costPerKm:8.9},
   '737-10':{manufacturer:'Boeing',segment:'Large narrowbody',seats:200,speedKmh:839,maxRangeKm:5740,price:63_000_000,costPerKm:9.3},
+  '747-8':{manufacturer:'Boeing',segment:'Very large widebody · used market',seats:410,speedKmh:907,maxRangeKm:14320,price:120_000_000,costPerKm:26.5},
   '787-8':{manufacturer:'Boeing',segment:'Long-range widebody',seats:242,speedKmh:903,maxRangeKm:14820,price:132_000_000,costPerKm:13.8},
   '787-9':{manufacturer:'Boeing',segment:'Long-range widebody',seats:290,speedKmh:903,maxRangeKm:15370,price:145_000_000,costPerKm:15.1},
   '787-10':{manufacturer:'Boeing',segment:'Large widebody',seats:330,speedKmh:903,maxRangeKm:13890,price:155_000_000,costPerKm:16.8},
@@ -473,8 +477,11 @@ const MODELS = {
   '777-300ER':{manufacturer:'Boeing',segment:'Large widebody · used market',seats:396,speedKmh:905,maxRangeKm:13650,price:82_000_000,costPerKm:23.2}
 };
 const AIRCRAFT_MODEL_MIN_TURNS = {
+  'Saab 340B':25,
+  'Dornier 328-100':25,
   'ATR 42-600':25,
   'ATR 72-600':30,
+  'DHC-8-Q400':30,
   'E170':35,
   'E175':35,
   'E190':40,
@@ -500,6 +507,7 @@ const AIRCRAFT_MODEL_MIN_TURNS = {
   '737-8':45,
   '737-9':50,
   '737-10':50,
+  '747-8':120,
   '787-8':95,
   '787-9':100,
   '787-10':105,

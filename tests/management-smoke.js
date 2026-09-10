@@ -20,6 +20,10 @@ const state={
 assert.equal(management.ensureState(state,now),true);
 assert.equal(state.flights[0].flightType,'passenger');
 assert.equal(management.aircraftFamily('A320neo'),'Airbus A320 family');
+assert.equal(management.aircraftFamily('Dornier 328-100'),'Dornier 328');
+assert.equal(management.aircraftFamily('DHC-8-Q400'),'Dash 8');
+assert.equal(management.aircraftFamily('Saab 340B'),'Saab 340');
+assert.equal(management.aircraftFamily('747-8'),'Boeing 747');
 
 const weatherA=management.weatherAt('FRA',now);
 const weatherB=management.weatherAt('FRA',now+management.HOUR);

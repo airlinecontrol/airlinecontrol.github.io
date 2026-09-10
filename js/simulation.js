@@ -743,6 +743,15 @@ function openIncidentsForFlight(flightId){
   return operationalIndex().openIncidentsByFlight.get(flightId)||[];
 }
 
+function departureBlockingIncidentsForFlight(flight){
+  if(!flight) return [];
+  return (state.incidents||[]).filter(incident=>{
+    if(incident.flightId!==flight.id||incident.status!=='open'||!incident.blocking) return false;
+    const definition=INCIDENT_DEFINITIONS[incident.type]||{};
+    return !definition.airborneOnly;
+  });
+}
+
 function crewSickRoleForFlight(flight){
   const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
   const cabinNeed=aircraft?Math.max(1,Math.ceil(cabinSeatCount(aircraft)/50)):3;
@@ -2228,7 +2237,7 @@ function processFlightLifecycleTransitions(t=simNow()){
       logEvent(`${f.id}: original ${f.from} slot missed; new slot ${formatTime(f.assignedSlot)}.`);
       changed=true;
     }
-    if(!flightHasDeparted(f,t) && t>=f.departure && t>=flightActualDeparture(f)){
+    if(!flightHasDeparted(f,t) && t>=f.departure && t>=flightActualDeparture(f) && !departureBlockingIncidentsForFlight(f).length){
       f.departureLogged=true;
       if(maybeGenerateEnrouteIssue(f,t)){ changed=true; needsRecalc=true; }
       const d=flightTotalDepartureDelayMin(f);
@@ -3076,7 +3085,8 @@ function releaseAircraft(acId){
   if(!ac||aircraftHasAssignments(ac.id)) return toast('Remove this aircraft’s active and future assignments first.');
   if(!AeroServices.confirm(`Release ${ac.tail} (${ac.model}) from the operations pool?`)) return;
   state.aircraft=state.aircraft.filter(a=>a.id!==ac.id);
-  if(selectedAircraftId===ac.id){ selectedAircraftId=null; selectedFlightId=null; }
+  if(selectedAircraftId===ac.id) selectedAircraftId=null;
+  if(selectedFlightId&&state.flights.find(f=>f.id===selectedFlightId)?.aircraftId===ac.id) selectedFlightId=null;
   AeroServices.commit(); toast(`${ac.tail} released from the operations pool.`);
 }
 
@@ -3084,7 +3094,6 @@ function settleSelected(acId){
   const ac=state.aircraft.find(a=>a.id===acId);
   if(!ac) return;
 
-  selectedFlightId=null;
   selectedAircraftId=acId;
   AeroServices.openContextWorkbench({scroll:'widget'});
   routeSignature='';
@@ -3096,7 +3105,7 @@ function settleSelectedFlight(flightId){
   if(!f) return;
 
   selectedFlightId=f.id;
-  selectedAircraftId=f.aircraftId;
+  if(!selectedAircraftId||!state.aircraft.some(ac=>ac.id===selectedAircraftId)) selectedAircraftId=f.aircraftId;
   alignScheduleWindowToFlight(f);
 
   AeroServices.openContextWorkbench({scroll:'top'});
@@ -3106,23 +3115,19 @@ function settleSelectedFlight(flightId){
 
 function clearSelectedFlight(){
   selectedFlightId=null;
-  selectedAircraftId=null;
   routeSignature='';
   requestUiRefresh('left','desk','context','schedule','map','weather','management');
 }
 
 function clearSelectedAircraft(){
-  clearSelectedFlight();
+  selectedAircraftId=null;
+  routeSignature='';
+  requestUiRefresh('left','desk','context','schedule','map','weather','management');
 }
 
 function toggleAircraftCard(acId){
-  if(selectedAircraftId===acId&&selectedFlightId){
-    settleSelected(acId);
-    return;
-  }
   if(selectedAircraftId===acId){
     selectedAircraftId=null;
-    selectedFlightId=null;
     routeSignature='';
     requestUiRefresh('left','desk','context','schedule','map','weather','management');
     return;

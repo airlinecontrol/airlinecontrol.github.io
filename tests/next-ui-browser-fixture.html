@@ -182,12 +182,33 @@
     weatherFlight.actualArrival=w.simNow()+65*60_000;
     weatherFlight.enrouteChecked=true;
     weatherFlight.weatherLiveChecks={period:Math.floor(w.simNow()/(30*60_000)),routeApplied:true,destinationChecked:true,lightningApplied:true};
+    const originalDispatchWeatherSummary=w.AeroRoutePlanning.routeHazardSummaryForFlight;
+    w.AeroRoutePlanning.routeHazardSummaryForFlight=function(flightArg,timestamp,options){
+      if(flightArg?.id===weatherFlight.id){
+        return {hazards:[{id:'WXINLINE',label:'Thunderstorm cells',type:'storm',severity:'severe',delayMin:24,distanceKm:80,segmentIndex:0,radiusKm:110}],delayMin:24,severe:true,label:'Thunderstorm cells',level:'severe'};
+      }
+      return originalDispatchWeatherSummary.call(this,flightArg,timestamp,options);
+    };
     w.refreshAll(); await wait(120);
     w.settleSelectedFlight(weatherFlight.id); await wait(120);
     assert(!d.querySelector('#routeDetailStrip'),'center route detail strip should not be rendered');
-    const leftWeather=d.querySelector(`[data-desk-widget="planning"] .flight-weather-forecast`);
-    assert(leftWeather,'dispatch selected-flight details do not show forecast weather');
-    assert(leftWeather.textContent.includes('Forecast weather')&&leftWeather.textContent.includes('Route')&&leftWeather.textContent.includes('DOH'),'flight weather forecast is missing route or destination context');
+    const dispatchWeather=d.querySelector(`[data-desk-widget="planning"] [data-dispatch-route="${weatherFlight.id}"] [data-dispatch-route-weather="${weatherFlight.id}"]`);
+    assert(dispatchWeather,'dispatch route card does not show projected forecast weather');
+    assert(dispatchWeather.textContent.includes('enroute')||dispatchWeather.textContent.includes('watch')||dispatchWeather.textContent.includes('severe'),'dispatch route weather summary is missing route context');
+    const routeWeatherCard=d.querySelector(`[data-desk-widget="planning"] [data-dispatch-route="${weatherFlight.id}"]`);
+    assert(d.querySelector(`[data-desk-widget="planning"] [data-dispatch-route="${weatherFlight.id}"] .dispatch-route-weather-airport`),'dispatch route card does not show origin/destination weather tags');
+    assert(d.querySelector(`[data-desk-widget="planning"] [data-dispatch-route="${weatherFlight.id}"] [data-route-weather-cell="WXINLINE"]`),'dispatch route card does not place enroute weather cells');
+    assert(/[☀☔☁❄⛈⛅]/u.test(routeWeatherCard.textContent),'dispatch route weather markers should use shared weather icons');
+    const airportBadges=[...routeWeatherCard.querySelectorAll('.dispatch-route-weather-airport')];
+    const endpointLabels=[...routeWeatherCard.querySelectorAll('.dispatch-route-endpoint text')];
+    airportBadges.forEach((badge,index)=>{
+      const match=(badge.getAttribute('transform')||'').match(/translate\(([-.0-9]+)/);
+      const badgeX=match?Number(match[1]):NaN;
+      const labelX=Number(endpointLabels[index]?.getAttribute('x'));
+      assert(Number.isFinite(badgeX)&&Number.isFinite(labelX)&&Math.abs(badgeX-labelX)>=8,'dispatch airport weather icon overlaps the endpoint label');
+    });
+    assert(!d.querySelector(`[data-desk-widget="planning"] .flight-weather-forecast`),'dispatch widget should not render the old forecast weather section');
+    w.AeroRoutePlanning.routeHazardSummaryForFlight=originalDispatchWeatherSummary;
     w.eval(`knownActionableIncidentIds=actionableIncidentIdSet(); incidentSoundInitialized=true; window.__incidentDingStarts=1;`);
     w.refreshAll(); await wait(250);
     assert(w.__incidentDingStarts===1,'existing actionable incident played repeated alert dings');
@@ -244,6 +265,12 @@
     const selectedStatusText=d.querySelector(`[data-dispatch-flight-status="${activeFlight.id}"]`)?.textContent||'';
     assert(!/Inbound turn|Outbound turn|No connected turnaround/.test(selectedStatusText),'dispatch selected-flight status should not include turnaround rows');
     const recoveryAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'ATL');
+    w.settleSelectedFlight(activeFlight.id);
+    w.settleSelected(recoveryAc.id);
+    w.refreshAll(); await wait(120);
+    assert(w.eval(`selectedFlightId==='${activeFlight.id}'&&selectedAircraftId==='${recoveryAc.id}'`),'aircraft and flight selection should be independent');
+    assert(d.querySelector(`[data-dispatch-selected-flight="${activeFlight.id}"]`),'dispatch flight focus was lost when selecting an aircraft');
+    assert(d.querySelector(`[data-left-card-aircraft="${recoveryAc.id}"].selected .left-inline-details`),'left aircraft focus was not retained while a flight is selected');
     const recoveryFlight=w.createFlightRecord({aircraftId:recoveryAc.id,from:'ATL',to:'ORD',departure:w.simNow()-45*60_000,fare:{economy:220,business:520,first:1100}});
     const recoveryPlan=w.flightFuelPlan('ATL','ORD',recoveryAc);
     recoveryFlight.departureLogged=true;

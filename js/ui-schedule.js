@@ -54,9 +54,10 @@ function scheduleCrewDutyMarkup(duty,start,end,pxPerHour,lane=0,focusIds=new Set
   return `<div class="crew-duty-bar ${stateClass} ${duty.augmented?'augmented':''} ${focused?'focus':''} ${selected?'selected':''} ${swaps.length?'has-role-swap':''}" data-crew-duty="${esc(duty.id)}" title="${esc(title)}" style="left:${left}px;width:${width}px;--crew-duty-top:${68+nightOffset+lane*17}px"><span style="width:${formatPct(elapsed)}"></span><b>${esc(label)}</b>${swaps.length?`<em>${esc(swaps.length===1?swaps[0]:'roles')}</em>`:''}</div>`;
 }
 function scheduleNightMarkerInfo(flight){
-  const conflict=Number(flight.nightRestrictionConflictDelayMin)||0;
-  if(conflict>0){
-    const reason=flight.nightRestrictionConflictLabel||'Night curfew decision required';
+  const openNightConflict=openIncidentsForFlight(flight.id).find(incident=>['night_curfew_conflict','arrival_curfew_coordination'].includes(incident.type));
+  const conflict=Number(flight.nightRestrictionConflictDelayMin)||Number(openNightConflict?.context?.delayMin)||0;
+  if(conflict>0||openNightConflict){
+    const reason=flight.nightRestrictionConflictLabel||openNightConflict?.title||'Night curfew decision required';
     return {
       label:'N!',
       className:'conflict',
@@ -153,11 +154,14 @@ function scheduleNightWindowLaneItems(flights,cache,focusIds=new Set()){
       const key=`${info.airport}:${Math.round(info.start/(5*MIN))}:${Math.round(info.end/(5*MIN))}`;
       const existing=unique.get(key);
       if(existing){
+        const flightIds=new Set(existing.info.flightIds||[existing.info.flightId].filter(Boolean));
+        flightIds.add(flight.id);
         existing.focused ||= focused;
         existing.selected ||= selected;
-        if(selected) existing.info={...info};
+        if(selected) existing.info={...info,flightIds:[...flightIds]};
+        else existing.info.flightIds=[...flightIds];
       }else{
-        unique.set(key,{info:{...info},focused,selected,lane:0});
+        unique.set(key,{info:{...info,flightIds:[flight.id]},focused,selected,lane:0});
       }
     }
   }
@@ -177,7 +181,8 @@ function scheduleNightWindowMarkup(info,start,end,pxPerHour,focusClass='',select
   const clippedStart=Math.max(start,info.start),clippedEnd=Math.min(end,info.end);
   if(clippedEnd<=clippedStart) return '';
   const left=(clippedStart-start)/HOUR*pxPerHour,width=Math.max(24,(clippedEnd-clippedStart)/HOUR*pxPerHour);
-  return `<div class="night-closure-bar ${esc(info.className||'')} ${focusClass} ${selected?'selected':''}" data-night-airport="${esc(info.airport)}" data-night-flight="${esc(info.flightId||'')}" data-night-edge="${esc(info.edge||'')}" title="${esc(info.title)}" style="left:${left}px;width:${width}px;--night-lane-top:${53+lane*16}px"><b>${esc(info.airport)}</b><span>${esc(info.label)}</span></div>`;
+  const flightIds=(info.flightIds||[info.flightId]).filter(Boolean);
+  return `<div class="night-closure-bar ${esc(info.className||'')} ${focusClass} ${selected?'selected':''}" data-night-airport="${esc(info.airport)}" data-night-flight="${esc(info.flightId||'')}" data-night-flights="${esc(flightIds.join(' '))}" data-night-edge="${esc(info.edge||'')}" title="${esc(info.title)}" style="left:${left}px;width:${width}px;--night-lane-top:${53+lane*16}px"><b>${esc(info.airport)}</b><span>${esc(info.label)}</span></div>`;
 }
 function scheduleMaintenanceJobMarkup(aircraft,job,start,end,pxPerHour){
   if(!aircraft||!job) return '';
