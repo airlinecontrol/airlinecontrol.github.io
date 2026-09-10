@@ -90,13 +90,6 @@
     arrival_curfew_coordination:{classification:'derived',steps:[
       {key:'dispatch-arrival-curfew-coordinate',department:'dispatch',kind:'flight_watch_coordination',label:'Coordinate curfew arrival exception',detail:'The flight is already airborne and projected to arrive inside a hard night curfew. Coordinate airport, ATC, station, and handling acceptance.'}
     ]},
-    gate_conflict:{classification:'constraint',steps:withCancellation([
-      {key:'station-stand-strategy',department:'station',kind:'recovery_strategy',label:'Choose stand recovery',detail:'Select the practical stand or gate recovery path.',options:[
-        {id:'remote',label:'Use remote stand',detail:'Accept remote parking and passenger bussing.'},
-        {id:'tow',label:'Tow to replacement gate',detail:'Use another gate with a towing movement.'},
-        {id:'wait_gate',label:'Wait for planned gate',detail:'Hold until the planned gate is released.'}
-      ]},
-    ])},
     destination_closure:{classification:'incident',steps:[
       {key:'dispatch-diversion-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess destination closure',detail:'Build the fuel, weather, alternate, and return-to-origin picture for the flight deck.'},
       {key:'dispatch-flightdeck-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck diversion plan',detail:'After OCC provides the operating picture, record the captain/ATC plan and coordinate the required support.',dependsOn:['dispatch-diversion-assess'],action:'flightdeck',options:[
@@ -216,26 +209,6 @@
         {id:'confirm',label:'Confirm legal crew available',detail:'Use this after the required crew has been moved or requested into the departure station.'}
       ]},
     ])},
-    baggage_loading_issue:{classification:'station',steps:withCancellation([
-      {key:'station-baggage-strategy',department:'station',kind:'recovery_strategy',label:'Choose load-control recovery',detail:'Select a station plan only when baggage trouble affects load closeout or departure readiness.',options:[
-        {id:'expedite',label:'Expedite load closeout',detail:'Assign priority ramp resources and accept a small closeout delay.'},
-        {id:'reload',label:'Reload and reissue loadsheet',detail:'Rebuild the load plan when baggage reconciliation affects weight and balance.'},
-        {id:'offload',label:'Offload affected bags',detail:'Depart with selected bags offloaded and protect the passenger operation.'}
-      ]},
-      {key:'station-baggage-expedite',department:'station',kind:'station_recovery',label:'Expedite load closeout',detail:'Prioritize ramp staff, loading equipment, and load-control closeout.',dependsOn:['station-baggage-strategy'],branch:'expedite',action:'baggage_expedite'},
-      {key:'station-baggage-reload',department:'station',kind:'station_recovery',label:'Reload and reissue loadsheet',detail:'Pause closeout while baggage is reconciled and the loadsheet is reissued.',dependsOn:['station-baggage-strategy'],branch:'reload',action:'baggage_reload'},
-      {key:'station-baggage-offload',department:'station',kind:'station_recovery',label:'Offload affected bags',detail:'Coordinate offload and passenger-service follow-up.',dependsOn:['station-baggage-strategy'],branch:'offload',action:'baggage_offload'},
-    ])},
-    fueling_issue:{classification:'incident',steps:withCancellation([
-      {key:'station-fuel-strategy',department:'station',kind:'recovery_strategy',label:'Choose fuel uplift recovery',detail:'Select how to recover a fuel supply or uplift constraint.',options:[
-        {id:'priority',label:'Request priority fueling',detail:'Ask the fuel provider for priority service.'},
-        {id:'wait_truck',label:'Wait for assigned truck',detail:'Accept the provider delay and update the departure plan.'},
-        {id:'minimum_uplift',label:'Use minimum compliant uplift',detail:'Use the compliant dispatch fuel plan when fuel supply is constrained.'}
-      ]},
-      {key:'station-fuel-priority',department:'station',kind:'fuel_recovery',label:'Request priority fueling',detail:'Coordinate priority fuel-truck dispatch.',dependsOn:['station-fuel-strategy'],branch:'priority',action:'priority'},
-      {key:'station-fuel-wait',department:'station',kind:'fuel_recovery',label:'Wait for assigned fuel truck',detail:'Accept the supplier queue and revised fuel completion time.',dependsOn:['station-fuel-strategy'],branch:'wait_truck',action:'wait_truck'},
-      {key:'station-fuel-minimum',department:'station',kind:'fuel_recovery',label:'Confirm minimum compliant uplift',detail:'Use planned trip fuel plus reserve without discretionary uplift.',dependsOn:['station-fuel-strategy'],branch:'minimum_uplift',action:'minimum_uplift'},
-    ])},
     fuel_supplier_outage:{classification:'incident',steps:withCancellation([
       {key:'station-fuel-outage-strategy',department:'station',kind:'recovery_strategy',label:'Choose fuel-supplier recovery',detail:'Select the station/OCC response when the local fuel provider cannot support normal uplift.',options:[
         {id:'priority',label:'Request priority fuel truck',detail:'Escalate the affected flight with the fuel provider or airport fuel desk.'},
@@ -287,12 +260,6 @@
       ]},
       {key:'station-redeice',department:'station',kind:'station_recovery',label:'Repeat deicing',detail:'Coordinate repeat treatment and a new holdover window.',dependsOn:['station-holdover-strategy'],branch:'redeice',action:'redeice'},
       {key:'station-wait-deice-slot',department:'station',kind:'station_recovery',label:'Wait for deicing slot',detail:'Accept station queueing until repeat treatment is available.',dependsOn:['station-holdover-strategy'],branch:'wait_deice_slot',action:'wait_deice_slot'},
-    ])},
-    airport_capacity_reduction:{classification:'derived',steps:withCancellation([
-      {key:'dispatch-capacity-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose airport flow recovery',detail:'Select how to handle a temporary airport or ATC flow restriction affecting this departure.',options:[
-        {id:'accept',label:'Accept flow delay',detail:'Use the current airport sequence and plan the delay.'},
-        {id:'priority',label:'Request earlier opportunity',detail:'Ask airport/flow control for a better departure opportunity.'}
-      ]},
     ])},
     atc_ground_stop:{classification:'derived',steps:withCancellation([
       {key:'dispatch-groundstop-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose ground-stop recovery',detail:'Select how to handle a destination or airspace ground stop before departure.',options:[
@@ -395,17 +362,6 @@
       ]},
       {key:'dispatch-cabin-continue',department:'dispatch',kind:'cabin_security_coordination',label:'Coordinate arrival security meet',detail:'Arrange destination security/law enforcement and update the flight deck.',dependsOn:['dispatch-cabin-decision'],branch:'continue',action:'continue'},
       {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate security diversion airport',detail:'Choose a suitable airport with handling and security support.',dependsOn:['dispatch-cabin-decision'],branch:'divert'},
-    ]},
-    destination_weather_deterioration:{classification:'derived',steps:[
-      {key:'dispatch-weather-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess destination weather trend',detail:'Review live weather, fuel margin, alternate suitability, and expected approach availability.'},
-      {key:'dispatch-weather-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck weather plan',detail:'The captain and ATC determine whether to monitor, hold, or divert; OCC records the plan and coordinates support.',dependsOn:['dispatch-weather-assess'],action:'flightdeck',options:[
-        {id:'monitor',label:'Record monitored continuation',detail:'Flight deck continues monitoring; OCC watches destination trend and updates the crew.'},
-        {id:'hold',label:'Record holding plan',detail:'Flight deck/ATC plan to hold; OCC monitors fuel exposure and diversion triggers.'},
-        {id:'divert',label:'Record weather diversion request',detail:'Flight deck requests diversion; OCC prepares a suitable weather alternate.'}
-      ]},
-      {key:'dispatch-weather-monitor',department:'dispatch',kind:'flight_watch_coordination',label:'Monitor destination weather trend',detail:'Track destination METAR/TAF trend and approach availability.',dependsOn:['dispatch-weather-decision'],branch:'monitor',action:'monitor'},
-      {key:'dispatch-weather-hold',department:'dispatch',kind:'flight_watch_coordination',label:'Coordinate destination holding plan',detail:'Coordinate holding fuel, ATC sequencing, and diversion trigger point.',dependsOn:['dispatch-weather-decision'],branch:'hold',action:'hold'},
-      {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate weather alternate',detail:'Choose a suitable alternate using fuel, weather, range, and handling resources.',dependsOn:['dispatch-weather-decision'],branch:'divert'},
     ]},
     destination_below_minima:{classification:'derived',steps:[
       {key:'dispatch-minima-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess landing-minima picture',detail:'Review destination minima, fuel state, alternates, and return-to-origin feasibility.'},

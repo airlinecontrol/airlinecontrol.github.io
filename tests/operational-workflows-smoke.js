@@ -12,14 +12,14 @@ const assertRecordedAuthorityOptions=task=>{
 };
 assert.deepEqual(Object.keys(workflows.DEPARTMENTS),['dispatch','crew','maintenance','station']);
 assert.deepEqual(Object.keys(workflows.WORKFLOWS),[
-  'crew_sick','mel_defect','night_curfew_conflict','arrival_curfew_coordination','gate_conflict','destination_closure','destination_closure_ground',
+  'crew_sick','mel_defect','night_curfew_conflict','arrival_curfew_coordination','destination_closure','destination_closure_ground',
   'aircraft_out_of_position','aircraft_misposition_after_diversion','postflight_technical_defect',
   'crew_misconnect','crew_misposition_after_diversion','crew_report_delayed','crew_duty_risk','crew_fatigue_report','crew_fatigue_mid_rotation','crew_duty_extension',
-  'no_legal_crew','baggage_loading_issue','fueling_issue','fuel_supplier_outage','maintenance_resource_unavailable','deicing_required','deicing_capacity_collapse',
-  'holdover_expired','airport_capacity_reduction','atc_ground_stop','performance_limited',
+  'no_legal_crew','fuel_supplier_outage','maintenance_resource_unavailable','deicing_required','deicing_capacity_collapse',
+  'holdover_expired','atc_ground_stop','performance_limited',
   'destination_handling_unavailable','security_screening','bird_strike','onboard_medical',
   'inflight_technical_fault','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute',
-  'unruly_passenger','destination_weather_deterioration','destination_below_minima',
+  'unruly_passenger','destination_below_minima',
   'diversion_airport_unavailable','lightning_strike','pressurization_issue'
 ]);
 
@@ -51,14 +51,13 @@ assert.equal(melTasks.some(task=>task.kind==='flight_cancellation'),false);
 assert.equal(melTasks.some(task=>task.kind==='dispatch_release'),false);
 
 assert.equal(workflows.tasksForIncident({id:'INC11',type:'atc_restriction',flightId:'AS11',aircraftId:'AC11',detectedAt:1000}).length,0);
+for(const retiredType of ['slot_miss_risk','aircraft_late_inbound','alternate_unsuitable','destination_weather_deterioration','atc_restriction','gate_conflict','baggage_loading_issue','fueling_issue','airport_capacity_reduction']){
+  assert.equal(workflows.tasksForIncident({id:`RET-${retiredType}`,type:retiredType,flightId:'ASR',aircraftId:'ACR',detectedAt:1000}).length,0, `${retiredType} should not expose playable workflow tasks`);
+}
 
 const nightTasks=workflows.tasksForIncident({id:'INC11B',type:'night_curfew_conflict',flightId:'AS11B',aircraftId:'AC11B',detectedAt:1000});
 assert.deepEqual(nightTasks.find(task=>task.key==='dispatch-night-curfew-strategy').strategyOptions.map(option=>option.id),['change_departure','cancel']);
 assert.equal(nightTasks.find(task=>task.key==='dispatch-night-departure-change').kind,'manual_departure_change_required');
-
-const gateTasks=workflows.tasksForIncident({id:'INC12',type:'gate_conflict',flightId:'AS12',aircraftId:'AC12',detectedAt:1000});
-assert.deepEqual(gateTasks.find(task=>task.key==='station-stand-strategy').strategyOptions.map(option=>option.id),['remote','tow','wait_gate','cancel']);
-assert.equal(gateTasks.length,1);
 
 const crewTasks=workflows.tasksForIncident({id:'INC13',type:'crew_sick',flightId:'AS13',aircraftId:'AC13',detectedAt:1000});
 assert.equal(crewTasks.find(task=>task.key==='crew-strategy').kind,'recovery_strategy');
@@ -125,10 +124,6 @@ const deicingCollapseTasks=workflows.tasksForIncident({id:'INC16BB',type:'deicin
 assert.deepEqual(deicingCollapseTasks.find(task=>task.key==='station-deicing-collapse-strategy').strategyOptions.map(option=>option.id),['join_queue','priority_deice','wait_weather','cancel']);
 assert.equal(deicingCollapseTasks.find(task=>task.key==='station-deice-queue').kind,'station_recovery');
 
-const capacityTasks=workflows.tasksForIncident({id:'INC16C',type:'airport_capacity_reduction',flightId:'AS16C',aircraftId:'AC16C',detectedAt:1000});
-assert.deepEqual(capacityTasks.find(task=>task.key==='dispatch-capacity-strategy').strategyOptions.map(option=>option.id),['accept','priority','cancel']);
-assert.equal(capacityTasks.length,1);
-
 const groundStopTasks=workflows.tasksForIncident({id:'INC16D',type:'atc_ground_stop',flightId:'AS16D',aircraftId:'AC16D',detectedAt:1000});
 assert.deepEqual(groundStopTasks.find(task=>task.key==='dispatch-groundstop-strategy').strategyOptions.map(option=>option.id),['hold_ground','priority','cancel']);
 assert.equal(groundStopTasks.length,1);
@@ -176,11 +171,6 @@ const cabinTasks=workflows.tasksForIncident({id:'INC21',type:'unruly_passenger',
 assert.equal(cabinTasks.find(task=>task.key==='dispatch-cabin-decision').kind,'authority_decision');
 assert.deepEqual(cabinTasks.find(task=>task.key==='dispatch-cabin-decision').strategyOptions.map(option=>option.id),['continue','divert']);
 assertRecordedAuthorityOptions(cabinTasks.find(task=>task.key==='dispatch-cabin-decision'));
-
-const weatherTasks=workflows.tasksForIncident({id:'INC22',type:'destination_weather_deterioration',flightId:'AS22',aircraftId:'AC22',detectedAt:1000});
-assert.equal(weatherTasks.find(task=>task.key==='dispatch-weather-decision').kind,'authority_decision');
-assert.deepEqual(weatherTasks.find(task=>task.key==='dispatch-weather-decision').strategyOptions.map(option=>option.id),['monitor','hold','divert']);
-assertRecordedAuthorityOptions(weatherTasks.find(task=>task.key==='dispatch-weather-decision'));
 
 const minimaTasks=workflows.tasksForIncident({id:'INC22B',type:'destination_below_minima',flightId:'AS22B',aircraftId:'AC22B',detectedAt:1000});
 assert.equal(minimaTasks.find(task=>task.key==='dispatch-minima-decision').kind,'authority_decision');

@@ -277,237 +277,14 @@ function selectIncidentStrategy(incident,strategy){
   }
 }
 
-function finalizeOperationalCase(incident){
-  if(!incident||incident.status!=='open') return false;
-  const tasks=playableIncidentTasks(incident);
-  if(!tasks.length||tasks.some(task=>task.status!=='completed')) return false;
-  const flight=state.flights.find(item=>item.id===incident.flightId);
-  const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
-  if(!flight) return false;
-  if(incident.type==='crew_sick'){
-    const allocation=tasks.find(task=>task.kind==='crew_allocation');
-    applyIncidentMinimumDelay(flight,allocation?.selection?.reportMin||25);
-    incident.outcome=`Replacement ${PERSONNEL[allocation?.selection?.role]?.label?.toLowerCase()||'crew'} reported and the crew plan was updated.`;
-  }else if(['mel_defect','postflight_technical_defect'].includes(incident.type)){
-    if(incident.selectedStrategy==='schedule_check') incident.outcome=`Maintenance check scheduled for ${incident.maintenanceCheckTail||aircraft?.tail||'aircraft'}.`;
-    else if(incident.selectedStrategy==='substitute') incident.outcome=`Replacement aircraft ${incident.replacementAircraftTail||''} assigned and the technical disruption was recovered.`;
-    else incident.outcome=`Defect deferred under MEL ${incident.technicalContext?.code||''}; dispatch accepted the restrictions.`;
-  }else if(incident.type==='maintenance_resource_unavailable'){
-    if(incident.selectedStrategy==='send_mobile_team') incident.outcome=`Mobile maintenance team dispatched to ${incident.mobileMaintenanceAirport||flight.from}; local check scheduling is now available when the team arrives.`;
-    else if(incident.selectedStrategy==='ferry_to_maintenance') incident.outcome=`Maintenance ferry ${incident.maintenanceFerryId||''} planned to ${incident.maintenanceFerryAirport||'a maintenance-capable station'}.`;
-    else if(incident.selectedStrategy==='substitute') incident.outcome=`Replacement aircraft ${incident.replacementAircraftTail||''} assigned while the original aircraft awaits maintenance support.`;
-    else incident.outcome='Maintenance-resource recovery path recorded.';
-  }else if(['airport_capacity_reduction','atc_ground_stop'].includes(incident.type)){
-    applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||45);
-    incident.outcome=incident.atcOutcome||'Returned airport flow opportunity incorporated into the operating plan.';
-  }else if(incident.type==='night_curfew_conflict'){
-    if(incident.selectedStrategy==='change_departure'){
-      const plan=nightDepartureChangePlanState(incident);
-      if(!plan.ready) return false;
-      flight.nightRecoveryDecision='manual_departure_change';
-      flight.nightRecoverySourceKey=incident.context?.sourceKey||'';
-      flight.nightRecoveryApprovedAt=simNow();
-      incident.outcome=`${flight.id} manually retimed in Dispatch. ${plan.reason}`;
-    }else{
-      const context=nightCurfewConflictContextForFlight(flight,flightActualDeparture(flight))||incident.context;
-      if(!context?.sourceKey) return false;
-      flight.nightRecoveryDecision='reschedule_after_curfew';
-      flight.nightRecoverySourceKey=context.sourceKey;
-      flight.nightRecoveryApprovedAt=simNow();
-      incident.outcome=`${flight.id} rescheduled after night restrictions${context.restrictionSummary?`: ${context.restrictionSummary}`:''}; first feasible departure ${formatTime(context.nextDeparture)}.`;
-    }
-  }else if(incident.type==='arrival_curfew_coordination'){
-    const context=arrivalCurfewContextForFlight(flight,simNow())||incident.context;
-    if(!context?.sourceKey) return false;
-    flight.arrivalCurfewCoordinatedKey=context.sourceKey;
-    flight.arrivalCurfewCoordinatedAt=simNow();
-    incident.outcome=`${context.affectedAirport||flightOperationalDestination(flight)} curfew arrival acceptance coordinated for expected arrival ${formatTime(context.expectedArrival||flightActualArrival(flight))}.`;
-  }else if(incident.type==='gate_conflict'){
-    applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||30);
-    incident.outcome=incident.stationOutcome||'Replacement stand and ground movement coordinated.';
-  }else if(incident.type==='destination_closure'){
-    const alternate=incident.selectedAlternate;
-    if(!alternate||!aircraft) return false;
-    applyOperationalDiversionDestination(flight,incident,aircraft,alternate);
-    incident.outcome=alternate===flight.from
-      ? `Captain and ATC accepted return to ${alternate}; handling confirmed and the diversion plan was updated.`
-      : `Captain and ATC accepted ${alternate}; alternate handling confirmed and the diversion plan was updated.`;
-  }else if(incident.type==='destination_closure_ground'){
-    if(incident.selectedStrategy==='alternate_destination'){
-      const alternate=incident.selectedAlternate;
-      if(!alternate||!aircraft) return false;
-      applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{mode:'diversion',reason:`Ground replan to ${alternate}`});
-      incident.outcome=`OCC re-planned ${flight.id} to ${alternate} before departure because ${incident.context?.airport||flight.to} was unavailable.`;
-    }else{
-      applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||incident.context?.delayMin||90);
-      incident.outcome=`OCC held ${flight.id} on the ground until ${incident.context?.airport||flight.to} can accept the flight.`;
-    }
-  }else if(['aircraft_out_of_position','aircraft_misposition_after_diversion'].includes(incident.type)){
-    if(incident.selectedStrategy==='substitute'){
-      incident.outcome=`Replacement aircraft ${incident.replacementAircraftTail||''} assigned to protect the out-of-position departure.`;
-    }else{
-      const plan=positioningFerryPlanState(incident);
-      if(!plan.ready) return false;
-      incident.positioningFerryId=plan.ferry?.id||incident.positioningFerryId||'';
-      incident.outcome=incident.positioningFerryId
-        ? `Positioning ferry ${incident.positioningFerryId} brings ${plan.aircraft.tail} to ${plan.to} before ${flight.id}.`
-        : `${plan.aircraft.tail} is projected at ${plan.to}; positioning conflict cleared.`;
-    }
-  }else if(incident.type==='no_legal_crew'){
-    incident.outcome='Legal crew availability confirmed after personnel/resources were updated.';
-  }else if(incident.type==='crew_misconnect'){
-    if(incident.selectedStrategy==='replace'){
-      const allocation=tasks.find(task=>task.kind==='crew_allocation');
-      applyIncidentMinimumDelay(flight,allocation?.selection?.reportMin||25);
-      incident.outcome=`Local replacement ${PERSONNEL[allocation?.selection?.role]?.label?.toLowerCase()||'crew'} assigned after the crew misconnect.`;
-    }else{
-      applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||incident.context?.delayMin||25);
-      incident.outcome='Connecting crew ETA accepted and the revised departure was published.';
-    }
-  }else if(['crew_misposition_after_diversion','crew_report_delayed'].includes(incident.type)){
-    if(incident.selectedStrategy==='replace'){
-      const allocation=tasks.find(task=>task.kind==='crew_allocation');
-      applyIncidentMinimumDelay(flight,allocation?.selection?.reportMin||25);
-      incident.outcome=`Local replacement ${PERSONNEL[allocation?.selection?.role]?.label?.toLowerCase()||'crew'} assigned and the crew plan was updated.`;
-    }else if(['move_crew','move_reserve'].includes(incident.selectedStrategy)){
-      const plan=crewRelocationPlanState(incident);
-      if(!plan.ready) return false;
-      applyIncidentMinimumDelay(flight,Math.max(0,incident.context?.delayMin||0));
-      incident.outcome=`${PERSONNEL[plan.role]?.label||'Crew'} positioning confirmed at ${plan.to}.`;
-    }else{
-      applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||incident.context?.delayMin||25);
-      incident.outcome='Crew report / positioning ETA accepted and the revised departure was published.';
-    }
-  }else if(['crew_duty_risk','crew_fatigue_report','crew_fatigue_mid_rotation'].includes(incident.type)){
-    if(incident.selectedStrategy==='augment'){
-      flight.crewAugmented=true;
-      incident.outcome='Augmented crew assigned and the crew plan was updated.';
-    }else{
-      const allocation=tasks.find(task=>task.kind==='crew_allocation');
-      applyIncidentMinimumDelay(flight,allocation?.selection?.reportMin||25);
-      incident.outcome=`Replacement ${PERSONNEL[allocation?.selection?.role]?.label?.toLowerCase()||'crew'} reported and the crew plan was updated.`;
-    }
-  }else if(incident.type==='crew_duty_extension'){
-    flight.crewDutyExtensionRecordedAt=simNow();
-    flight.crewDutyExtensionOverrunMin=incident.context?.overrunMin||0;
-    if(incident.selectedStrategy==='protect_next'){
-      const next=state.flights.find(item=>item.id===incident.context?.nextFlightId);
-      if(next){
-        next.recoveryAction=`Reserve crew protected after ${flight.id} duty extension`;
-        next.issueAcknowledgedAt=0;
-        next.issueAcknowledgedKey='';
-      }
-      flight.crewStandDownPlannedAt=simNow();
-      incident.outcome=next
-        ? `Crew duty extension recorded; current crew stands down on arrival and ${next.id} is protected with reserve crew.`
-        : 'Crew duty extension recorded; current crew stands down on arrival.';
-    }else if(incident.selectedStrategy==='priority'){
-      flight.crewDutyPriorityRequestedAt=simNow();
-      incident.outcome='Priority-handling reply recorded and the crew duty extension / post-arrival review plan was filed.';
-    }else{
-      incident.outcome='Commander discretion / unforeseen duty extension recorded; current crew continues to safe landing with post-arrival review.';
-    }
-  }else if(['baggage_loading_issue','fueling_issue','fuel_supplier_outage','security_screening','deicing_required','deicing_capacity_collapse','holdover_expired'].includes(incident.type)){
-    applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||20);
-    incident.outcome=incident.stationOutcome||'Station recovery completed and the operating plan was updated.';
-  }else if(incident.type==='performance_limited'){
-    if(incident.selectedStrategy==='substitute'){
-      incident.outcome=`Replacement aircraft ${incident.replacementAircraftTail||''} assigned with enough dispatch performance margin.`;
-    }else if(incident.selectedStrategy==='payload_reduce'){
-      const pct=incident.payloadReductionPct||incident.context?.payloadReductionPct||10;
-      const originalPax=Number(flight.pax)||0;
-      const remove=Math.min(originalPax,Math.max(1,Math.ceil(originalPax*pct/100)));
-      flight.pax=Math.max(0,originalPax-remove);
-      if(flight.classPax?.economy) flight.classPax.economy=Math.max(0,flight.classPax.economy-remove);
-      flight.revenue=Math.round((Number(flight.revenue)||0)*(originalPax?flight.pax/originalPax:1));
-      if(flight.economics){ flight.economics.revenue=flight.revenue; refreshEconomicsTotals(flight); }
-      applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||20);
-      incident.outcome=`Payload reduced by about ${pct}% and dispatch performance margin restored.`;
-    }else{
-      applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||45);
-      incident.outcome='Departure delayed for a better performance window.';
-    }
-  }else if(incident.type==='destination_handling_unavailable'){
-    if(incident.selectedStrategy==='prepare_alternate'){
-      const alternate=incident.selectedAlternate;
-      if(!alternate||!aircraft) return false;
-      applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{reason:`Handling alternate ${alternate}`});
-      incident.outcome=`Handling alternate ${alternate} coordinated with flight deck, ATC, and station handling.`;
-    }else{
-      applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||incident.context?.delayMin||25);
-      incident.outcome=incident.selectedStrategy==='request_handling'
-      ? `${flightOperationalDestination(flight)} handling acceptance secured.`
-      : 'Departure held until destination handling can accept the aircraft.';
-    }
-  }else if(incident.type==='onboard_medical'){
-    if(incident.selectedStrategy==='divert'){
-      const alternate=incident.selectedAlternate;
-      if(!alternate||!aircraft) return false;
-      applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{reason:`Medical diversion to ${alternate}`});
-      incident.outcome=`Medical diversion to ${alternate} coordinated with flight deck, ATC, and station handling.`;
-    }else{
-      flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||20);
-      incident.outcome='Flight continued with medical advice and arrival assistance confirmed.';
-    }
-  }else if(['inflight_technical_fault','fuel_margin_low','atc_holding_fuel_conflict','unruly_passenger','destination_weather_deterioration','destination_below_minima','alternate_unsuitable','diversion_airport_unavailable','lightning_strike','bird_strike','pressurization_issue'].includes(incident.type)){
-    if(['divert','return_origin','reselect'].includes(incident.selectedStrategy)){
-      const alternate=incident.selectedAlternate;
-      if(!alternate||!aircraft) return false;
-      applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{mode:incident.selectedStrategy==='return_origin'?'return_origin':'diversion'});
-      incident.outcome=incident.selectedStrategy==='return_origin'
-        ? `Return to ${alternate} coordinated with flight deck, ATC, and station handling.`
-        : `Diversion to ${alternate} coordinated with flight deck, ATC, and station handling.`;
-    }else if(['fuel_margin_low','atc_holding_fuel_conflict'].includes(incident.type)){
-      if(incident.selectedStrategy==='direct'){
-        flight.enrouteDelayMin=Math.max(0,Math.min(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||10));
-        window.AeroRoutePlanning?.createRouteRevision?.(flight,{
-          mode:'direct',
-          reason:'Fuel watch direct-routing request coordinated',
-          createdAt:simNow(),
-          metadata:{incidentId:incident.id,incidentType:incident.type}
-        });
-      }
-      flight.fuelMarginReviewed=true;
-      incident.outcome=incident.selectedStrategy==='conserve'
-        ? 'Fuel-conservation profile coordinated and landing fuel monitoring continues.'
-        : 'ATC shortcut or priority request coordinated and the fuel watch plan was recorded.';
-    }else if(incident.type==='unruly_passenger'){
-      flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||15);
-      incident.outcome='Flight continued with arrival security/law-enforcement reception coordinated.';
-    }else if(incident.type==='destination_weather_deterioration'){
-      if(incident.selectedStrategy==='hold') flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||20);
-      incident.outcome=incident.selectedStrategy==='hold'
-        ? 'Destination holding plan and diversion trigger point coordinated.'
-        : 'Destination weather monitoring plan recorded with flight deck.';
-    }else if(incident.type==='destination_below_minima'){
-      flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||20);
-      incident.outcome='Destination minima hold and diversion trigger point coordinated with flight deck.';
-    }else if(incident.type==='alternate_unsuitable'){
-      incident.outcome='Alternate suitability monitoring plan recorded with flight deck.';
-    }else if(incident.type==='diversion_airport_unavailable'){
-      flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||20);
-      incident.outcome='Diversion-airport holding plan and next decision trigger coordinated with flight deck.';
-    }else if(['lightning_strike','bird_strike'].includes(incident.type)){
-      const destination=flightOperationalDestination(flight);
-      flight.arrivalInspectionRequired=true;
-      incident.outcome=`Flight continued with ${destination} arrival inspection arranged.`;
-    }else if(incident.type==='pressurization_issue'){
-      flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||25);
-      incident.outcome='Lower-altitude continuation coordinated with fuel monitoring and arrival support.';
-    }else{
-      incident.outcome='Inflight technical monitoring completed and the amended flight-watch plan was recorded.';
-    }
-  }else if(incident.type==='airborne_atc_reroute'){
-    const delay=Math.max(5,incident.coordinatedDelayMin||incident.context?.delayMin||15);
-    flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,delay);
-    incident.outcome=incident.selectedStrategy==='direct'
-      ? 'Shorter ATC routing coordinated and revised arrival estimate published.'
-      : 'ATC reroute accepted and revised arrival estimate published.';
-  }
+function completeFinalizedIncident(incident){
   resolveIncidentImpacts(incident,simNow(),incident.selectedStrategy&&['wait_inbound','accept_next','accept'].includes(incident.selectedStrategy)?'accepted':'handled');
   if(typeof recordResolvedIncidentRecoveryCost==='function') recordResolvedIncidentRecoveryCost(incident);
-  incident.status='resolved'; incident.blocking=false; incident.resolvedAt=simNow();
-  incident.selectedAction='workflow_complete'; incident.automaticResolution=false;
+  incident.status='resolved';
+  incident.blocking=false;
+  incident.resolvedAt=simNow();
+  incident.selectedAction='workflow_complete';
+  incident.automaticResolution=false;
   for(const task of incidentTasks(incident.id)){
     if(!['completed','cancelled'].includes(task.status)) task.status='cancelled';
   }
@@ -515,6 +292,335 @@ function finalizeOperationalCase(incident){
     if(assignment.incidentId===incident.id) assignment.status='committed';
   }
   return true;
+}
+
+function finalizeCrewSickIncident({incident,flight,tasks}){
+  const allocation=tasks.find(task=>task.kind==='crew_allocation');
+  applyIncidentMinimumDelay(flight,allocation?.selection?.reportMin||25);
+  incident.outcome=`Replacement ${PERSONNEL[allocation?.selection?.role]?.label?.toLowerCase()||'crew'} reported and the crew plan was updated.`;
+  return true;
+}
+
+function finalizeTechnicalDefectIncident({incident,aircraft}){
+  if(incident.selectedStrategy==='schedule_check') incident.outcome=`Maintenance check scheduled for ${incident.maintenanceCheckTail||aircraft?.tail||'aircraft'}.`;
+  else if(incident.selectedStrategy==='substitute') incident.outcome=`Replacement aircraft ${incident.replacementAircraftTail||''} assigned and the technical disruption was recovered.`;
+  else incident.outcome=`Defect deferred under MEL ${incident.technicalContext?.code||''}; dispatch accepted the restrictions.`;
+  return true;
+}
+
+function finalizeMaintenanceResourceIncident({incident,flight}){
+  if(incident.selectedStrategy==='send_mobile_team') incident.outcome=`Mobile maintenance team dispatched to ${incident.mobileMaintenanceAirport||flight.from}; local check scheduling is now available when the team arrives.`;
+  else if(incident.selectedStrategy==='ferry_to_maintenance') incident.outcome=`Maintenance ferry ${incident.maintenanceFerryId||''} planned to ${incident.maintenanceFerryAirport||'a maintenance-capable station'}.`;
+  else if(incident.selectedStrategy==='substitute') incident.outcome=`Replacement aircraft ${incident.replacementAircraftTail||''} assigned while the original aircraft awaits maintenance support.`;
+  else incident.outcome='Maintenance-resource recovery path recorded.';
+  return true;
+}
+
+function finalizeAtcGroundStopIncident({incident,flight}){
+  applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||45);
+  incident.outcome=incident.atcOutcome||'Returned airport flow opportunity incorporated into the operating plan.';
+  return true;
+}
+
+function finalizeNightCurfewIncident({incident,flight}){
+  const plan=nightDepartureChangePlanState(incident);
+  if(!plan.ready) return false;
+  flight.nightRecoveryDecision='manual_departure_change';
+  flight.nightRecoverySourceKey=incident.context?.sourceKey||'';
+  flight.nightRecoveryApprovedAt=simNow();
+  incident.outcome=`${flight.id} manually retimed in Dispatch. ${plan.reason}`;
+  return true;
+}
+
+function finalizeArrivalCurfewIncident({incident,flight}){
+  const context=arrivalCurfewContextForFlight(flight,simNow())||incident.context;
+  if(!context?.sourceKey) return false;
+  flight.arrivalCurfewCoordinatedKey=context.sourceKey;
+  flight.arrivalCurfewCoordinatedAt=simNow();
+  incident.outcome=`${context.affectedAirport||flightOperationalDestination(flight)} curfew arrival acceptance coordinated for expected arrival ${formatTime(context.expectedArrival||flightActualArrival(flight))}.`;
+  return true;
+}
+
+function finalizeDestinationClosureIncident({incident,flight,aircraft}){
+  const alternate=incident.selectedAlternate;
+  if(!alternate||!aircraft) return false;
+  applyOperationalDiversionDestination(flight,incident,aircraft,alternate);
+  incident.outcome=alternate===flight.from
+    ? `Captain and ATC accepted return to ${alternate}; handling confirmed and the diversion plan was updated.`
+    : `Captain and ATC accepted ${alternate}; alternate handling confirmed and the diversion plan was updated.`;
+  return true;
+}
+
+function finalizeGroundDestinationClosureIncident({incident,flight,aircraft}){
+  if(incident.selectedStrategy==='alternate_destination'){
+    const alternate=incident.selectedAlternate;
+    if(!alternate||!aircraft) return false;
+    applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{mode:'diversion',reason:`Ground replan to ${alternate}`});
+    incident.outcome=`OCC re-planned ${flight.id} to ${alternate} before departure because ${incident.context?.airport||flight.to} was unavailable.`;
+    return true;
+  }
+  applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||incident.context?.delayMin||90);
+  incident.outcome=`OCC held ${flight.id} on the ground until ${incident.context?.airport||flight.to} can accept the flight.`;
+  return true;
+}
+
+function finalizeAircraftPositionIncident({incident,flight}){
+  if(incident.selectedStrategy==='substitute'){
+    incident.outcome=`Replacement aircraft ${incident.replacementAircraftTail||''} assigned to protect the out-of-position departure.`;
+    return true;
+  }
+  const plan=positioningFerryPlanState(incident);
+  if(!plan.ready) return false;
+  incident.positioningFerryId=plan.ferry?.id||incident.positioningFerryId||'';
+  incident.outcome=incident.positioningFerryId
+    ? `Positioning ferry ${incident.positioningFerryId} brings ${plan.aircraft.tail} to ${plan.to} before ${flight.id}.`
+    : `${plan.aircraft.tail} is projected at ${plan.to}; positioning conflict cleared.`;
+  return true;
+}
+
+function finalizeLegalCrewIncident({incident}){
+  incident.outcome='Legal crew availability confirmed after personnel/resources were updated.';
+  return true;
+}
+
+function finalizeCrewMisconnectIncident({incident,flight,tasks}){
+  if(incident.selectedStrategy==='replace'){
+    const allocation=tasks.find(task=>task.kind==='crew_allocation');
+    applyIncidentMinimumDelay(flight,allocation?.selection?.reportMin||25);
+    incident.outcome=`Local replacement ${PERSONNEL[allocation?.selection?.role]?.label?.toLowerCase()||'crew'} assigned after the crew misconnect.`;
+  }else{
+    applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||incident.context?.delayMin||25);
+    incident.outcome='Connecting crew ETA accepted and the revised departure was published.';
+  }
+  return true;
+}
+
+function finalizeCrewPositionIncident({incident,flight,tasks}){
+  if(incident.selectedStrategy==='replace'){
+    const allocation=tasks.find(task=>task.kind==='crew_allocation');
+    applyIncidentMinimumDelay(flight,allocation?.selection?.reportMin||25);
+    incident.outcome=`Local replacement ${PERSONNEL[allocation?.selection?.role]?.label?.toLowerCase()||'crew'} assigned and the crew plan was updated.`;
+  }else if(['move_crew','move_reserve'].includes(incident.selectedStrategy)){
+    const plan=crewRelocationPlanState(incident);
+    if(!plan.ready) return false;
+    applyIncidentMinimumDelay(flight,Math.max(0,incident.context?.delayMin||0));
+    incident.outcome=`${PERSONNEL[plan.role]?.label||'Crew'} positioning confirmed at ${plan.to}.`;
+  }else{
+    applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||incident.context?.delayMin||25);
+    incident.outcome='Crew report / positioning ETA accepted and the revised departure was published.';
+  }
+  return true;
+}
+
+function finalizeCrewDutyIncident({incident,flight,tasks}){
+  if(incident.selectedStrategy==='augment'){
+    flight.crewAugmented=true;
+    incident.outcome='Augmented crew assigned and the crew plan was updated.';
+  }else{
+    const allocation=tasks.find(task=>task.kind==='crew_allocation');
+    applyIncidentMinimumDelay(flight,allocation?.selection?.reportMin||25);
+    incident.outcome=`Replacement ${PERSONNEL[allocation?.selection?.role]?.label?.toLowerCase()||'crew'} reported and the crew plan was updated.`;
+  }
+  return true;
+}
+
+function finalizeCrewDutyExtensionIncident({incident,flight}){
+  flight.crewDutyExtensionRecordedAt=simNow();
+  flight.crewDutyExtensionOverrunMin=incident.context?.overrunMin||0;
+  if(incident.selectedStrategy==='protect_next'){
+    const next=state.flights.find(item=>item.id===incident.context?.nextFlightId);
+    if(next){
+      next.recoveryAction=`Reserve crew protected after ${flight.id} duty extension`;
+      next.issueAcknowledgedAt=0;
+      next.issueAcknowledgedKey='';
+    }
+    flight.crewStandDownPlannedAt=simNow();
+    incident.outcome=next
+      ? `Crew duty extension recorded; current crew stands down on arrival and ${next.id} is protected with reserve crew.`
+      : 'Crew duty extension recorded; current crew stands down on arrival.';
+  }else if(incident.selectedStrategy==='priority'){
+    flight.crewDutyPriorityRequestedAt=simNow();
+    incident.outcome='Priority-handling reply recorded and the crew duty extension / post-arrival review plan was filed.';
+  }else{
+    incident.outcome='Commander discretion / unforeseen duty extension recorded; current crew continues to safe landing with post-arrival review.';
+  }
+  return true;
+}
+
+function finalizeStationRecoveryIncident({incident,flight}){
+  applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||20);
+  incident.outcome=incident.stationOutcome||'Station recovery completed and the operating plan was updated.';
+  return true;
+}
+
+function finalizePerformanceIncident({incident,flight}){
+  if(incident.selectedStrategy==='substitute'){
+    incident.outcome=`Replacement aircraft ${incident.replacementAircraftTail||''} assigned with enough dispatch performance margin.`;
+    return true;
+  }
+  if(incident.selectedStrategy==='payload_reduce'){
+    const pct=incident.payloadReductionPct||incident.context?.payloadReductionPct||10;
+    const originalPax=Number(flight.pax)||0;
+    const remove=Math.min(originalPax,Math.max(1,Math.ceil(originalPax*pct/100)));
+    flight.pax=Math.max(0,originalPax-remove);
+    if(flight.classPax?.economy) flight.classPax.economy=Math.max(0,flight.classPax.economy-remove);
+    flight.revenue=Math.round((Number(flight.revenue)||0)*(originalPax?flight.pax/originalPax:1));
+    if(flight.economics){ flight.economics.revenue=flight.revenue; refreshEconomicsTotals(flight); }
+    applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||20);
+    incident.outcome=`Payload reduced by about ${pct}% and dispatch performance margin restored.`;
+    return true;
+  }
+  applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||45);
+  incident.outcome='Departure delayed for a better performance window.';
+  return true;
+}
+
+function finalizeDestinationHandlingIncident({incident,flight,aircraft}){
+  if(incident.selectedStrategy==='prepare_alternate'){
+    const alternate=incident.selectedAlternate;
+    if(!alternate||!aircraft) return false;
+    applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{reason:`Handling alternate ${alternate}`});
+    incident.outcome=`Handling alternate ${alternate} coordinated with flight deck, ATC, and station handling.`;
+    return true;
+  }
+  applyIncidentMinimumDelay(flight,incident.coordinatedDelayMin||incident.context?.delayMin||25);
+  incident.outcome=incident.selectedStrategy==='request_handling'
+    ? `${flightOperationalDestination(flight)} handling acceptance secured.`
+    : 'Departure held until destination handling can accept the aircraft.';
+  return true;
+}
+
+function finalizeMedicalIncident({incident,flight,aircraft}){
+  if(incident.selectedStrategy==='divert'){
+    const alternate=incident.selectedAlternate;
+    if(!alternate||!aircraft) return false;
+    applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{reason:`Medical diversion to ${alternate}`});
+    incident.outcome=`Medical diversion to ${alternate} coordinated with flight deck, ATC, and station handling.`;
+    return true;
+  }
+  flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||20);
+  incident.outcome='Flight continued with medical advice and arrival assistance confirmed.';
+  return true;
+}
+
+function finalizeInflightDiversionIncident({incident,flight,aircraft}){
+  if(['divert','return_origin','reselect'].includes(incident.selectedStrategy)){
+    const alternate=incident.selectedAlternate;
+    if(!alternate||!aircraft) return false;
+    applyOperationalDiversionDestination(flight,incident,aircraft,alternate,{mode:incident.selectedStrategy==='return_origin'?'return_origin':'diversion'});
+    incident.outcome=incident.selectedStrategy==='return_origin'
+      ? `Return to ${alternate} coordinated with flight deck, ATC, and station handling.`
+      : `Diversion to ${alternate} coordinated with flight deck, ATC, and station handling.`;
+    return true;
+  }
+  if(['fuel_margin_low','atc_holding_fuel_conflict'].includes(incident.type)){
+    if(incident.selectedStrategy==='direct'){
+      flight.enrouteDelayMin=Math.max(0,Math.min(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||10));
+      window.AeroRoutePlanning?.createRouteRevision?.(flight,{
+        mode:'direct',
+        reason:'Fuel watch direct-routing request coordinated',
+        createdAt:simNow(),
+        metadata:{incidentId:incident.id,incidentType:incident.type}
+      });
+    }
+    flight.fuelMarginReviewed=true;
+    incident.outcome=incident.selectedStrategy==='conserve'
+      ? 'Fuel-conservation profile coordinated and landing fuel monitoring continues.'
+      : 'ATC shortcut or priority request coordinated and the fuel watch plan was recorded.';
+    return true;
+  }
+  if(incident.type==='unruly_passenger'){
+    flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||15);
+    incident.outcome='Flight continued with arrival security/law-enforcement reception coordinated.';
+    return true;
+  }
+  if(incident.type==='destination_below_minima'){
+    flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||20);
+    incident.outcome='Destination minima hold and diversion trigger point coordinated with flight deck.';
+    return true;
+  }
+  if(incident.type==='diversion_airport_unavailable'){
+    flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||20);
+    incident.outcome='Diversion-airport holding plan and next decision trigger coordinated with flight deck.';
+    return true;
+  }
+  if(['lightning_strike','bird_strike'].includes(incident.type)){
+    const destination=flightOperationalDestination(flight);
+    flight.arrivalInspectionRequired=true;
+    incident.outcome=`Flight continued with ${destination} arrival inspection arranged.`;
+    return true;
+  }
+  if(incident.type==='pressurization_issue'){
+    flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,incident.coordinatedDelayMin||25);
+    incident.outcome='Lower-altitude continuation coordinated with fuel monitoring and arrival support.';
+    return true;
+  }
+  incident.outcome='Inflight technical monitoring completed and the amended flight-watch plan was recorded.';
+  return true;
+}
+
+function finalizeAirborneAtcRerouteIncident({incident,flight}){
+  const delay=Math.max(5,incident.coordinatedDelayMin||incident.context?.delayMin||15);
+  flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,delay);
+  incident.outcome=incident.selectedStrategy==='direct'
+    ? 'Shorter ATC routing coordinated and revised arrival estimate published.'
+    : 'ATC reroute accepted and revised arrival estimate published.';
+  return true;
+}
+
+const INCIDENT_FINALIZERS={
+  crew_sick:finalizeCrewSickIncident,
+  mel_defect:finalizeTechnicalDefectIncident,
+  postflight_technical_defect:finalizeTechnicalDefectIncident,
+  maintenance_resource_unavailable:finalizeMaintenanceResourceIncident,
+  atc_ground_stop:finalizeAtcGroundStopIncident,
+  night_curfew_conflict:finalizeNightCurfewIncident,
+  arrival_curfew_coordination:finalizeArrivalCurfewIncident,
+  destination_closure:finalizeDestinationClosureIncident,
+  destination_closure_ground:finalizeGroundDestinationClosureIncident,
+  aircraft_out_of_position:finalizeAircraftPositionIncident,
+  aircraft_misposition_after_diversion:finalizeAircraftPositionIncident,
+  no_legal_crew:finalizeLegalCrewIncident,
+  crew_misconnect:finalizeCrewMisconnectIncident,
+  crew_misposition_after_diversion:finalizeCrewPositionIncident,
+  crew_report_delayed:finalizeCrewPositionIncident,
+  crew_duty_risk:finalizeCrewDutyIncident,
+  crew_fatigue_report:finalizeCrewDutyIncident,
+  crew_fatigue_mid_rotation:finalizeCrewDutyIncident,
+  crew_duty_extension:finalizeCrewDutyExtensionIncident,
+  fuel_supplier_outage:finalizeStationRecoveryIncident,
+  security_screening:finalizeStationRecoveryIncident,
+  deicing_required:finalizeStationRecoveryIncident,
+  deicing_capacity_collapse:finalizeStationRecoveryIncident,
+  holdover_expired:finalizeStationRecoveryIncident,
+  performance_limited:finalizePerformanceIncident,
+  destination_handling_unavailable:finalizeDestinationHandlingIncident,
+  onboard_medical:finalizeMedicalIncident,
+  inflight_technical_fault:finalizeInflightDiversionIncident,
+  fuel_margin_low:finalizeInflightDiversionIncident,
+  atc_holding_fuel_conflict:finalizeInflightDiversionIncident,
+  unruly_passenger:finalizeInflightDiversionIncident,
+  destination_below_minima:finalizeInflightDiversionIncident,
+  diversion_airport_unavailable:finalizeInflightDiversionIncident,
+  lightning_strike:finalizeInflightDiversionIncident,
+  bird_strike:finalizeInflightDiversionIncident,
+  pressurization_issue:finalizeInflightDiversionIncident,
+  airborne_atc_reroute:finalizeAirborneAtcRerouteIncident
+};
+
+window.AeroIncidentFinalizers=INCIDENT_FINALIZERS;
+
+function finalizeOperationalCase(incident){
+  if(!incident||incident.status!=='open') return false;
+  const tasks=playableIncidentTasks(incident);
+  if(!tasks.length||tasks.some(task=>task.status!=='completed')) return false;
+  const flight=state.flights.find(item=>item.id===incident.flightId);
+  const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
+  if(!flight) return false;
+  const handler=INCIDENT_FINALIZERS[incident.type];
+  if(!handler) return false;
+  if(!handler({incident,flight,aircraft,tasks})) return false;
+  return completeFinalizedIncident(incident);
 }
 
 function processOperationalWorkflows(t=simNow()){
@@ -702,53 +808,549 @@ function authorityDecisionForIncident(task,incident,flight){
 }
 
 function performImmediateRecoveryStrategy(task,incident,flight,action){
-  if(!['dispatch-capacity-strategy','dispatch-groundstop-strategy','station-stand-strategy'].includes(task.key)) return false;
+  if(task.key!=='dispatch-groundstop-strategy') return false;
   selectIncidentStrategy(incident,action);
   task.selection={strategy:action};
-  if(task.key==='dispatch-capacity-strategy'){
-    const base=Math.max(15,incident.context?.delayMin||flight.airportDelayMin||30);
-    if(action==='accept'){
-      incident.coordinatedDelayMin=base;
-      incident.atcOutcome=`Reduced airport-flow sequence accepted with a ${base}-minute ground delay.`;
-      completeOperationalTask(task,incident.atcOutcome);
-      return true;
-    }
-    if(action==='priority'){
-      incident.coordinatedDelayMin=Math.max(10,Math.round(base*.55));
-      incident.atcOutcome=`Airport flow returned an earlier opportunity with a ${incident.coordinatedDelayMin}-minute delay.`;
-      createExternalWorkflowRequest(task,'Airport flow control',15,incident.atcOutcome);
-      return true;
-    }
-  }else if(task.key==='dispatch-groundstop-strategy'){
-    if(action==='hold_ground'){
-      const delay=Math.max(35,incident.context?.delayMin||flight.airspaceDelayMin||flight.airportDelayMin||45);
-      incident.coordinatedDelayMin=delay;
-      incident.atcOutcome=`Ground stop held at origin with a ${delay}-minute release estimate.`;
-      createExternalWorkflowRequest(task,'ATC flow management',12,incident.atcOutcome);
-      return true;
-    }
-    if(action==='priority'){
-      const base=Math.max(15,incident.context?.delayMin||flight.airportDelayMin||flight.airspaceDelayMin||30);
-      incident.coordinatedDelayMin=Math.max(10,Math.round(base*.55));
-      incident.atcOutcome=`Flow management returned an earlier release with a ${incident.coordinatedDelayMin}-minute delay.`;
-      createExternalWorkflowRequest(task,'ATC flow management',15,incident.atcOutcome);
-      return true;
-    }
-  }else if(task.key==='station-stand-strategy'){
-    const options={
-      remote:{delay:20,duration:10,outcome:'Airport allocated a remote stand with passenger bussing.'},
-      tow:{delay:30,duration:15,outcome:'Airport allocated a replacement gate requiring an aircraft tow.'},
-      wait_gate:{delay:45,duration:20,outcome:'Airport retained the planned gate after a 45-minute hold.'}
-    };
-    const option=options[action];
-    if(!option) return false;
-    incident.coordinatedDelayMin=option.delay;
-    incident.stationOutcome=option.outcome;
-    createExternalWorkflowRequest(task,'Airport stand control',option.duration,option.outcome);
+  if(action==='hold_ground'){
+    const delay=Math.max(35,incident.context?.delayMin||flight.airspaceDelayMin||flight.airportDelayMin||45);
+    incident.coordinatedDelayMin=delay;
+    incident.atcOutcome=`Ground stop held at origin with a ${delay}-minute release estimate.`;
+    createExternalWorkflowRequest(task,'ATC flow management',12,incident.atcOutcome);
+    return true;
+  }
+  if(action==='priority'){
+    const base=Math.max(15,incident.context?.delayMin||flight.airportDelayMin||flight.airspaceDelayMin||30);
+    incident.coordinatedDelayMin=Math.max(10,Math.round(base*.55));
+    incident.atcOutcome=`Flow management returned an earlier release with a ${incident.coordinatedDelayMin}-minute delay.`;
+    createExternalWorkflowRequest(task,'ATC flow management',15,incident.atcOutcome);
     return true;
   }
   return false;
 }
+
+function completePerformedOperationalTask(){
+  processOperationalWorkflows(simNow());
+  recalculateOperations();
+  AeroServices.commit();
+  return true;
+}
+
+function cancelIncidentRecoveryTask(task,incident,flight){
+  const strategyBlocker=AeroIncidentResources.branchStrategyOptionBlocker(task,incident,'cancel');
+  if(strategyBlocker) return toast(strategyBlocker);
+  selectIncidentStrategy(incident,'cancel');
+  task.selection={strategy:'cancel'};
+  task.status='completed';
+  task.completedAt=simNow();
+  task.completesAt=task.completedAt;
+  task.outcome='Flight cancelled as the selected incident recovery.';
+  if(incident.type==='night_curfew_conflict') cancelSingleFlight(flight.id,{skipConfirm:true,reason:INCIDENT_DEFINITIONS[incident.type]?.title||incident.type});
+  else cancelFlight(flight.id,{skipConfirm:true,reason:INCIDENT_DEFINITIONS[incident.type]?.title||incident.type});
+  return true;
+}
+
+function handleCrewAllocationTask({task,incident,flight,payload}){
+  const option=crewPoolOptions(incident).find(item=>item.id===payload.optionId);
+  if(!option) return toast('That personnel pool is no longer available.');
+  const assignment={id:`RA${state.nextResourceAssignment++}`,incidentId:incident.id,taskId:task.id,flightId:flight.id,
+    role:option.role,base:option.airport,operatingAirport:flight.from,amount:1,family:option.family,
+    assignedAt:simNow(),reportAt:simNow()+option.reportMin*MIN,releaseAt:flightCrewRelease(flight)+10*HOUR,status:'assigned'};
+  state.resourceAssignments.push(assignment);
+  flight.crewRoleSwaps??={};
+  flight.crewRoleSwaps[option.role]={role:option.role,assignmentId:assignment.id,airport:option.airport,assignedAt:simNow()};
+  task.selection={...option,assignmentId:assignment.id};
+  completeOperationalTask(task,`${option.label} assigned.`);
+  return true;
+}
+
+function handleCrewAugmentationTask({task,incident}){
+  const blocker=AeroIncidentResources.crewAugmentationBlocker(incident);
+  if(blocker) return toast(blocker);
+  task.selection={action:'augment',reportMin:25};
+  startOperationalTask(task,25,'in_progress','Augmented crew reports and completes briefing.');
+  return true;
+}
+
+function handleCrewNextSectorReplacementTask({task,incident}){
+  const next=nextSectorForCrewExtensionIncident(incident);
+  if(!next) return toast('No unflown downstream sector is available for crew replacement.');
+  const duty=swapCrewForFlight(next.id);
+  if(!duty) return false;
+  task.selection={flightId:next.id,dutyId:duty.id,airport:next.from};
+  completeOperationalTask(task,`${next.id} protected with local reserve crew at ${next.from}.`);
+  return true;
+}
+
+function handleCrewReportTask({task,incident}){
+  const allocation=incidentTasks(incident.id).find(item=>item.kind==='crew_allocation');
+  const reportMin=allocation?.selection?.reportMin||25;
+  if(task.status==='available'){
+    startOperationalTask(task,reportMin,'in_progress',`Replacement crew reports after ${reportMin} minutes.`);
+    return true;
+  }
+  if(task.status==='in_progress'&&task.completesAt>simNow()){
+    const remainingMin=Math.max(1,Math.ceil((task.completesAt-simNow())/MIN));
+    toast(`Replacement crew is still reporting · ${remainingMin} min remaining`);
+    return false;
+  }
+  completeOperationalTask(task,`Replacement crew reported after ${reportMin} minutes.`);
+  return true;
+}
+
+function handleMaintenanceInspectionTask({task}){
+  startOperationalTask(task,25,'in_progress','Engineering inspection completed.');
+  return true;
+}
+
+function handleAuthorityDecisionTask({task,incident,flight}){
+  const decision=authorityDecisionForIncident(task,incident,flight);
+  if(!decision.strategy) return false;
+  selectIncidentStrategy(incident,decision.strategy);
+  task.selection={...decision};
+  createExternalWorkflowRequest(task,decision.counterparty,decision.durationMin,decision.outcome);
+  return true;
+}
+
+function handleStrategyTask({task,incident,flight,actionId}){
+  const options=(task.strategyOptions||[
+    {id:'defer'},{id:'schedule_check'},{id:'substitute'}
+  ]).map(option=>option.id);
+  if(!options.includes(actionId)) return false;
+  const strategyBlocker=AeroIncidentResources.branchStrategyOptionBlocker(task,incident,actionId);
+  if(strategyBlocker) return toast(strategyBlocker);
+  if(performImmediateRecoveryStrategy(task,incident,flight,actionId)) return true;
+  selectIncidentStrategy(incident,actionId);
+  task.selection={strategy:actionId};
+  completeOperationalTask(task,`${task.label}: ${actionId}.`);
+  return true;
+}
+
+function handleMaintenanceDispositionTask({task,incident,flight,actionId}){
+  const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
+  if(!aircraft) return false;
+  if(task.kind==='maintenance_defer'||actionId==='defer'){
+    if(incident.technicalContext?.deferAllowed===false) return toast('This technical finding is not deferrable under MEL. Schedule a technical repair or use a replacement aircraft.');
+    const finding=incident.technicalContext||OperationalIntelligence.melFinding(incident.id,incident.detectedAt);
+    aircraft.melItems??=[];
+    if(!aircraft.melItems.some(item=>item.id===finding.id)) aircraft.melItems.push({...finding,status:'open',deferredAt:simNow()});
+    aircraft.condition=clamp((aircraft.condition??100)-3,0,100);
+    incident.selectedStrategy='defer'; task.selection={action:'defer',finding};
+    completeOperationalTask(task,`Deferred under MEL ${finding.code} with documented restrictions.`);
+    return true;
+  }
+  if(actionId==='repair'){
+    incident.selectedStrategy='repair'; task.selection={action:'repair'};
+    aircraft.defectUntil=Math.max(aircraft.defectUntil||0,simNow()+120*MIN); aircraft.defectReason='Technical defect under repair';
+    startOperationalTask(task,120,'in_progress','Repair completed and engineering sign-off recorded.');
+    return true;
+  }
+  return false;
+}
+
+function handleMaintenanceRepairTask({task,incident,flight,actionId}){
+  const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
+  if(!aircraft) return false;
+  if(actionId&&actionId!=='repair') return false;
+  incident.selectedStrategy='repair'; task.selection={action:'repair'};
+  aircraft.defectUntil=Math.max(aircraft.defectUntil||0,simNow()+120*MIN); aircraft.defectReason='Technical defect under repair';
+  startOperationalTask(task,120,'in_progress','Repair completed and engineering sign-off recorded.');
+  return true;
+}
+
+function handleMaintenanceCheckSchedulingTask({task,incident,flight,payload}){
+  const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
+  if(!aircraft) return false;
+  const requestedStart=Number(payload.start)||Math.max(simNow(),flightActualDeparture(flight)-30*MIN);
+  const plan=scheduleMaintenanceCheckForAircraft(aircraft.id,requestedStart,{
+    skipConfirm:true,
+    allowFlightConflict:true,
+    preserveIncidentId:incident.id,
+    workType:'urgent_repair',
+    finding:incident.technicalContext,
+    reason:`${INCIDENT_DEFINITIONS[incident.type]?.title||incident.type}: ${incident.technicalContext?.title||'technical finding'}`
+  });
+  if(!plan) return false;
+  incident.selectedStrategy='schedule_check';
+  incident.maintenanceCheckAircraftId=aircraft.id;
+  incident.maintenanceCheckTail=aircraft.tail;
+  incident.maintenanceCheckStart=plan.start;
+  incident.maintenanceCheckEnd=plan.end;
+  aircraft.defectUntil=Math.max(aircraft.defectUntil||0,plan.end);
+  aircraft.defectReason=incident.technicalContext?.title||'Maintenance check required';
+  task.selection={action:'schedule_check',start:plan.start,end:plan.end,aircraftId:aircraft.id};
+  completeOperationalTask(task,`${aircraft.tail} ${String(plan.label||'maintenance').toLowerCase()} scheduled ${formatTime(plan.start)}-${formatTime(plan.end)}.`);
+  recalculateOperations();
+  AeroServices.persist();
+  return true;
+}
+
+function handleMobileMaintenanceTeamTask({task,incident}){
+  const plan=applyMobileMaintenanceTeam(incident);
+  if(!plan) return false;
+  incident.mobileMaintenanceSource=plan.source;
+  incident.mobileMaintenanceAirport=plan.airport;
+  incident.mobileMaintenanceArrivesAt=plan.arrivesAt;
+  incident.mobileMaintenanceCost=plan.cost;
+  task.selection={action:'send_mobile_team',source:plan.source,airport:plan.airport,responseMin:plan.responseMin,cost:plan.cost};
+  createExternalWorkflowRequest(task,'Mobile maintenance control',plan.responseMin,`${plan.source} mobile team available at ${plan.airport}; schedule the check locally.`);
+  return true;
+}
+
+function handleMaintenanceClearanceTask({task,flight}){
+  const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
+  if(aircraft){ aircraft.defectUntil=0; aircraft.defectReason=''; aircraft.condition=clamp((aircraft.condition??100)-1,0,100); }
+  task.selection={action:'release'};
+  completeOperationalTask(task,'Engineering recorded no-damage clearance.');
+  return true;
+}
+
+function handleAircraftSubstitutionTask({task,incident,payload}){
+  const option=applyIncidentAircraftSubstitution(incident,payload.optionId);
+  if(!option) return false;
+  task.selection=option;
+  completeOperationalTask(task,`${option.label} assigned as replacement aircraft.`);
+  return true;
+}
+
+function handleManualFerryTask({task,incident}){
+  const plan=positioningFerryPlanState(incident);
+  if(!plan.ready) return toast(plan.reason);
+  incident.selectedStrategy='position_ferry';
+  incident.positioningFerryId=plan.ferry?.id||'';
+  task.selection={action:'check_ferry',ferryFlightId:incident.positioningFerryId,projectedLocation:plan.projection?.location||''};
+  completeOperationalTask(task,incident.positioningFerryId?`Positioning ferry ${incident.positioningFerryId} confirmed.`:'Aircraft projection confirmed at origin.');
+  return true;
+}
+
+function handleManualMaintenanceFerryTask({task,incident}){
+  const plan=maintenanceFerryPlanState(incident);
+  if(!plan.ready) return toast(plan.reason);
+  incident.selectedStrategy='ferry_to_maintenance';
+  incident.maintenanceFerryId=plan.ferry?.id||'';
+  incident.maintenanceFerryAirport=plan.to;
+  task.selection={action:'check_maintenance_ferry',ferryFlightId:incident.maintenanceFerryId,to:plan.to};
+  completeOperationalTask(task,incident.maintenanceFerryId?`Maintenance ferry ${incident.maintenanceFerryId} confirmed to ${plan.to}.`:`${plan.aircraft?.tail||'Aircraft'} maintenance positioning confirmed.`);
+  return true;
+}
+
+function handleManualCrewMoveTask({task,incident}){
+  const plan=crewRelocationPlanState(incident);
+  if(!plan.ready) return toast(plan.reason);
+  task.selection={action:'check_crew_move',transferId:plan.transfer?.id||'',role:plan.role,to:plan.to};
+  completeOperationalTask(task,plan.transfer?`${plan.transfer.id} positions ${PERSONNEL[plan.role]?.label?.toLowerCase()||'crew'} to ${plan.to}.`:`Qualified ${PERSONNEL[plan.role]?.label?.toLowerCase()||'crew'} confirmed at ${plan.to}.`);
+  return true;
+}
+
+function handleManualDepartureChangeTask({task,incident,flight}){
+  const plan=nightDepartureChangePlanState(incident);
+  if(!plan.ready) return toast(plan.reason);
+  task.selection={action:'check_departure_change',actualDeparture:flightActualDeparture(flight),restrictionSummary:plan.restrictionSummary||''};
+  completeOperationalTask(task,plan.reason);
+  return true;
+}
+
+function handleAtcCoordinationTask({task,incident,flight,actionId}){
+  const action=actionId||task.action;
+  if(action==='accept'){
+    const delay=Math.max(15,incident.context?.delayMin||flight.airportDelayMin||flight.airspaceDelayMin||30);
+    incident.coordinatedDelayMin=delay;
+    incident.atcOutcome=incident.type==='atc_ground_stop'
+      ? `Ground-stop release estimate accepted with a ${delay}-minute departure hold.`
+      : `Reduced airport-flow sequence accepted with a ${delay}-minute ground delay.`;
+    task.selection={action:'accept'}; completeOperationalTask(task,incident.atcOutcome);
+    return true;
+  }
+  if(action==='hold_ground'){
+    const delay=Math.max(35,incident.context?.delayMin||flight.airspaceDelayMin||flight.airportDelayMin||45);
+    incident.coordinatedDelayMin=delay;
+    incident.atcOutcome=`Ground stop held at origin with a ${delay}-minute release estimate.`;
+    task.selection={action,delayMin:delay};
+    completeOperationalTask(task,incident.atcOutcome);
+    return true;
+  }
+  if(action==='priority'){
+    const base=Math.max(15,incident.context?.delayMin||flight.airportDelayMin||flight.airspaceDelayMin||30);
+    incident.coordinatedDelayMin=Math.max(10,Math.round(base*.55));
+    incident.atcOutcome=incident.type==='atc_ground_stop'
+      ? `Flow management returned an earlier release with a ${incident.coordinatedDelayMin}-minute delay.`
+      : `Airport flow returned an earlier opportunity with a ${incident.coordinatedDelayMin}-minute delay.`;
+    task.selection={action:'priority'};
+    createExternalWorkflowRequest(task,'ATC flow management',15,incident.atcOutcome);
+    return true;
+  }
+  return false;
+}
+
+function handleStandRequestTask({task,incident,actionId}){
+  const action=actionId||task.action;
+  const options={remote:{delay:20,duration:10,outcome:'Airport allocated a remote stand with passenger bussing.'},tow:{delay:30,duration:15,outcome:'Airport allocated a replacement gate requiring an aircraft tow.'},wait_gate:{delay:45,duration:20,outcome:'Airport retained the planned gate after a 45-minute hold.'}};
+  const option=options[action];
+  if(!option) return false;
+  incident.coordinatedDelayMin=option.delay;
+  incident.stationOutcome=option.outcome;
+  task.selection={action};
+  createExternalWorkflowRequest(task,'Airport stand control',option.duration,option.outcome);
+  return true;
+}
+
+function handleInboundWaitTask({task,incident,flight,actionId}){
+  const delay=incident.context?.inboundDelayMin||incident.context?.delayMin||flightTotalDepartureDelayMin(flight)||15;
+  incident.coordinatedDelayMin=Math.max(15,delay);
+  task.selection={action:actionId||task.action||'wait_inbound',delayMin:incident.coordinatedDelayMin};
+  const prefix=['aircraft_out_of_position','aircraft_misposition_after_diversion'].includes(incident.type)?'Aircraft positioning':
+    ['crew_misconnect','crew_misposition_after_diversion','crew_report_delayed'].includes(incident.type)?'Crew timing':
+      incident.type==='destination_handling_unavailable'?'Destination handling':'Timing';
+  completeOperationalTask(task,`${prefix} accepted with ${incident.coordinatedDelayMin} minutes projected delay.`);
+  return true;
+}
+
+function handleTurnaroundExpediteTask({task,incident,flight}){
+  applyTurnaroundExpedite(flight);
+  incident.coordinatedDelayMin=Math.max(0,(incident.context?.inboundDelayMin||flightTotalDepartureDelayMin(flight)||20)-15);
+  task.selection={action:'expedite_turn'};
+  createExternalWorkflowRequest(task,'Station turnaround control',10,'Ground resources reprioritized for an expedited turn.');
+  return true;
+}
+
+function handleStationRecoveryTask({task,incident,flight,actionId}){
+  const action=actionId||task.action;
+  const effect=STATION_RECOVERY_EFFECTS[action];
+  if(!effect) return false;
+  const delay=action==='deice_queue'?Math.max(effect.delay,incident.context?.queueMin||incident.context?.delayMin||0):
+    action==='wait_supply'?Math.max(effect.delay,incident.context?.delayMin||0):
+    action==='fuel_outage_priority'?Math.max(effect.delay,Math.round((incident.context?.delayMin||45)*.35)):
+    effect.delay;
+  const outcome=action==='deice_queue'&&incident.context?.demand
+    ? `Station sequenced ${incident.context.demand} deicing-demand departures; treatment queue accepted.`
+    : effect.outcome;
+  if(task.kind==='fuel_recovery'&&action==='tanker_inbound'){
+    const plan=applyFuelOutageTankerPlan(incident);
+    if(!plan) return false;
+    incident.fuelTankerPlan={mode:plan.mode,previousFlightId:plan.previousFlightId||'',targetFuelGal:plan.targetFuelGal,extraFuelGal:plan.extraFuelGal,cost:plan.cost};
+  }else if(task.kind==='fuel_recovery'&&['priority','fuel_outage_priority','minimum_uplift'].includes(action)){
+    fuelFlight(flight,simNow(),true);
+  }
+  if(task.kind==='security_coordination'&&action==='offload_passenger'&&flight.pax>0){
+    flight.pax=Math.max(0,flight.pax-1);
+    if(flight.classPax?.economy) flight.classPax.economy=Math.max(0,flight.classPax.economy-1);
+  }
+  if(task.kind==='station_recovery'&&['deice','priority_deice','redeice'].includes(action)){
+    flight.deicingCompletedAt=simNow()+delay*MIN;
+    flight.deicingHoldoverUntil=flight.deicingCompletedAt+35*MIN;
+  }
+  incident.coordinatedDelayMin=delay;
+  incident.stationOutcome=outcome;
+  task.selection={action,delayMin:delay};
+  createExternalWorkflowRequest(task,task.kind==='fuel_recovery'?'Fuel provider':task.kind==='security_coordination'?'Airport security':'Station ramp control',Math.max(8,Math.ceil(delay/2)),outcome);
+  return true;
+}
+
+function handlePerformanceCoordinationTask({task,incident,actionId}){
+  const action=actionId||task.action;
+  if(action==='payload_reduce'){
+    const pct=incident.context?.payloadReductionPct||12;
+    incident.payloadReductionPct=pct;
+    incident.coordinatedDelayMin=20;
+    task.selection={action,payloadReductionPct:pct,delayMin:20};
+    createExternalWorkflowRequest(task,'Load control / station',10,`Payload reduction of about ${pct}% coordinated with load control.`);
+    return true;
+  }
+  if(action==='delay_conditions'){
+    const delay=Math.max(30,incident.context?.delayMin||45);
+    incident.coordinatedDelayMin=delay;
+    task.selection={action,delayMin:delay};
+    completeOperationalTask(task,`Performance window delay accepted with ${delay} minutes projected delay.`);
+    return true;
+  }
+  return false;
+}
+
+function handleDestinationHandlingTask({task,incident,flight,actionId}){
+  const destination=flightOperationalDestination(flight);
+  const action=actionId||task.action||'request_handling';
+  incident.coordinatedDelayMin=15;
+  task.selection={action,airport:destination,delayMin:15};
+  createExternalWorkflowRequest(task,`${destination} station / handler`,12,`${destination} confirms stand, ramp, and passenger-handling acceptance.`);
+  return true;
+}
+
+function applyDiversionSelectionToIncident(task,incident,option){
+  incident.selectedAlternate=option.code;
+  incident.diversionReturnOrigin=Boolean(option.returnOrigin);
+  incident.diversionRouteKm=option.km;
+  incident.diversionDurationMs=option.duration;
+  incident.diversionDurationMode=option.durationMode||'total_from_origin';
+  incident.diversionAnchor=option.anchor||null;
+  incident.diversionFuel=option.fuel;
+  task.selection={airport:option.code,returnOrigin:Boolean(option.returnOrigin),fuel:option.fuel};
+}
+
+function handleAlternateSelectionTask({task,incident,payload}){
+  const option=diversionOptionsForIncident(incident,{includeReturnOrigin:false}).find(item=>item.code===payload.airport);
+  if(!option) return toast('That alternate is no longer operationally suitable.');
+  applyDiversionSelectionToIncident(task,incident,option);
+  completeOperationalTask(task,`${option.returnOrigin?'Return to origin':option.code} selected; flight deck, ATC, and handling coordination bundled into the recovery plan.`);
+  return true;
+}
+
+function handleReturnOriginSelectionTask({task,incident}){
+  const option=diversionOptionsForIncident(incident,{onlyReturnOrigin:true})[0];
+  if(!option) return toast('Return to origin is not currently suitable.');
+  applyDiversionSelectionToIncident(task,incident,option);
+  completeOperationalTask(task,`Return to ${option.code} confirmed; flight deck, ATC, and handling coordination bundled into the recovery plan.`);
+  return true;
+}
+
+function handleFlightdeckRecommendationTask({task,incident}){
+  if(!incident.selectedAlternate) return false;
+  task.selection={airport:incident.selectedAlternate};
+  createExternalWorkflowRequest(task,'Flight deck',6,incident.diversionReturnOrigin?`Captain accepts return to ${incident.selectedAlternate}.`:`Captain accepts ${incident.selectedAlternate} as the operational alternate.`);
+  return true;
+}
+
+function handleDiversionClearanceTask({task,incident}){
+  createExternalWorkflowRequest(task,'ATC via flight crew',8,incident.diversionReturnOrigin?`ATC clears the flight to return to ${incident.selectedAlternate}.`:`ATC clears the flight to ${incident.selectedAlternate} via an amended route.`);
+  return true;
+}
+
+function handleAlternateHandlingTask({task,incident}){
+  createExternalWorkflowRequest(task,`${incident.selectedAlternate} station / handler`,12,incident.diversionReturnOrigin?`${incident.selectedAlternate} confirms return stand and handling acceptance.`:`${incident.selectedAlternate} confirms stand and handling acceptance.`);
+  return true;
+}
+
+function handleMedicalAssessmentTask({task}){
+  createExternalWorkflowRequest(task,'Medical advisory service',5,'Medical advisory service returned operational guidance.');
+  return true;
+}
+
+function handleMedicalCoordinationTask({task,incident}){
+  incident.coordinatedDelayMin=20;
+  createExternalWorkflowRequest(task,'Destination station medical support',8,'Destination medical assistance confirmed for arrival.');
+  return true;
+}
+
+function handleFlightWatchAssessmentTask({task}){
+  createExternalWorkflowRequest(task,'Flight deck / maintenance control',6,'Flight deck status and maintenance-control guidance received.');
+  return true;
+}
+
+function handleFlightWatchCoordinationTask({task,incident,flight,actionId}){
+  const action=actionId||task.action;
+  const delay=action==='hold'?20:action==='continue_low'?25:action==='monitor'?10:12;
+  if(['hold','continue_low'].includes(action)) flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,delay);
+  incident.coordinatedDelayMin=delay;
+  task.selection={action};
+  createExternalWorkflowRequest(task,'Flight deck / ATC coordination',8,`${task.label} confirmed.`);
+  return true;
+}
+
+function handleCrewExtensionRecordTask({task,incident,actionId}){
+  const action=actionId||task.action||'record_extension';
+  task.selection={action,overrunMin:incident.context?.overrunMin||0,projectedRelease:incident.context?.projectedRelease||0};
+  const message=action==='stand_down'
+    ? 'Crew Control confirmed stand-down on arrival and post-duty review.'
+    : 'Duty extension recorded with flight deck / Crew Control for post-arrival review.';
+  createExternalWorkflowRequest(task,'Flight deck / Crew Control',5,message);
+  return true;
+}
+
+function handleFuelMonitoringTask({task,incident,flight,actionId}){
+  const action=actionId||task.action||'assess';
+  if(action==='conserve') flight.fuelConservationApplied=true;
+  incident.fuelMarginContext=fuelMarginContextForFlight(flight,simNow());
+  task.selection={action,context:incident.fuelMarginContext};
+  createExternalWorkflowRequest(task,'Flight crew fuel monitoring',6,action==='conserve'?'Fuel-conservation profile accepted.':'Fuel state and projected landing margin confirmed.');
+  return true;
+}
+
+function handleRerouteCoordinationTask({task,incident,flight,actionId}){
+  const action=actionId||task.action;
+  const baseDelay=Math.max(8,incident.context?.delayMin||15);
+  const delay=action==='direct'?Math.max(5,Math.round(baseDelay*.45)):baseDelay;
+  flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,delay);
+  window.AeroRoutePlanning?.createRouteRevision?.(flight,{
+    mode:action==='direct'?'direct':'weather_detour',
+    reason:action==='direct'?'ATC returned a shorter routing opportunity':'ATC amended route around weather',
+    hazards:incident.context?.hazards||[],
+    createdAt:simNow(),
+    metadata:{incidentId:incident.id,incidentType:incident.type,action}
+  });
+  incident.coordinatedDelayMin=delay;
+  task.selection={action,delayMin:delay};
+  createExternalWorkflowRequest(task,'ATC via flight crew',10,action==='direct'?'ATC returned a shorter routing opportunity.':'ATC amended route accepted and arrival estimate updated.');
+  return true;
+}
+
+function handleCabinSecurityCoordinationTask({task,incident,flight,actionId}){
+  const action=actionId||task.action||'assess';
+  if(action==='continue'){
+    incident.coordinatedDelayMin=15;
+    flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,15);
+  }
+  task.selection={action};
+  createExternalWorkflowRequest(task,action==='continue'?'Destination security':'Flight deck / cabin lead',8,action==='continue'?'Destination security meet confirmed.':'Cabin security status confirmed.');
+  return true;
+}
+
+function handleArrivalMaintenanceCheckTask({task,flight}){
+  const destination=flightOperationalDestination(flight);
+  task.selection={airport:destination};
+  createExternalWorkflowRequest(task,`${destination} station / maintenance`,12,'Arrival inspection and post-flight technical hold arranged.');
+  return true;
+}
+
+function handleStationCoordinationTask({task}){
+  completeOperationalTask(task,'Ground movement, equipment, and passenger handling coordinated.');
+  return true;
+}
+
+const TASK_KIND_HANDLERS={
+  crew_allocation:handleCrewAllocationTask,
+  crew_augmentation:handleCrewAugmentationTask,
+  crew_next_sector_replacement:handleCrewNextSectorReplacementTask,
+  crew_report:handleCrewReportTask,
+  maintenance_inspection:handleMaintenanceInspectionTask,
+  authority_decision:handleAuthorityDecisionTask,
+  technical_strategy:handleStrategyTask,
+  recovery_strategy:handleStrategyTask,
+  maintenance_defer:handleMaintenanceDispositionTask,
+  maintenance_disposition:handleMaintenanceDispositionTask,
+  maintenance_repair:handleMaintenanceRepairTask,
+  maintenance_check_scheduling:handleMaintenanceCheckSchedulingTask,
+  mobile_maintenance_team:handleMobileMaintenanceTeamTask,
+  maintenance_clearance:handleMaintenanceClearanceTask,
+  aircraft_substitution:handleAircraftSubstitutionTask,
+  manual_ferry_required:handleManualFerryTask,
+  manual_maintenance_ferry_required:handleManualMaintenanceFerryTask,
+  manual_crew_move_required:handleManualCrewMoveTask,
+  manual_departure_change_required:handleManualDepartureChangeTask,
+  atc_coordination:handleAtcCoordinationTask,
+  stand_request:handleStandRequestTask,
+  inbound_wait:handleInboundWaitTask,
+  turnaround_expedite:handleTurnaroundExpediteTask,
+  station_recovery:handleStationRecoveryTask,
+  fuel_recovery:handleStationRecoveryTask,
+  security_coordination:handleStationRecoveryTask,
+  performance_coordination:handlePerformanceCoordinationTask,
+  destination_handling:handleDestinationHandlingTask,
+  alternate_selection:handleAlternateSelectionTask,
+  return_origin_selection:handleReturnOriginSelectionTask,
+  flightdeck_recommendation:handleFlightdeckRecommendationTask,
+  diversion_clearance:handleDiversionClearanceTask,
+  alternate_handling:handleAlternateHandlingTask,
+  medical_assessment:handleMedicalAssessmentTask,
+  medical_coordination:handleMedicalCoordinationTask,
+  flight_watch_assessment:handleFlightWatchAssessmentTask,
+  flight_watch_coordination:handleFlightWatchCoordinationTask,
+  crew_extension_record:handleCrewExtensionRecordTask,
+  fuel_monitoring:handleFuelMonitoringTask,
+  reroute_coordination:handleRerouteCoordinationTask,
+  cabin_security_coordination:handleCabinSecurityCoordinationTask,
+  arrival_maintenance_check:handleArrivalMaintenanceCheckTask,
+  station_coordination:handleStationCoordinationTask
+};
+
+window.AeroIncidentTaskHandlers=TASK_KIND_HANDLERS;
 
 function performOperationalTask(taskId,actionId='',payload={}){
   const task=state.coordinationTasks.find(item=>item.id===taskId);
@@ -758,337 +1360,13 @@ function performOperationalTask(taskId,actionId='',payload={}){
   const blocker=['technical_strategy','recovery_strategy'].includes(task.kind)?'':AeroIncidentResources.taskResourceBlocker(task,incident);
   if(blocker) return toast(blocker);
   if(['technical_strategy','recovery_strategy','authority_decision'].includes(task.kind)&&actionId==='cancel'){
-    const strategyBlocker=AeroIncidentResources.branchStrategyOptionBlocker(task,incident,'cancel');
-    if(strategyBlocker) return toast(strategyBlocker);
-    selectIncidentStrategy(incident,'cancel');
-    task.selection={strategy:'cancel'};
-    task.status='completed';
-    task.completedAt=simNow();
-    task.completesAt=task.completedAt;
-    task.outcome='Flight cancelled as the selected incident recovery.';
-    if(incident.type==='night_curfew_conflict') cancelSingleFlight(flight.id,{skipConfirm:true,reason:INCIDENT_DEFINITIONS[incident.type]?.title||incident.type});
-    else cancelFlight(flight.id,{skipConfirm:true,reason:INCIDENT_DEFINITIONS[incident.type]?.title||incident.type});
-    return true;
+    return cancelIncidentRecoveryTask(task,incident,flight);
   }
-  if(task.kind==='crew_allocation'){
-    const option=crewPoolOptions(incident).find(item=>item.id===payload.optionId);
-    if(!option) return toast('That personnel pool is no longer available.');
-    const assignment={id:`RA${state.nextResourceAssignment++}`,incidentId:incident.id,taskId:task.id,flightId:flight.id,
-      role:option.role,base:option.airport,operatingAirport:flight.from,amount:1,family:option.family,
-      assignedAt:simNow(),reportAt:simNow()+option.reportMin*MIN,releaseAt:flightCrewRelease(flight)+10*HOUR,status:'assigned'};
-    state.resourceAssignments.push(assignment);
-    flight.crewRoleSwaps??={};
-    flight.crewRoleSwaps[option.role]={role:option.role,assignmentId:assignment.id,airport:option.airport,assignedAt:simNow()};
-    task.selection={...option,assignmentId:assignment.id};
-    completeOperationalTask(task,`${option.label} assigned.`);
-  }else if(task.kind==='crew_augmentation'){
-    const blocker=AeroIncidentResources.crewAugmentationBlocker(incident);
-    if(blocker) return toast(blocker);
-    task.selection={action:'augment',reportMin:25};
-    startOperationalTask(task,25,'in_progress','Augmented crew reports and completes briefing.');
-  }else if(task.kind==='crew_next_sector_replacement'){
-    const next=nextSectorForCrewExtensionIncident(incident);
-    if(!next) return toast('No unflown downstream sector is available for crew replacement.');
-    const duty=swapCrewForFlight(next.id);
-    if(!duty) return false;
-    task.selection={flightId:next.id,dutyId:duty.id,airport:next.from};
-    completeOperationalTask(task,`${next.id} protected with local reserve crew at ${next.from}.`);
-  }else if(task.kind==='maintenance_inspection'){
-    startOperationalTask(task,25,'in_progress','Engineering inspection completed.');
-  }else if(task.kind==='authority_decision'){
-    const decision=authorityDecisionForIncident(task,incident,flight);
-    if(!decision.strategy) return false;
-    selectIncidentStrategy(incident,decision.strategy);
-    task.selection={...decision};
-    createExternalWorkflowRequest(task,decision.counterparty,decision.durationMin,decision.outcome);
-  }else if(task.kind==='technical_strategy'||task.kind==='recovery_strategy'){
-    const options=(task.strategyOptions||[
-      {id:'defer'},{id:'schedule_check'},{id:'substitute'}
-    ]).map(option=>option.id);
-    if(!options.includes(actionId)) return false;
-    const strategyBlocker=AeroIncidentResources.branchStrategyOptionBlocker(task,incident,actionId);
-    if(strategyBlocker) return toast(strategyBlocker);
-    if(performImmediateRecoveryStrategy(task,incident,flight,actionId)){
-      processOperationalWorkflows(simNow()); recalculateOperations(); AeroServices.commit();
-      return true;
-    }
-    selectIncidentStrategy(incident,actionId);
-    task.selection={strategy:actionId};
-    completeOperationalTask(task,`${task.label}: ${actionId}.`);
-  }else if(task.kind==='maintenance_defer'||task.kind==='maintenance_disposition'){
-    const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
-    if(task.kind==='maintenance_defer'||actionId==='defer'){
-      if(incident.technicalContext?.deferAllowed===false) return toast('This technical finding is not deferrable under MEL. Schedule a technical repair or use a replacement aircraft.');
-      const finding=incident.technicalContext||OperationalIntelligence.melFinding(incident.id,incident.detectedAt);
-      aircraft.melItems??=[];
-      if(!aircraft.melItems.some(item=>item.id===finding.id)) aircraft.melItems.push({...finding,status:'open',deferredAt:simNow()});
-      aircraft.condition=clamp((aircraft.condition??100)-3,0,100);
-      incident.selectedStrategy='defer'; task.selection={action:'defer',finding};
-      completeOperationalTask(task,`Deferred under MEL ${finding.code} with documented restrictions.`);
-    }else if(actionId==='repair'){
-      incident.selectedStrategy='repair'; task.selection={action:'repair'};
-      aircraft.defectUntil=Math.max(aircraft.defectUntil||0,simNow()+120*MIN); aircraft.defectReason='Technical defect under repair';
-      startOperationalTask(task,120,'in_progress','Repair completed and engineering sign-off recorded.');
-    }else return false;
-  }else if(task.kind==='maintenance_repair'){
-    const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
-    if(!aircraft) return false;
-    if(actionId&&actionId!=='repair') return false;
-      incident.selectedStrategy='repair'; task.selection={action:'repair'};
-      aircraft.defectUntil=Math.max(aircraft.defectUntil||0,simNow()+120*MIN); aircraft.defectReason='Technical defect under repair';
-      startOperationalTask(task,120,'in_progress','Repair completed and engineering sign-off recorded.');
-  }else if(task.kind==='maintenance_check_scheduling'){
-    const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
-    if(!aircraft) return false;
-    const requestedStart=Number(payload.start)||Math.max(simNow(),flightActualDeparture(flight)-30*MIN);
-    const plan=scheduleMaintenanceCheckForAircraft(aircraft.id,requestedStart,{
-      skipConfirm:true,
-      allowFlightConflict:true,
-      preserveIncidentId:incident.id,
-      workType:'urgent_repair',
-      finding:incident.technicalContext,
-      reason:`${INCIDENT_DEFINITIONS[incident.type]?.title||incident.type}: ${incident.technicalContext?.title||'technical finding'}`
-    });
-    if(!plan) return false;
-    incident.selectedStrategy='schedule_check';
-    incident.maintenanceCheckAircraftId=aircraft.id;
-    incident.maintenanceCheckTail=aircraft.tail;
-    incident.maintenanceCheckStart=plan.start;
-    incident.maintenanceCheckEnd=plan.end;
-    aircraft.defectUntil=Math.max(aircraft.defectUntil||0,plan.end);
-    aircraft.defectReason=incident.technicalContext?.title||'Maintenance check required';
-    task.selection={action:'schedule_check',start:plan.start,end:plan.end,aircraftId:aircraft.id};
-    completeOperationalTask(task,`${aircraft.tail} ${String(plan.label||'maintenance').toLowerCase()} scheduled ${formatTime(plan.start)}-${formatTime(plan.end)}.`);
-    recalculateOperations();
-    AeroServices.persist();
-  }else if(task.kind==='mobile_maintenance_team'){
-    const plan=applyMobileMaintenanceTeam(incident);
-    if(!plan) return false;
-    incident.mobileMaintenanceSource=plan.source;
-    incident.mobileMaintenanceAirport=plan.airport;
-    incident.mobileMaintenanceArrivesAt=plan.arrivesAt;
-    incident.mobileMaintenanceCost=plan.cost;
-    task.selection={action:'send_mobile_team',source:plan.source,airport:plan.airport,responseMin:plan.responseMin,cost:plan.cost};
-    createExternalWorkflowRequest(task,'Mobile maintenance control',plan.responseMin,`${plan.source} mobile team available at ${plan.airport}; schedule the check locally.`);
-  }else if(task.kind==='maintenance_clearance'){
-    const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
-    if(aircraft){ aircraft.defectUntil=0; aircraft.defectReason=''; aircraft.condition=clamp((aircraft.condition??100)-1,0,100); }
-    task.selection={action:'release'};
-    completeOperationalTask(task,'Engineering recorded no-damage clearance.');
-  }else if(task.kind==='aircraft_substitution'){
-    const option=applyIncidentAircraftSubstitution(incident,payload.optionId);
-    if(!option) return false;
-    task.selection=option;
-    completeOperationalTask(task,`${option.label} assigned as replacement aircraft.`);
-  }else if(task.kind==='manual_ferry_required'){
-    const plan=positioningFerryPlanState(incident);
-    if(!plan.ready) return toast(plan.reason);
-    incident.selectedStrategy='position_ferry';
-    incident.positioningFerryId=plan.ferry?.id||'';
-    task.selection={action:'check_ferry',ferryFlightId:incident.positioningFerryId,projectedLocation:plan.projection?.location||''};
-    completeOperationalTask(task,incident.positioningFerryId?`Positioning ferry ${incident.positioningFerryId} confirmed.`:'Aircraft projection confirmed at origin.');
-  }else if(task.kind==='manual_maintenance_ferry_required'){
-    const plan=maintenanceFerryPlanState(incident);
-    if(!plan.ready) return toast(plan.reason);
-    incident.selectedStrategy='ferry_to_maintenance';
-    incident.maintenanceFerryId=plan.ferry?.id||'';
-    incident.maintenanceFerryAirport=plan.to;
-    task.selection={action:'check_maintenance_ferry',ferryFlightId:incident.maintenanceFerryId,to:plan.to};
-    completeOperationalTask(task,incident.maintenanceFerryId?`Maintenance ferry ${incident.maintenanceFerryId} confirmed to ${plan.to}.`:`${plan.aircraft?.tail||'Aircraft'} maintenance positioning confirmed.`);
-  }else if(task.kind==='manual_crew_move_required'){
-    const plan=crewRelocationPlanState(incident);
-    if(!plan.ready) return toast(plan.reason);
-    task.selection={action:'check_crew_move',transferId:plan.transfer?.id||'',role:plan.role,to:plan.to};
-    completeOperationalTask(task,plan.transfer?`${plan.transfer.id} positions ${PERSONNEL[plan.role]?.label?.toLowerCase()||'crew'} to ${plan.to}.`:`Qualified ${PERSONNEL[plan.role]?.label?.toLowerCase()||'crew'} confirmed at ${plan.to}.`);
-  }else if(task.kind==='manual_departure_change_required'){
-    const plan=nightDepartureChangePlanState(incident);
-    if(!plan.ready) return toast(plan.reason);
-    task.selection={action:'check_departure_change',actualDeparture:flightActualDeparture(flight),restrictionSummary:plan.restrictionSummary||''};
-    completeOperationalTask(task,plan.reason);
-  }else if(task.kind==='atc_coordination'){
-    const action=actionId||task.action;
-    if(action==='accept'){
-      const delay=Math.max(15,incident.context?.delayMin||flight.airportDelayMin||flight.airspaceDelayMin||30);
-      incident.coordinatedDelayMin=delay;
-      incident.atcOutcome=incident.type==='atc_ground_stop'
-        ? `Ground-stop release estimate accepted with a ${delay}-minute departure hold.`
-        : `Reduced airport-flow sequence accepted with a ${delay}-minute ground delay.`;
-      task.selection={action:'accept'}; completeOperationalTask(task,incident.atcOutcome);
-    }else if(action==='hold_ground'){
-      const delay=Math.max(35,incident.context?.delayMin||flight.airspaceDelayMin||flight.airportDelayMin||45);
-      incident.coordinatedDelayMin=delay;
-      incident.atcOutcome=`Ground stop held at origin with a ${delay}-minute release estimate.`;
-      task.selection={action,delayMin:delay};
-      completeOperationalTask(task,incident.atcOutcome);
-    }else if(action==='priority'){
-      const base=Math.max(15,incident.context?.delayMin||flight.airportDelayMin||flight.airspaceDelayMin||30);
-      incident.coordinatedDelayMin=Math.max(10,Math.round(base*.55));
-      incident.atcOutcome=incident.type==='atc_ground_stop'
-        ? `Flow management returned an earlier release with a ${incident.coordinatedDelayMin}-minute delay.`
-        : `Airport flow returned an earlier opportunity with a ${incident.coordinatedDelayMin}-minute delay.`;
-      task.selection={action:'priority'};
-      createExternalWorkflowRequest(task,'ATC flow management',15,incident.atcOutcome);
-    }else return false;
-  }else if(task.kind==='stand_request'){
-    const action=actionId||task.action;
-    const options={remote:{delay:20,duration:10,outcome:'Airport allocated a remote stand with passenger bussing.'},tow:{delay:30,duration:15,outcome:'Airport allocated a replacement gate requiring an aircraft tow.'},wait_gate:{delay:45,duration:20,outcome:'Airport retained the planned gate after a 45-minute hold.'}};
-    const option=options[action]; if(!option) return false;
-    incident.coordinatedDelayMin=option.delay; incident.stationOutcome=option.outcome; task.selection={action};
-    createExternalWorkflowRequest(task,'Airport stand control',option.duration,option.outcome);
-  }else if(task.kind==='inbound_wait'){
-    const delay=incident.context?.inboundDelayMin||incident.context?.delayMin||flightTotalDepartureDelayMin(flight)||15;
-    incident.coordinatedDelayMin=Math.max(15,delay);
-    task.selection={action:actionId||task.action||'wait_inbound',delayMin:incident.coordinatedDelayMin};
-    const prefix=['aircraft_out_of_position','aircraft_misposition_after_diversion'].includes(incident.type)?'Aircraft positioning':
-      ['crew_misconnect','crew_misposition_after_diversion','crew_report_delayed'].includes(incident.type)?'Crew timing':
-        incident.type==='destination_handling_unavailable'?'Destination handling':'Timing';
-    completeOperationalTask(task,`${prefix} accepted with ${incident.coordinatedDelayMin} minutes projected delay.`);
-  }else if(task.kind==='turnaround_expedite'){
-    applyTurnaroundExpedite(flight);
-    incident.coordinatedDelayMin=Math.max(0,(incident.context?.inboundDelayMin||flightTotalDepartureDelayMin(flight)||20)-15);
-    task.selection={action:'expedite_turn'};
-    createExternalWorkflowRequest(task,'Station turnaround control',10,'Ground resources reprioritized for an expedited turn.');
-  }else if(['station_recovery','fuel_recovery','security_coordination'].includes(task.kind)){
-    const action=actionId||task.action;
-    const effect=STATION_RECOVERY_EFFECTS[action];
-    if(!effect) return false;
-    const delay=action==='deice_queue'?Math.max(effect.delay,incident.context?.queueMin||incident.context?.delayMin||0):
-      action==='wait_supply'?Math.max(effect.delay,incident.context?.delayMin||0):
-      action==='fuel_outage_priority'?Math.max(effect.delay,Math.round((incident.context?.delayMin||45)*.35)):
-      effect.delay;
-    const outcome=action==='deice_queue'&&incident.context?.demand
-      ? `Station sequenced ${incident.context.demand} deicing-demand departures; treatment queue accepted.`
-      : effect.outcome;
-    if(task.kind==='fuel_recovery'&&action==='tanker_inbound'){
-      const plan=applyFuelOutageTankerPlan(incident);
-      if(!plan) return false;
-      incident.fuelTankerPlan={mode:plan.mode,previousFlightId:plan.previousFlightId||'',targetFuelGal:plan.targetFuelGal,extraFuelGal:plan.extraFuelGal,cost:plan.cost};
-    }else if(task.kind==='fuel_recovery'&&['priority','fuel_outage_priority','minimum_uplift'].includes(action)){
-      fuelFlight(flight,simNow(),true);
-    }
-    if(task.kind==='security_coordination'&&action==='offload_passenger'&&flight.pax>0){
-      flight.pax=Math.max(0,flight.pax-1);
-      if(flight.classPax?.economy) flight.classPax.economy=Math.max(0,flight.classPax.economy-1);
-    }
-    if(task.kind==='station_recovery'&&['deice','priority_deice','redeice'].includes(action)){
-      flight.deicingCompletedAt=simNow()+delay*MIN;
-      flight.deicingHoldoverUntil=flight.deicingCompletedAt+35*MIN;
-    }
-    incident.coordinatedDelayMin=delay;
-    incident.stationOutcome=outcome;
-    task.selection={action,delayMin:delay};
-    createExternalWorkflowRequest(task,task.kind==='fuel_recovery'?'Fuel provider':task.kind==='security_coordination'?'Airport security':'Station ramp control',Math.max(8,Math.ceil(delay/2)),outcome);
-  }else if(task.kind==='performance_coordination'){
-    const action=actionId||task.action;
-    if(action==='payload_reduce'){
-      const pct=incident.context?.payloadReductionPct||12;
-      incident.payloadReductionPct=pct;
-      incident.coordinatedDelayMin=20;
-      task.selection={action,payloadReductionPct:pct,delayMin:20};
-      createExternalWorkflowRequest(task,'Load control / station',10,`Payload reduction of about ${pct}% coordinated with load control.`);
-    }else if(action==='delay_conditions'){
-      const delay=Math.max(30,incident.context?.delayMin||45);
-      incident.coordinatedDelayMin=delay;
-      task.selection={action,delayMin:delay};
-      completeOperationalTask(task,`Performance window delay accepted with ${delay} minutes projected delay.`);
-    }else return false;
-  }else if(task.kind==='destination_handling'){
-    const destination=flightOperationalDestination(flight);
-    const action=actionId||task.action||'request_handling';
-    incident.coordinatedDelayMin=15;
-    task.selection={action,airport:destination,delayMin:15};
-    createExternalWorkflowRequest(task,`${destination} station / handler`,12,`${destination} confirms stand, ramp, and passenger-handling acceptance.`);
-  }else if(task.kind==='alternate_selection'){
-    const option=diversionOptionsForIncident(incident,{includeReturnOrigin:false}).find(item=>item.code===payload.airport);
-    if(!option) return toast('That alternate is no longer operationally suitable.');
-    incident.selectedAlternate=option.code;
-    incident.diversionReturnOrigin=Boolean(option.returnOrigin);
-    incident.diversionRouteKm=option.km;
-    incident.diversionDurationMs=option.duration;
-    incident.diversionDurationMode=option.durationMode||'total_from_origin';
-    incident.diversionAnchor=option.anchor||null;
-    incident.diversionFuel=option.fuel;
-    task.selection={airport:option.code,returnOrigin:Boolean(option.returnOrigin),fuel:option.fuel};
-    completeOperationalTask(task,`${option.returnOrigin?'Return to origin':option.code} selected; flight deck, ATC, and handling coordination bundled into the recovery plan.`);
-  }else if(task.kind==='return_origin_selection'){
-    const option=diversionOptionsForIncident(incident,{onlyReturnOrigin:true})[0];
-    if(!option) return toast('Return to origin is not currently suitable.');
-    incident.selectedAlternate=option.code;
-    incident.diversionReturnOrigin=true;
-    incident.diversionRouteKm=option.km;
-    incident.diversionDurationMs=option.duration;
-    incident.diversionDurationMode=option.durationMode||'total_from_origin';
-    incident.diversionFuel=option.fuel;
-    incident.diversionAnchor=option.anchor||null;
-    task.selection={airport:option.code,returnOrigin:true,fuel:option.fuel};
-    completeOperationalTask(task,`Return to ${option.code} confirmed; flight deck, ATC, and handling coordination bundled into the recovery plan.`);
-  }else if(task.kind==='flightdeck_recommendation'){
-    if(!incident.selectedAlternate) return false;
-    task.selection={airport:incident.selectedAlternate};
-    createExternalWorkflowRequest(task,'Flight deck',6,incident.diversionReturnOrigin?`Captain accepts return to ${incident.selectedAlternate}.`:`Captain accepts ${incident.selectedAlternate} as the operational alternate.`);
-  }else if(task.kind==='diversion_clearance'){
-    createExternalWorkflowRequest(task,'ATC via flight crew',8,incident.diversionReturnOrigin?`ATC clears the flight to return to ${incident.selectedAlternate}.`:`ATC clears the flight to ${incident.selectedAlternate} via an amended route.`);
-  }else if(task.kind==='alternate_handling'){
-    createExternalWorkflowRequest(task,`${incident.selectedAlternate} station / handler`,12,incident.diversionReturnOrigin?`${incident.selectedAlternate} confirms return stand and handling acceptance.`:`${incident.selectedAlternate} confirms stand and handling acceptance.`);
-  }else if(task.kind==='medical_assessment'){
-    createExternalWorkflowRequest(task,'Medical advisory service',5,'Medical advisory service returned operational guidance.');
-  }else if(task.kind==='medical_coordination'){
-    incident.coordinatedDelayMin=20;
-    createExternalWorkflowRequest(task,'Destination station medical support',8,'Destination medical assistance confirmed for arrival.');
-  }else if(task.kind==='flight_watch_assessment'){
-    createExternalWorkflowRequest(task,'Flight deck / maintenance control',6,'Flight deck status and maintenance-control guidance received.');
-  }else if(task.kind==='flight_watch_coordination'){
-    const action=actionId||task.action;
-    const delay=action==='hold'?20:action==='continue_low'?25:action==='monitor'?10:12;
-    if(['hold','continue_low'].includes(action)) flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,delay);
-    incident.coordinatedDelayMin=delay;
-    task.selection={action};
-    createExternalWorkflowRequest(task,'Flight deck / ATC coordination',8,`${task.label} confirmed.`);
-  }else if(task.kind==='crew_extension_record'){
-    const action=actionId||task.action||'record_extension';
-    task.selection={action,overrunMin:incident.context?.overrunMin||0,projectedRelease:incident.context?.projectedRelease||0};
-    const message=action==='stand_down'
-      ? 'Crew Control confirmed stand-down on arrival and post-duty review.'
-      : 'Duty extension recorded with flight deck / Crew Control for post-arrival review.';
-    createExternalWorkflowRequest(task,'Flight deck / Crew Control',5,message);
-  }else if(task.kind==='fuel_monitoring'){
-    const action=actionId||task.action||'assess';
-    if(action==='conserve') flight.fuelConservationApplied=true;
-    incident.fuelMarginContext=fuelMarginContextForFlight(flight,simNow());
-    task.selection={action,context:incident.fuelMarginContext};
-    createExternalWorkflowRequest(task,'Flight crew fuel monitoring',6,action==='conserve'?'Fuel-conservation profile accepted.':'Fuel state and projected landing margin confirmed.');
-  }else if(task.kind==='reroute_coordination'){
-    const action=actionId||task.action;
-    const baseDelay=Math.max(8,incident.context?.delayMin||15);
-    const delay=action==='direct'?Math.max(5,Math.round(baseDelay*.45)):baseDelay;
-    flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,delay);
-    window.AeroRoutePlanning?.createRouteRevision?.(flight,{
-      mode:action==='direct'?'direct':'weather_detour',
-      reason:action==='direct'?'ATC returned a shorter routing opportunity':'ATC amended route around weather',
-      hazards:incident.context?.hazards||[],
-      createdAt:simNow(),
-      metadata:{incidentId:incident.id,incidentType:incident.type,action}
-    });
-    incident.coordinatedDelayMin=delay;
-    task.selection={action,delayMin:delay};
-    createExternalWorkflowRequest(task,'ATC via flight crew',10,action==='direct'?'ATC returned a shorter routing opportunity.':'ATC amended route accepted and arrival estimate updated.');
-  }else if(task.kind==='cabin_security_coordination'){
-    const action=actionId||task.action||'assess';
-    if(action==='continue'){
-      incident.coordinatedDelayMin=15;
-      flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,15);
-    }
-    task.selection={action};
-    createExternalWorkflowRequest(task,action==='continue'?'Destination security':'Flight deck / cabin lead',8,action==='continue'?'Destination security meet confirmed.':'Cabin security status confirmed.');
-  }else if(task.kind==='arrival_maintenance_check'){
-    const destination=flightOperationalDestination(flight);
-    task.selection={airport:destination};
-    createExternalWorkflowRequest(task,`${destination} station / maintenance`,12,'Arrival inspection and post-flight technical hold arranged.');
-  }else if(task.kind==='station_coordination'){
-    completeOperationalTask(task,'Ground movement, equipment, and passenger handling coordinated.');
-  }else return false;
-  processOperationalWorkflows(simNow()); recalculateOperations(); AeroServices.commit();
-  return true;
+  const handler=TASK_KIND_HANDLERS[task.kind];
+  if(!handler) return false;
+  const handled=handler({task,incident,flight,actionId,payload});
+  if(!handled) return false;
+  return completePerformedOperationalTask();
 }
 
 function applyIncidentMinimumDelay(f,minutes){

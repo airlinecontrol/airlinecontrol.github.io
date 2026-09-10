@@ -9,6 +9,15 @@
   const frame=document.getElementById('game');
   const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+  async function waitFor(selector,timeout=1200){
+    const started=Date.now();
+    while(Date.now()-started<timeout){
+      const match=frame.contentDocument?.querySelector(selector);
+      if(match) return match;
+      await wait(50);
+    }
+    return null;
+  }
   try{
     localStorage.removeItem('aerosim_mvp_v6');
     localStorage.removeItem('aerosim_occ_ui_v1');
@@ -75,7 +84,7 @@
     w.alignScheduleWindowToFlight(quotaFlight);
     w.refreshAll();
     await wait(100);
-    const restrictionBar=d.querySelector(`#schedule-board .night-closure-bar.restriction[data-night-flight="${quotaFlight.id}"][data-night-airport="LHR"]`);
+    const restrictionBar=await waitFor(`#schedule-board .night-closure-bar.restriction[data-night-flight="${quotaFlight.id}"][data-night-airport="LHR"]`);
     assert(restrictionBar,'quota/noise night restriction did not render a lighter schedule bar');
 
     const flight=w.createFlightRecord({
