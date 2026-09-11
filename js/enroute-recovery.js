@@ -35,6 +35,7 @@ function enrouteRecoveryContextForFlight(flight,t=simNow()){
       : extraFuelGal&&marginPct<105
         ? `Fuel margin would fall to ${marginPct}% of reserve.`
         : '';
+    const response=global.AeroIncidentDelay?.enrouteResponseEstimate?.(flight,{id})||{responseLowMin:3,responseHighMin:10,responseMin:6};
     return {
       id,label,detail,
       recoverMin:Math.max(0,recoverMin),
@@ -42,6 +43,9 @@ function enrouteRecoveryContextForFlight(flight,t=simNow()){
       extraFuelGal,
       fuelMarginPct:marginPct,
       waitExternal,
+      responseMin:response.responseMin,
+      responseLowMin:response.responseLowMin,
+      responseHighMin:response.responseHighMin,
       disabled:Boolean(disabledReason),
       disabledReason
     };
@@ -98,14 +102,14 @@ function requestEnrouteRecovery(flightId,optionId){
   const option=context.options.find(item=>item.id===optionId);
   if(context.unavailableReason) return toast(context.unavailableReason);
   if(!option||option.disabled) return toast(option?.disabledReason||'This en-route recovery option is not available.');
-  const waitBase=option.id==='speed'?3:5;
-  const waitSpread=option.id==='speed'?4:7;
-  const waitMin=waitBase+Math.round(stableFraction(`${flight.id}:${option.id}:${simNow()}`)*waitSpread);
+  const timing=global.AeroIncidentDelay?.lockEnrouteResponse?.(flight,option)||{responseMin:6};
+  const waitMin=Math.max(3,Number(timing.responseMin)||6);
   flight.enrouteRecoveryRequest={
     id:`ERR-${flight.id}-${Math.round(simNow())}`,
     option:option.id,label:option.label,
     recoverMin:option.recoverMin,cost:option.cost,extraFuelGal:option.extraFuelGal,
-    requestedAt:simNow(),respondsAt:simNow()+waitMin*MIN,status:'pending'
+    requestedAt:simNow(),respondsAt:simNow()+waitMin*MIN,status:'pending',
+    responseMin:waitMin,responseLowMin:timing.responseLowMin||waitMin,responseHighMin:timing.responseHighMin||waitMin
   };
   AeroServices.persist();
   requestUiRefresh('desk','schedule','context');

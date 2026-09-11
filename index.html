@@ -9,7 +9,7 @@
   <link rel="icon" href="assets/favicon-16.png" sizes="16x16" type="image/png" />
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-  <link rel="stylesheet" href="aerosim-next.css?v=1.8.65" />
+  <link rel="stylesheet" href="aerosim-next.css?v=1.8.68" />
 </head>
 <body>
 <div id="app">
@@ -54,6 +54,8 @@
       </section>
     </aside>
 
+    <div id="left-rail-splitter" class="rail-splitter" role="separator" aria-orientation="vertical" aria-label="Resize left panel" tabindex="0"></div>
+
     <section id="center-workspace">
       <div id="map-pane">
         <div id="map"></div>
@@ -77,6 +79,8 @@
         <div id="schedule-scroll"><div id="schedule-board"></div></div>
       </div>
     </section>
+
+    <div id="right-rail-splitter" class="rail-splitter" role="separator" aria-orientation="vertical" aria-label="Resize right panel" tabindex="0"></div>
 
     <aside class="context-rail" aria-label="OCC actions and operational attention">
       <div id="deskStack" class="desk-stack" aria-label="OCC actions and operational attention"></div>
@@ -165,7 +169,7 @@
 <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
 <script src="js/management.js?v=14.3.6"></script>
 <script src="js/catalogs.js?v=1.0.2"></script>
-<script src="js/core.js?v=14.4.32"></script>
+<script src="js/core.js?v=14.4.33"></script>
 <script src="js/app-services.js?v=14.2.1"></script>
 <script src="js/weather-engine.js?v=14.3.4"></script>
 <script src="js/route-planning.js?v=1.0.3"></script>
@@ -174,21 +178,22 @@
 <script src="js/operational-workflows.js?v=14.1.25"></script>
 <script src="js/incident-catalog.js?v=1.0.5"></script>
 <script src="js/migrations.js?v=1.0.3"></script>
-<script src="js/simulation.js?v=14.6.67"></script>
-<script src="js/enroute-recovery.js?v=1.0.0"></script>
+<script src="js/simulation.js?v=14.6.68"></script>
+<script src="js/enroute-recovery.js?v=1.0.1"></script>
 <script src="js/scheduling.js?v=1.0.7"></script>
 <script src="js/crew-ops.js?v=1.0.3"></script>
 <script src="js/customer-recovery.js?v=1.0.2"></script>
 <script src="js/maintenance-planning.js?v=1.0.0"></script>
-<script src="js/incident-runtime.js?v=1.0.13"></script>
+<script src="js/incident-delay-model.js?v=1.0.0"></script>
+<script src="js/incident-runtime.js?v=1.0.15"></script>
 <script src="js/derived-incidents.js?v=1.0.4"></script>
 <script src="js/incident-generation.js?v=1.0.3"></script>
 <script src="js/incident-resources.js?v=14.2.23"></script>
-<script src="js/incident-consequences.js?v=14.2.19"></script>
+<script src="js/incident-consequences.js?v=14.2.20"></script>
 <script src="js/operational-warnings.js?v=1.0.1"></script>
 <script src="js/ui-warnings.js?v=1.0.0"></script>
 <script src="js/ui-schedule.js?v=1.0.8"></script>
-<script src="js/ui-next.js?v=1.10.109"></script>
+<script src="js/ui-next.js?v=1.10.115"></script>
 <script src="js/map.js?v=15.0.10"></script>
 </body>
 </html>

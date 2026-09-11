@@ -309,6 +309,7 @@ function deskCollapseKey(desk){ return `next:${desk}`; }
 function isDeskOpen(desk){ return workspaceUi.collapsed.occ[deskCollapseKey(desk)]!==true; }
 function isRailWidgetOpen(widget){ return workspaceUi.collapsed.rail?.[widget]!==true; }
 function activeDeskPanel(desk){ return workspaceUi.nextDeskPanels?.[desk]||''; }
+function activeDeskTab(desk){ return activeDeskPanel(desk)||'overview'; }
 function isStaffAirportExpanded(code){ return workspaceUi.expandedStaffAirports?.[code]===true; }
 function toggleStaffAirport(code){
   if(!AIRPORTS[code]) return;
@@ -813,9 +814,10 @@ function bindMaintenanceRail(root){
 }
 
 function maintenanceRailMarkup(jobs,now=simNow()){
-  return `${deskActionBar('maintenance',[{panel:'schedule',label:'Schedule'}])}
+  const active=activeDeskTab('maintenance');
+  return `${deskActionBar('maintenance',[{panel:'overview',label:'Overview'},{panel:'schedule',label:'Schedule'}])}
     ${deskPanelMarkup('maintenance','schedule','Schedule maintenance',maintenanceSchedulerPanelMarkup())}
-    <div class="maintenance-work-list">${jobs.length?jobs.map(item=>maintenanceWorkCardMarkup(item,now)).join(''):'<div class="empty-state">No planned or active maintenance work.</div>'}</div>`;
+    ${active==='overview'?`<div class="maintenance-work-list">${jobs.length?jobs.map(item=>maintenanceWorkCardMarkup(item,now)).join(''):'<div class="empty-state">No planned or active maintenance work.</div>'}</div>`:''}`;
 }
 
 function refreshMaintenanceRail(force=false){
@@ -947,6 +949,7 @@ function refreshPersonnelRail(force=false){
   if(count) count.textContent=activeTransfers.length;
   restoreEmbeddedManagementPages(root);
   root.innerHTML=`${deskActionBar('personnel',[
+      {panel:'overview',label:'Overview'},
       {panel:'relocation',label:'Move personnel'},
       {panel:'crew-swap',label:'Swap full crew'}
     ])}${personnelDeskMarkup([],activeTransfers)}`;
@@ -1378,9 +1381,19 @@ function incidentHasStartedWork(incident){
   return incidentTasks(incident.id).some(task=>['in_progress','waiting_external'].includes(task.status));
 }
 
+function incidentHasVisibleWork(incident){
+  if(!incident||incident.status!=='open') return false;
+  const progress=typeof incidentWorkflowProgress==='function'
+    ? incidentWorkflowProgress(incident)
+    : {current:incidentTasks(incident.id).find(task=>task.required&&task.status!=='cancelled')};
+  const task=progress?.current;
+  return Boolean(task&&['available','blocked','in_progress','waiting_external'].includes(task.status));
+}
+
 function incidentIsActionable(incident,now=simNow()){
   const flight=incidentFlight(incident);
   if(incidentHasStartedWork(incident)) return true;
+  if(incident?.blocking&&incidentHasVisibleWork(incident)) return true;
   if(!flight) return incident.severity==='critical'||(incident.deadline||0)<=now;
   const dep=flightActualDeparture(flight),arr=flightActualArrival(flight);
   const airborne=flight.departureLogged&&arr>now;
@@ -1389,6 +1402,51 @@ function incidentIsActionable(incident,now=simNow()){
   const criticalToday=incident.severity==='critical'&&dep<=now+24*HOUR&&arr>now-2*HOUR;
   const overdueToday=(incident.deadline||0)<=now&&dep<=now+24*HOUR&&arr>now-2*HOUR;
   return airborne||nearDeparture||activeTurn||criticalToday||overdueToday;
+}
+
+function incidentDisplayProgress(incident){
+  return typeof incidentWorkflowProgress==='function'
+    ? incidentWorkflowProgress(incident)
+    : {current:incidentTasks(incident.id).find(task=>task.required&&task.status!=='cancelled'),completed:0,total:0,progress:0};
+}
+
+function incidentNeedsUserAction(incident,now=simNow()){
+  if(!incident||incident.status!=='open') return false;
+  const progress=incidentDisplayProgress(incident);
+  const task=progress?.current;
+  if(task){
+    if(['available','blocked'].includes(task.status)) return true;
+    if(['in_progress','waiting_external'].includes(task.status)) return false;
+  }
+  return incidentIsActionable(incident,now)&&!incidentHasStartedWork(incident);
+}
+
+function incidentIsWaiting(incident){
+  const task=incidentDisplayProgress(incident)?.current;
+  return Boolean(task&&['in_progress','waiting_external'].includes(task.status));
+}
+
+function incidentQueueBucket(incident,now=simNow()){
+  if(incidentNeedsUserAction(incident,now)) return 'actionable';
+  if(incidentIsWaiting(incident)) return 'waiting';
+  return 'monitoring';
+}
+
+function incidentQueueBuckets(incidents,now=simNow()){
+  const buckets={actionable:[],waiting:[],monitoring:[]};
+  for(const group of disruptionCaseGroups(incidents,now)){
+    const bucket=group.incidents.some(incident=>incidentNeedsUserAction(incident,now))
+      ? 'actionable'
+      : group.incidents.some(incident=>incidentIsWaiting(incident))
+        ? 'waiting'
+        : 'monitoring';
+    buckets[bucket].push(group);
+  }
+  return buckets;
+}
+
+function incidentGroupsCount(groups){
+  return groups.reduce((sum,group)=>sum+group.incidents.length,0);
 }
 
 function actionableIncidentIdSet(now=simNow()){
@@ -1693,10 +1751,11 @@ function incidentDefaultMarkup(incident){
   return `<div class="case-default-policy ${incident.defaultApplied?'applied':''}"><span>${esc(stateLabel)} ${infoTip(summary)}</span><b>${esc(label)}</b></div>`;
 }
 function incidentCaseMarkup(incident){
-  const copy=incidentCopy(incident),progress=incidentWorkflowProgress(incident),task=progress.current;
+  const copy=incidentCopy(incident),progress=incidentDisplayProgress(incident),task=progress.current;
   const flight=state.flights.find(item=>item.id===incident.flightId),aircraft=state.aircraft.find(item=>item.id===incident.aircraftId);
   const reference=flight?`${flight.id} · ${flight.from} → ${flightOperationalDestination(flight)}`:aircraft?`${aircraft.tail} · ${aircraft.model}`:'Operational case';
   const activeCase=workspaceUi.nextActiveIncidentId===incident.id;
+  const details=[caseSlotCauseMarkup(incident),caseImpactsMarkup(incident),caseStepsMarkup(incident,task)].filter(Boolean).join('');
   return `<article class="incident-case case-console expanded ${activeCase?'active-case':''} ${focusedTaskId===task?.id?'focused':''}" data-incident-case="${esc(incident.id)}">
     <header class="incident-case-header"><button type="button" data-case-object="${esc(flight?'flight':'aircraft')}" data-case-object-id="${esc(flight?.id||aircraft?.id||'')}"><span>${esc(reference)}</span><b>${esc(copy.title)}</b></button><em>${incident.blocking?'Blocking':'Open'}</em></header>
     <p>${esc(copy.summary)}</p>
@@ -1704,7 +1763,8 @@ function incidentCaseMarkup(incident){
     ${incidentDefaultMarkup(incident)}
     <div class="incident-meta"><span>${esc(incidentDecisionSummary(incident,task))}</span><span>${progress.completed}/${progress.total} steps</span></div>
     <div class="progress-track"><span style="width:${formatPct(progress.progress)}"></span></div>
-    ${caseSlotCauseMarkup(incident)}${caseActiveTaskMarkup(incident,task)}${caseImpactsMarkup(incident)}${caseStepsMarkup(incident,task)}
+    ${caseActiveTaskMarkup(incident,task)}
+    ${details?`<details class="incident-case-more"><summary>Case details</summary>${details}</details>`:''}
   </article>`;
 }
 
@@ -1770,9 +1830,12 @@ function disruptionCaseGroupMarkup(group){
 }
 
 function deskActionBar(desk,actions){
-  return `<div class="desk-action-bar">${actions.map(action=>{
+  const hasTabs=actions.some(action=>action.kind!=='direct');
+  const activePanel=activeDeskPanel(desk);
+  return `<div class="desk-action-bar ${hasTabs?'desk-tabs':''}" ${hasTabs?'role="tablist"':''}>${actions.map(action=>{
     if(action.kind==='direct') return `<button class="desk-action-link" type="button" ${action.attr||''}>${esc(action.label)}</button>`;
-    return `<button class="desk-action-link ${activeDeskPanel(desk)===action.panel?'active':''}" type="button" data-desk-panel="${esc(desk)}:${esc(action.panel)}">${esc(action.label)}</button>`;
+    const active=activePanel?activePanel===action.panel:action.panel==='overview';
+    return `<button class="desk-action-tab ${active?'active':''}" type="button" role="tab" aria-selected="${active}" data-desk-panel="${esc(desk)}:${esc(action.panel)}">${esc(action.label)}</button>`;
   }).join('')}</div>`;
 }
 
@@ -2183,10 +2246,13 @@ function enrouteRecoveryActionRowMarkup(flight){
   const optionButtons=context.options.map(option=>{
     const disabled=Boolean(context.unavailableReason||option.disabled);
     const detail=option.disabledReason||option.detail;
+    const responseText=option.responseHighMin
+      ? option.responseLowMin===option.responseHighMin?`reply ${option.responseHighMin} min`:`reply ${option.responseLowMin}-${option.responseHighMin} min`
+      : 'reply pending';
     return `<button class="choice-button" type="button" data-enroute-recovery="${esc(flight.id)}" data-recovery-option="${esc(option.id)}" ${disabled?'disabled':''}>
       <b>${esc(option.label)}</b>
       <span>${esc(detail)}</span>
-      <em class="choice-consequence">possible -${esc(option.recoverMin)} min · fuel margin ${esc(option.fuelMarginPct)}%</em>
+      <em class="choice-consequence">possible -${esc(option.recoverMin)} min · ${esc(responseText)} · fuel margin ${esc(option.fuelMarginPct)}%</em>
       <em class="choice-cost">est ${esc(money(option.cost))}</em>
     </button>`;
   }).join('');
@@ -2367,30 +2433,84 @@ function planningDeskMarkup(requests){
 }
 
 function personnelDeskMarkup(requests,transfers){
+  const active=activeDeskTab('personnel');
   return `${deskPanelMarkup('personnel','relocation','Move personnel')}
     ${deskPanelMarkup('personnel','crew-swap','Swap full crew',crewSwapPanelMarkup())}
-    ${personnelSnapshotMarkup()}${resourceActivityMarkup([],transfers,'Personnel movement') || ''}`;
+    ${active==='overview'?`${personnelSnapshotMarkup()}${resourceActivityMarkup([],transfers,'Personnel movement') || ''}`:''}`;
 }
 
-function incidentFilterMarkup(allIncidents){
-  const counts=incidentTriageCounts(allIncidents),active=['actionable','today','watch','all'].includes(workspaceUi.incidentFilter)?workspaceUi.incidentFilter:'actionable';
-  const filters=[
-    ['actionable','Actionable',counts.actionable],
-    ['today','Today',counts.today],
-    ['watch','Watch',counts.watch],
-    ['all','All',counts.all]
-  ];
-  return `<div class="incident-filter" role="tablist" aria-label="Incident triage">${filters.map(([key,label,count])=>`<button type="button" role="tab" class="${active===key?'active':''}" aria-selected="${active===key}" data-incident-filter="${key}"><span>${esc(label)}</span><b>${count}</b></button>`).join('')}</div>`;
+function incidentGroupCardMarkup(group){
+  return group.incidents.length>1?disruptionCaseGroupMarkup(group):incidentCaseMarkup(group.incidents[0]);
+}
+
+function incidentSummaryReference(incident){
+  const flight=state.flights.find(item=>item.id===incident.flightId);
+  const aircraft=state.aircraft.find(item=>item.id===incident.aircraftId);
+  if(flight) return `${flight.id} · ${flight.from} → ${flightOperationalDestination(flight)}`;
+  if(aircraft) return `${aircraft.tail} · ${aircraft.model}`;
+  return 'Operational case';
+}
+
+function incidentSummaryRow(incident){
+  const copy=incidentCopy(incident);
+  const progress=incidentDisplayProgress(incident);
+  const task=progress.current;
+  const flight=state.flights.find(item=>item.id===incident.flightId);
+  const aircraft=state.aircraft.find(item=>item.id===incident.aircraftId);
+  const actionAttr=flight
+    ? `data-case-object="flight" data-case-object-id="${esc(flight.id)}"`
+    : aircraft
+      ? `data-case-object="aircraft" data-case-object-id="${esc(aircraft.id)}"`
+      : '';
+  const detail=[incidentSummaryReference(incident),task?`${caseStepStatusLabel(task)} · ${task.label}`:incidentDecisionSummary(incident,task)].filter(Boolean).join(' · ');
+  return `<div class="desk-list-row incident-summary-row ${incident.severity==='critical'?'critical':'warning'}" data-incident-summary="${esc(incident.id)}">
+    <button class="row-main-button" type="button" ${actionAttr} data-incident-focus="${esc(incident.id)}"><b>${esc(copy.title)}</b><span>${esc(detail)}</span></button>
+    <em>${incident.blocking?'Blocking':'Open'}</em>
+  </div>`;
+}
+
+function incidentGroupSummaryRow(group){
+  const root=group.root||group.incidents[0];
+  const copy=incidentCopy(root);
+  const actionable=group.incidents.filter(incident=>incidentNeedsUserAction(incident)).length;
+  const waiting=group.incidents.filter(incidentIsWaiting).length;
+  const detail=[
+    disruptionRootReference(root),
+    actionable?`${actionable} ready`:waiting?`${waiting} waiting`:'',
+    `${group.incidents.length} open`
+  ].filter(Boolean).join(' · ');
+  return `<div class="desk-list-row incident-summary-row ${group.incidents.some(incident=>incident.severity==='critical')?'critical':'warning'}" data-incident-summary="${esc(root.id)}">
+    <button class="row-main-button" type="button" data-incident-focus="${esc(root.id)}"><b>${esc(copy.title)}</b><span>${esc(detail)}</span></button>
+    <em>Case</em>
+  </div>`;
+}
+
+function incidentCollapsedSectionMarkup(label,groups,{open=false}={}){
+  const count=incidentGroupsCount(groups);
+  if(!count) return '';
+  const rows=groups.map(group=>group.incidents.length>1?incidentGroupSummaryRow(group):incidentSummaryRow(group.incidents[0])).join('');
+  return `<details class="incident-queue-more" ${open?'open':''}>
+    <summary><span>${esc(label)}</span><b>${count}</b></summary>
+    <div class="incident-summary-list">${rows}</div>
+  </details>`;
+}
+
+function incidentVisibleSectionMarkup(label,groups,className=''){
+  const count=incidentGroupsCount(groups);
+  if(!count) return '';
+  return `<section class="incident-queue-section ${esc(className)}"><header><h2>${esc(label)}</h2><span>${count}</span></header><div class="incident-case-list">${groups.map(incidentGroupCardMarkup).join('')}</div></section>`;
 }
 
 function incidentsDeskMarkup(allIncidents){
-  const filter=['actionable','today','watch','all'].includes(workspaceUi.incidentFilter)?workspaceUi.incidentFilter:'actionable';
-  const incidents=filteredOperationalIncidents(allIncidents,filter);
-  const groups=disruptionCaseGroups(incidents);
-  const empty=filter==='actionable'&&allIncidents.length
-    ? '<div class="occ-clear-state"><b>No immediate cases</b><span>Open cases are parked in Today, Watch, or All.</span></div>'
-    : '<div class="occ-clear-state"><b>Operation normal</b><span>No unresolved incidents require coordination.</span></div>';
-  return `${incidentFilterMarkup(allIncidents)}<div class="incident-case-list">${groups.length?groups.map(group=>group.incidents.length>1?disruptionCaseGroupMarkup(group):incidentCaseMarkup(group.incidents[0])).join(''):empty}</div>`;
+  if(!allIncidents.length) return '<div class="occ-clear-state"><b>Operation normal</b><span>No unresolved incidents require coordination.</span></div>';
+  const buckets=incidentQueueBuckets(allIncidents);
+  const actionableCount=incidentGroupsCount(buckets.actionable);
+  const actionable=buckets.actionable.length
+    ? buckets.actionable.map(incidentGroupCardMarkup).join('')
+    : '<div class="occ-clear-state compact"><b>No immediate cases</b><span>Open incidents are waiting for replies or monitoring.</span></div>';
+  return `<section class="incident-queue-section actionable"><header><h2>Actionable</h2><span>${actionableCount}</span></header><div class="incident-case-list">${actionable}</div></section>
+    ${incidentVisibleSectionMarkup('Waiting / external replies',buckets.waiting,'waiting')}
+    ${incidentCollapsedSectionMarkup('Monitoring / later',buckets.monitoring)}`;
 }
 
 function passengerRecoveryDeskMarkup(exposures=passengerRecoveryExposures()){
@@ -2447,10 +2567,12 @@ function renderDeskStack(force=false){
   const now=simNow();
   const index=operationalIndex(now);
   const incidents=openOperationalIncidents();
-  const filteredIncidents=filteredOperationalIncidents(incidents);
-  const activeIncident=activeIncidentCase(filteredIncidents);
+  const incidentBuckets=incidentQueueBuckets(incidents,now);
+  const visiblePriorityIncidents=incidentBuckets.actionable.flatMap(group=>group.incidents);
+  const activeIncident=activeIncidentCase(visiblePriorityIncidents.length?visiblePriorityIncidents:incidents);
   workspaceUi.nextActiveIncidentId=activeIncident?.id||'';
   const disruptionGroupCount=disruptionCaseGroups(incidents).length;
+  const actionableIncidentCount=incidentGroupsCount(incidentBuckets.actionable);
   const activeRequests=(state.resourceRequests||[]).filter(item=>!['delivered','cancelled'].includes(item.status));
   const passengerExposures=typeof passengerRecoveryExposures==='function'?passengerRecoveryExposures(now):[];
   const passengerActionCount=passengerExposures.filter(item=>!item.arranged).length;
@@ -2462,7 +2584,6 @@ function renderDeskStack(force=false){
   const signature=[
     selectedFlightId||'',selectedAircraftId||'',
     workspaceUi.nextActiveIncidentId||'',
-    workspaceUi.incidentFilter||'actionable',
     incidents.map(item=>`${item.id}:${item.status}:${item.blocking?1:0}:${item.caseId||''}:${item.rootIncidentId||''}:${item.triggeredByIncidentId||''}:${item.chainReason||''}:${(item.impacts||[]).map(impact=>`${impact.key}:${impact.status}:${impact.summary}`).join(',')}`).join('|'),
     actionableTasks().map(t=>`${t.id}:${t.status}:${t.completesAt}:${t.outcome||''}:${JSON.stringify(t.selection||{})}`).join('|'),
     (state.externalRequests||[]).map(item=>`${item.id}:${item.status}:${item.respondsAt}`).join('|'),
@@ -2495,7 +2616,7 @@ function renderDeskStack(force=false){
   lastDeskStackSignature=signature;
   noteRenderSurface?.('desk','rendered');
   restoreEmbeddedManagementPages(root);
-  root.innerHTML=`${occWidgetMarkup('incidents','Operational work','Open incidents',disruptionGroupCount,incidents.length?`${disruptionGroupCount} disruption case${disruptionGroupCount===1?'':'s'} · ${incidents.length} open incident${incidents.length===1?'':'s'}`:'No action required',deskActionBar('incidents',[
+  root.innerHTML=`${occWidgetMarkup('incidents','Operational work','Open incidents',disruptionGroupCount,incidents.length?`${actionableIncidentCount} actionable · ${incidents.length} open incident${incidents.length===1?'':'s'}`:'No action required',deskActionBar('incidents',[
       {kind:'direct',label:'Training scenario',attr:'data-training-incident'}
     ]),incidentsDeskMarkup(incidents))}
     ${occWidgetMarkup('warnings','Operational risk','Warnings',warnings.length,warnings.length?`${criticalWarnings} critical · ${warnings.length} derived warning${warnings.length===1?'':'s'}`:'No derived schedule risks','',warningsDeskMarkup(warnings))}
@@ -2514,16 +2635,16 @@ function renderDeskStack(force=false){
     setDeskPanel(desk,panel);
     markUiDirty('desk');
   }));
-  root.querySelectorAll('[data-incident-filter]').forEach(button=>button.addEventListener('click',()=>{
-    setIncidentFilter(button.dataset.incidentFilter);
-    markUiDirty('desk');
-  }));
   root.querySelectorAll('[data-close-desk-panel]').forEach(button=>button.addEventListener('click',()=>{
     setDeskPanel(button.dataset.closeDeskPanel,'');
     markUiDirty('desk');
   }));
   root.querySelector('[data-training-incident]')?.addEventListener('click',generateTrainingIncident);
   root.querySelectorAll('[data-case-object]').forEach(button=>button.addEventListener('click',()=>button.dataset.caseObject==='flight'?settleSelectedFlight(button.dataset.caseObjectId):settleSelected(button.dataset.caseObjectId)));
+  root.querySelectorAll('[data-incident-focus]').forEach(button=>button.addEventListener('click',()=>{
+    setActiveIncidentCase(button.dataset.incidentFocus);
+    markUiDirty('desk');
+  }));
   root.querySelectorAll('[data-task-flight]').forEach(button=>button.addEventListener('click',event=>{
     event.stopPropagation();
     settleSelectedFlight(button.dataset.taskFlight);
@@ -2697,6 +2818,11 @@ function refreshDepartmentWidgets(force=false){
   renderDeskStack(force);
 }
 
+function setElementText(id,value){
+  const element=document.getElementById(id);
+  if(element&&element.textContent!==String(value)) element.textContent=String(value);
+}
+
 function refreshHeader(){
   const now=simNow();
   const active=operationalIndex(now).activeFlights;
@@ -2711,11 +2837,12 @@ function refreshHeader(){
   }
   const recentCompleted=completed.slice(-50);
   const onTime=recentCompleted.length?Math.round(recentCompleted.filter(f=>flightTotalDepartureDelayMin(f)<=15).length/recentCompleted.length*100):100;
-  document.getElementById('simClock').textContent=new Intl.DateTimeFormat('en-GB',{weekday:'short',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(now));
-  document.getElementById('headerActive').textContent=active.length;
-  document.getElementById('headerUpcoming').textContent=upcomingCount;
-  document.getElementById('headerOnTime').textContent=`${onTime}%`;
-  document.title=`(${openIncidentCount}) ${APP_TITLE}`;
+  setElementText('simClock',new Intl.DateTimeFormat('en-GB',{weekday:'short',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(now)));
+  setElementText('headerActive',active.length);
+  setElementText('headerUpcoming',upcomingCount);
+  setElementText('headerOnTime',`${onTime}%`);
+  const title=`(${openIncidentCount}) ${APP_TITLE}`;
+  if(document.title!==title) document.title=title;
   refreshPauseControl();
 }
 function refreshKPIs(){ refreshHeader(); }
@@ -2730,9 +2857,11 @@ function refreshPauseControl(){
     speedSelect.disabled=paused;
   }
   if(pauseButton){
-    pauseButton.innerHTML=paused?'&#9654;':'&#10074;&#10074;';
-    pauseButton.title=paused?'Resume simulation':'Pause simulation';
-    pauseButton.setAttribute('aria-label',paused?'Resume simulation':'Pause simulation');
+    const label=paused?'Resume simulation':'Pause simulation';
+    const icon=paused?'&#9654;':'&#10074;&#10074;';
+    if(pauseButton.innerHTML!==icon) pauseButton.innerHTML=icon;
+    if(pauseButton.title!==label) pauseButton.title=label;
+    if(pauseButton.getAttribute('aria-label')!==label) pauseButton.setAttribute('aria-label',label);
     pauseButton.setAttribute('aria-pressed',paused?'true':'false');
     pauseButton.classList.toggle('paused',paused);
   }
@@ -2751,10 +2880,37 @@ function setHomeBase(code){
   toast(`Home base set to ${code}.`);
 }
 
+function plannerMinimumTurnaround(){
+  const ac=state.aircraft.find(item=>item.id===aircraftEl.value);
+  if(!ac) return 90;
+  const turnStation=AIRPORTS[destEl.value]?destEl.value:ac.location||state.home;
+  return Math.max(25,minimumTurnMinutes(ac,turnStation));
+}
+function syncPlannerTurnaroundMinimum({force=false}={}){
+  if(!turnaroundEl) return;
+  const minimum=plannerMinimumTurnaround();
+  const previousAuto=Number(turnaroundEl.dataset.minimumTurnaround)||0;
+  const current=Number(turnaroundEl.value);
+  const untouched=!turnaroundEl.dataset.userTurnaround||current===previousAuto;
+  turnaroundEl.min=String(minimum);
+  turnaroundEl.dataset.minimumTurnaround=String(minimum);
+  if(force||untouched||!Number.isFinite(current)||current<minimum){
+    turnaroundEl.value=String(minimum);
+    if(force||current<minimum) delete turnaroundEl.dataset.userTurnaround;
+  }
+}
+function notePlannerTurnaroundEdit(){
+  const current=Number(turnaroundEl.value);
+  const automatic=Number(turnaroundEl.dataset.minimumTurnaround)||plannerMinimumTurnaround();
+  if(Number.isFinite(current)&&current!==automatic) turnaroundEl.dataset.userTurnaround='true';
+  else delete turnaroundEl.dataset.userTurnaround;
+}
+
 function refreshScheduleMode(){
   const recurring=scheduleTypeEl.value==='recurring',ferry=scheduleTypeEl.value==='ferry';
   document.getElementById('repeatRuleWrap').hidden=!recurring;
   document.getElementById('turnaroundWrap').hidden=!recurring;
+  if(recurring) syncPlannerTurnaroundMinimum();
   if(ferry){
     const ac=state.aircraft.find(item=>item.id===aircraftEl.value),departure=nextTimestampForClock(departureTimeEl.value);
     const projected=ac&&aircraftProjectedLocation(ac,departure||simNow());
@@ -3010,12 +3166,86 @@ function initWorkspaceSplitter(){
   splitter.addEventListener('pointerup',stop); splitter.addEventListener('pointercancel',stop);
 }
 
+function railWidthFallback(totalWidth){
+  return clamp(totalWidth*.26,300,440);
+}
+function readRailWidths(){
+  const total=document.getElementById('operationsView')?.getBoundingClientRect().width||window.innerWidth||1400;
+  return {
+    left:Number(localStorage.getItem(LEFT_SIDEBAR_SPLIT_KEY))||railWidthFallback(total),
+    right:Number(localStorage.getItem(RIGHT_SIDEBAR_SPLIT_KEY))||railWidthFallback(total)
+  };
+}
+function clampRailWidths(widths=readRailWidths()){
+  const shell=document.getElementById('operationsView');
+  const total=shell?.getBoundingClientRect().width||window.innerWidth||1400;
+  const min=240;
+  const absoluteMax=Math.min(620,Math.max(min,total-420-18-min));
+  let left=clamp(widths.left,min,absoluteMax);
+  let right=clamp(widths.right,min,absoluteMax);
+  const centerMin=window.matchMedia('(max-width:1100px)').matches?360:window.matchMedia('(max-width:1280px)').matches?420:460;
+  const availableForRails=total-centerMin-18;
+  if(left+right>availableForRails){
+    const scale=availableForRails/Math.max(1,left+right);
+    left=clamp(left*scale,min,absoluteMax);
+    right=clamp(right*scale,min,absoluteMax);
+  }
+  return {left:Math.round(left),right:Math.round(right)};
+}
+function applyRailWidths(widths=readRailWidths(),{persist=false}={}){
+  if(window.matchMedia('(max-width:900px)').matches) return;
+  const normalized=clampRailWidths(widths);
+  document.documentElement.style.setProperty('--aoc-left-rail-width',`${normalized.left}px`);
+  document.documentElement.style.setProperty('--aoc-right-rail-width',`${normalized.right}px`);
+  if(persist){
+    localStorage.setItem(LEFT_SIDEBAR_SPLIT_KEY,String(normalized.left));
+    localStorage.setItem(RIGHT_SIDEBAR_SPLIT_KEY,String(normalized.right));
+  }
+  requestAnimationFrame(invalidateMapSize);
+}
+function initRailSplitters(){
+  const shell=document.getElementById('operationsView');
+  if(!shell) return;
+  applyRailWidths(readRailWidths());
+  const bind=(splitterId,side)=>{
+    const splitter=document.getElementById(splitterId);
+    if(!splitter) return;
+    let dragging=false;
+    const apply=clientX=>{
+      const rect=shell.getBoundingClientRect();
+      const current=readRailWidths();
+      const next={...current};
+      next[side]=side==='left'?clientX-rect.left:rect.right-clientX;
+      applyRailWidths(next,{persist:true});
+    };
+    splitter.addEventListener('pointerdown',event=>{
+      dragging=true;
+      splitter.classList.add('dragging');
+      splitter.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+    splitter.addEventListener('pointermove',event=>{if(dragging) apply(event.clientX);});
+    const stop=event=>{
+      if(!dragging) return;
+      dragging=false;
+      splitter.classList.remove('dragging');
+      try{splitter.releasePointerCapture(event.pointerId);}catch(_){}
+    };
+    splitter.addEventListener('pointerup',stop);
+    splitter.addEventListener('pointercancel',stop);
+  };
+  bind('left-rail-splitter','left');
+  bind('right-rail-splitter','right');
+  window.addEventListener('resize',()=>applyRailWidths(readRailWidths()));
+}
+
 function refreshAll(){
   processEvents(); recalculateOperations(); checkActionableIncidentDing(); refreshHeader(); refreshAircraftSelect(true); renderOperationFilterBar(true); refreshCorporateResources(true); refreshPersonnelRail(true); refreshFleetList(true); refreshMaintenanceRail(true); refreshDepartmentWidgets(true); renderContext(true); refreshManagement(true); updateMapData(); refreshWeather(true); refreshScheduleTimeline(true);
 }
 
 populateManagementControls();
 refreshAircraftSelect(true);
+syncPlannerTurnaroundMinimum({force:true});
 refreshScheduleMode();
 refreshAircraftRequestPreview();
 refreshPersonnelRequestPreview();
@@ -3027,8 +3257,12 @@ document.querySelectorAll('[data-management-page]').forEach(button=>button.addEv
 document.getElementById('taskInboxButton')?.addEventListener('click',()=>{showWorkspace('operations');contextMode='inbox';markUiDirty('context');});
 scheduleBtn.addEventListener('click',scheduleFlight);
 scheduleTypeEl.addEventListener('change',refreshScheduleMode);
-[originEl,destEl,departureTimeEl,repeatRuleEl,turnaroundEl].forEach(element=>{element.addEventListener('change',refreshSchedulePreview);element.addEventListener('input',refreshSchedulePreview);});
-aircraftEl.addEventListener('change',()=>{const ac=state.aircraft.find(item=>item.id===aircraftEl.value);if(ac)originEl.value=ac.location;refreshScheduleMode();});
+[originEl,departureTimeEl,repeatRuleEl].forEach(element=>{element.addEventListener('change',refreshSchedulePreview);element.addEventListener('input',refreshSchedulePreview);});
+destEl.addEventListener('change',()=>{syncPlannerTurnaroundMinimum();refreshSchedulePreview();});
+destEl.addEventListener('input',()=>{syncPlannerTurnaroundMinimum();refreshSchedulePreview();});
+turnaroundEl.addEventListener('change',()=>{notePlannerTurnaroundEdit();refreshSchedulePreview();});
+turnaroundEl.addEventListener('input',()=>{notePlannerTurnaroundEdit();refreshSchedulePreview();});
+aircraftEl.addEventListener('change',()=>{const ac=state.aircraft.find(item=>item.id===aircraftEl.value);if(ac)originEl.value=ac.location;syncPlannerTurnaroundMinimum({force:true});refreshScheduleMode();});
 
 ['managementAircraftModel','managementAircraftDelivery'].forEach(id=>document.getElementById(id).addEventListener('input',refreshAircraftRequestPreview));
 document.getElementById('requestAircraftButton').addEventListener('click',()=>{const request=aircraftRequest();if(request){requestAircraft(request.modelName,request.cabin,request.deliveryAirport);markUiDirty('all');}});
@@ -3066,5 +3300,6 @@ window.addEventListener('keydown',armIncidentDing);
 window.addEventListener('keydown',handleOperationsShortcut);
 bindRailWidgetToggles();
 initWorkspaceSplitter();
+initRailSplitters();
 refreshRailCollapseState();
 refreshWeather(true);

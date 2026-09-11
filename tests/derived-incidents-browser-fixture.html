@@ -396,7 +396,10 @@
       assert(w.performOperationalTask(`${incident.id}:dispatch-medical-continue`),'medical continuation coordination was rejected');
       completeWaits();
       assert(incident.status==='resolved','airborne medical workflow did not resolve');
-      assert(flight.enrouteDelayMin>=20,'medical continuation did not record en-route impact');
+      const continueTask=w.incidentTasks(incident.id).find(task=>task.key==='dispatch-medical-continue');
+      const expectedDelay=continueTask?.selection?.timing?.delayMin||0;
+      assert(expectedDelay>0,'medical continuation did not lock an operational timing plan');
+      assert(flight.enrouteDelayMin>=expectedDelay,'medical continuation did not apply its locked en-route impact');
     }
 
     {

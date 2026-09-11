@@ -24,6 +24,17 @@
     return typeof money==='function'?money(roundCost(value)):`€${roundCost(value).toLocaleString('en-IE')}`;
   }
 
+  function optionTimingText(task,incident,optionId,overrides={}){
+    const flight=state.flights.find(item=>item.id===incident?.flightId&&!item.cancelled);
+    if(!flight||!globalThis.AeroIncidentDelay?.optionDelayPreview) return '';
+    const plan=globalThis.AeroIncidentDelay.optionDelayPreview(task,incident,flight,optionId,overrides);
+    return globalThis.AeroIncidentDelay.formatOptionDelay(plan);
+  }
+
+  function withOptionTiming(task,incident,optionId,detail='',overrides={}){
+    return [optionTimingText(task,incident,optionId,overrides),detail].filter(Boolean).join(' · ');
+  }
+
   function aircraftSizeFactor(flight){
     const aircraft=state.aircraft.find(item=>item.id===flight?.aircraftId);
     const seats=aircraft?cabinSeatCount(aircraft):Math.max(80,Number(flight?.pax)||100);
@@ -297,20 +308,20 @@
     if(optionId==='cancel') return 'flight removed before departure · aircraft and crew released';
 
     if(['crew-strategy','crew-duty-strategy','crew-fatigue-strategy','crew-misconnect-strategy','crew-diversion-strategy','crew-report-delay-strategy'].includes(task.key)&&optionId==='replace'){
-      if(crewPoolOptions(incident).length) return 'reserve response and briefing about +20 min';
+      if(crewPoolOptions(incident).length) return withOptionTiming(task,incident,optionId,'reserve response and briefing');
       if(remoteCrewPoolOptions(incident).length) return 'local pool unavailable · move remote personnel first';
       return 'requires qualified local or moved personnel';
     }
-    if(task.key==='crew-misconnect-strategy'&&optionId==='wait_crew') return `${consequenceDelayText(incident.context?.delayMin||25)} · crew transfer becomes the departure driver`;
+    if(task.key==='crew-misconnect-strategy'&&optionId==='wait_crew') return withOptionTiming(task,incident,optionId,'crew transfer becomes the departure driver',{baseDelayMin:incident.context?.delayMin||25,exactDelay:Boolean(incident.context?.delayMin)});
     if(task.key==='crew-diversion-strategy'){
-      if(optionId==='move_crew') return `${consequenceDelayText(incident.context?.delayMin||45)} · requires manual personnel move`;
-      if(optionId==='wait_crew') return `${consequenceDelayText(incident.context?.delayMin||45)} · displaced through crew stays with flight`;
+      if(optionId==='move_crew') return withOptionTiming(task,incident,optionId,'requires manual personnel move',{baseDelayMin:incident.context?.delayMin||45,exactDelay:Boolean(incident.context?.delayMin)});
+      if(optionId==='wait_crew') return withOptionTiming(task,incident,optionId,'displaced through crew stays with flight',{baseDelayMin:incident.context?.delayMin||45,exactDelay:Boolean(incident.context?.delayMin)});
     }
     if(task.key==='crew-report-delay-strategy'){
-      if(optionId==='wait_crew') return `${consequenceDelayText(incident.context?.delayMin||25)} · assigned crew remains on duty`;
+      if(optionId==='wait_crew') return withOptionTiming(task,incident,optionId,'assigned crew remains on duty',{baseDelayMin:incident.context?.delayMin||25,exactDelay:Boolean(incident.context?.delayMin)});
       if(optionId==='move_reserve') return 'requires manual personnel move · recovery depends on transfer ETA';
     }
-    if(['crew-duty-strategy','crew-fatigue-strategy'].includes(task.key)&&optionId==='augment') return 'augmentation callout about +25 min · extra crew tied up';
+    if(['crew-duty-strategy','crew-fatigue-strategy'].includes(task.key)&&optionId==='augment') return withOptionTiming(task,incident,optionId,'extra crew tied up');
     if(task.key==='crew-extension-strategy'){
       if(optionId==='record_extension') return `records +${incident.context?.overrunMin||0} min duty extension · crew must be reviewed after landing`;
       if(optionId==='priority') return 'possible enroute delay reduction · waits for ATC / flight deck reply';
@@ -328,9 +339,9 @@
     }
 
     if(task.key==='station-stand-strategy'){
-      if(optionId==='remote') return 'possible +20 min delay · bus boarding required';
-      if(optionId==='tow') return 'possible +30 min delay · tow coordination required';
-      if(optionId==='wait_gate') return `possible +45 min delay · ${rotationRiskText(flight)}`;
+      if(optionId==='remote') return withOptionTiming(task,incident,optionId,'bus boarding required');
+      if(optionId==='tow') return withOptionTiming(task,incident,optionId,'tow coordination required');
+      if(optionId==='wait_gate') return withOptionTiming(task,incident,optionId,rotationRiskText(flight));
     }
     if(task.key==='dispatch-flightdeck-decision'){
       if(optionId==='alternate') return `flight deck requested alternate · ${diversionConsequenceText(incident)}`;
@@ -338,7 +349,7 @@
     }
     if(task.key==='dispatch-position-strategy'){
       const delay=Math.max(15,incident.context?.delayMin||currentDelay||15);
-      if(optionId==='position_ferry') return `requires manual ferry flight · possible ${consequenceDelayText(delay)} · ${rotationRiskText(flight)}`;
+      if(optionId==='position_ferry') return withOptionTiming(task,incident,optionId,`requires manual ferry flight · ${rotationRiskText(flight)}`,{baseDelayMin:delay,exactDelay:Boolean(incident.context?.delayMin)});
       if(optionId==='substitute') return replacementConsequenceText(incident);
     }
     if(task.key==='crew-legal-strategy'){
@@ -350,20 +361,20 @@
       if(optionId==='offload') return 'possible +20 min delay · passenger-service follow-up';
     }
     if(task.key==='station-fuel-strategy'){
-      if(optionId==='priority') return 'possible +10 min delay · fuel provider must accept priority';
-      if(optionId==='wait_truck') return `possible +35 min delay · ${rotationRiskText(flight)}`;
-      if(optionId==='minimum_uplift') return 'possible +15 min delay · less discretionary fuel margin';
+      if(optionId==='priority') return withOptionTiming(task,incident,optionId,'fuel provider must accept priority');
+      if(optionId==='wait_truck') return withOptionTiming(task,incident,optionId,rotationRiskText(flight));
+      if(optionId==='minimum_uplift') return withOptionTiming(task,incident,optionId,'less discretionary fuel margin');
     }
     if(task.key==='station-fuel-outage-strategy'){
-      if(optionId==='priority') return 'possible +20 min delay · depends on provider escalation';
-      if(optionId==='wait_supply') return `${consequenceDelayText(incident.context?.delayMin||75)} · supplier outage drives departure`;
+      if(optionId==='priority') return withOptionTiming(task,incident,'fuel_outage_priority','depends on provider escalation');
+      if(optionId==='wait_supply') return withOptionTiming(task,incident,optionId,'supplier outage drives departure',{baseDelayMin:incident.context?.delayMin||75,exactDelay:Boolean(incident.context?.delayMin)});
       if(optionId==='tanker_inbound'){
         const plan=typeof fuelOutageTankerPlan==='function'?fuelOutageTankerPlan(incident):null;
         return plan?.available
-          ? `${consequenceDelayText(plan.delayMin||0)} · avoids disrupted station uplift`
+          ? withOptionTiming(task,incident,optionId,'avoids disrupted station uplift',{baseDelayMin:plan.delayMin||0,exactDelay:Boolean(plan.delayMin)})
           : 'requires an inbound leg with practical tank capacity';
       }
-      if(optionId==='minimum_uplift') return 'possible +25 min delay · legal fuel only, smaller operational margin';
+      if(optionId==='minimum_uplift') return withOptionTiming(task,incident,optionId,'legal fuel only, smaller operational margin',{baseDelayMin:25});
       if(optionId==='substitute') return replacementConsequenceText(incident);
     }
     if(task.key==='mx-resource-strategy'){
@@ -377,37 +388,37 @@
       if(optionId==='substitute') return replacementConsequenceText(incident);
     }
     if(task.key==='station-deicing-strategy'){
-      if(optionId==='deice') return 'possible +25 min delay · holdover window starts after treatment';
-      if(optionId==='priority_deice') return 'possible +15 min delay · uses priority station resources';
-      if(optionId==='wait_weather') return `possible +45 min delay · ${rotationRiskText(flight)}`;
+      if(optionId==='deice') return withOptionTiming(task,incident,optionId,'holdover window starts after treatment');
+      if(optionId==='priority_deice') return withOptionTiming(task,incident,optionId,'uses priority station resources');
+      if(optionId==='wait_weather') return withOptionTiming(task,incident,optionId,rotationRiskText(flight),{baseDelayMin:incident.context?.delayMin||45,exactDelay:Boolean(incident.context?.delayMin)});
     }
     if(task.key==='station-deicing-collapse-strategy'){
-      if(optionId==='join_queue') return `${consequenceDelayText(incident.context?.queueMin||incident.context?.delayMin||60)} · airport deicing queue controls departure`;
-      if(optionId==='priority_deice') return 'possible +20 min delay · station priority may affect other departures';
-      if(optionId==='wait_weather') return `${consequenceDelayText(Math.max(45,incident.context?.delayMin||60))} · waits for demand or precipitation to ease`;
+      if(optionId==='join_queue') return withOptionTiming(task,incident,'deice_queue','airport deicing queue controls departure',{baseDelayMin:incident.context?.queueMin||incident.context?.delayMin||60,exactDelay:Boolean(incident.context?.queueMin||incident.context?.delayMin)});
+      if(optionId==='priority_deice') return withOptionTiming(task,incident,optionId,'station priority may affect other departures',{baseDelayMin:20});
+      if(optionId==='wait_weather') return withOptionTiming(task,incident,optionId,'waits for demand or precipitation to ease',{baseDelayMin:Math.max(45,incident.context?.delayMin||60),exactDelay:Boolean(incident.context?.delayMin)});
     }
     if(task.key==='station-holdover-strategy'){
-      if(optionId==='redeice') return 'possible +25 min delay · new holdover window starts';
-      if(optionId==='wait_deice_slot') return `possible +35 min delay · ${rotationRiskText(flight)}`;
+      if(optionId==='redeice') return withOptionTiming(task,incident,optionId,'new holdover window starts');
+      if(optionId==='wait_deice_slot') return withOptionTiming(task,incident,optionId,rotationRiskText(flight));
     }
     if(task.key==='dispatch-capacity-strategy'){
       const delay=Math.max(15,incident.context?.delayMin||currentDelay||30);
-      if(optionId==='accept') return `${consequenceDelayText(delay)} · airport sequence preserved`;
-      if(optionId==='priority') return `${consequenceDelayText(Math.max(10,delay*.55),delay)} · waits for airport/flow reply`;
+      if(optionId==='accept') return withOptionTiming(task,incident,optionId,'airport sequence preserved',{baseDelayMin:delay,exactDelay:Boolean(incident.context?.delayMin)});
+      if(optionId==='priority') return withOptionTiming(task,incident,optionId,'waits for airport/flow reply',{baseDelayMin:Math.max(10,delay*.55),exactDelay:Boolean(incident.context?.delayMin)});
     }
     if(task.key==='dispatch-groundstop-strategy'){
       const delay=Math.max(35,incident.context?.delayMin||currentDelay||45);
-      if(optionId==='hold_ground') return `${consequenceDelayText(delay)} · aircraft remains at origin`;
-      if(optionId==='priority') return `${consequenceDelayText(Math.max(10,delay*.55),delay)} · waits for flow-management reply`;
+      if(optionId==='hold_ground') return withOptionTiming(task,incident,optionId,'aircraft remains at origin',{baseDelayMin:delay,exactDelay:Boolean(incident.context?.delayMin)});
+      if(optionId==='priority') return withOptionTiming(task,incident,optionId,'waits for flow-management reply',{baseDelayMin:Math.max(10,delay*.55),exactDelay:Boolean(incident.context?.delayMin)});
     }
     if(task.key==='dispatch-night-curfew-strategy'&&optionId==='change_departure'){
       const delay=Math.max(0,incident.context?.delayMin||0);
       const next=incident.context?.nextDeparture?formatTime(incident.context.nextDeparture):'after airport reopening';
       const chain=incident.context?.restrictionSummary?` · ${incident.context.restrictionSummary}`:'';
-      return `${consequenceDelayText(delay)} · manually hold in Dispatch, recommended earliest clear departure ${next}${chain}`;
+      return withOptionTiming(task,incident,optionId,`manually hold in Dispatch, recommended earliest clear departure ${next}${chain}`,{baseDelayMin:delay,exactDelay:true});
     }
     if(task.key==='dispatch-ground-destination-strategy'){
-      if(optionId==='delay_reopen') return `${consequenceDelayText(incident.context?.delayMin||90)} · aircraft waits on ground for destination acceptance`;
+      if(optionId==='delay_reopen') return withOptionTiming(task,incident,optionId,'aircraft waits on ground for destination acceptance',{baseDelayMin:incident.context?.delayMin||90,exactDelay:Boolean(incident.context?.delayMin)});
       if(optionId==='alternate_destination') return `new destination plan · ${diversionConsequenceText(incident)}`;
     }
     if(task.key==='dispatch-performance-strategy'){
@@ -415,31 +426,31 @@
       if(optionId==='payload_reduce'){
         const pct=incident.context?.payloadReductionPct||12;
         if(flight.flightType==='ferry'||!(Number(flight.pax)||0)) return 'not useful for empty/ferry flights · choose substitute, delay, or cancel';
-        if(cause==='mel') return `possible +20 min delay · about ${pct}% payload offload offsets MEL performance penalty`;
-        if(cause==='fuel') return `possible +20 min delay · about ${pct}% payload offload reduces trip fuel demand`;
-        if(cause==='range') return `possible +20 min delay · about ${pct}% payload offload restores range margin`;
-        return `possible +20 min delay · about ${pct}% payload offload`;
+        if(cause==='mel') return withOptionTiming(task,incident,optionId,`about ${pct}% payload offload offsets MEL performance penalty`);
+        if(cause==='fuel') return withOptionTiming(task,incident,optionId,`about ${pct}% payload offload reduces trip fuel demand`);
+        if(cause==='range') return withOptionTiming(task,incident,optionId,`about ${pct}% payload offload restores range margin`);
+        return withOptionTiming(task,incident,optionId,`about ${pct}% payload offload`);
       }
       if(optionId==='delay_conditions') return cause==='weather'
-        ? `${consequenceDelayText(incident.context?.delayMin||45)} · waits for runway/weather performance margin`
+        ? withOptionTiming(task,incident,optionId,'waits for runway/weather performance margin',{baseDelayMin:incident.context?.delayMin||45,exactDelay:Boolean(incident.context?.delayMin)})
         : `usually no benefit for ${cause} limitation · use payload reduction, substitute, or cancel`;
       if(optionId==='substitute') return replacementConsequenceText(incident);
     }
     if(task.key==='station-destination-handling-strategy'){
       if(optionId==='request_handling') return 'requires own-station or contract handling acceptance · small arrival coordination delay';
-      if(optionId==='delay_departure') return `${consequenceDelayText(incident.context?.delayMin||35)} · protects arrival acceptance`;
+      if(optionId==='delay_departure') return withOptionTiming(task,incident,optionId,'protects arrival acceptance',{baseDelayMin:incident.context?.delayMin||35,exactDelay:Boolean(incident.context?.delayMin)});
     }
     if(task.key==='station-security-strategy'){
-      if(optionId==='hold_screening') return 'possible +30 min delay · boarding/manifest held open';
-      if(optionId==='offload_passenger') return 'possible +25 min delay · passenger and bag removed';
+      if(optionId==='hold_screening') return withOptionTiming(task,incident,optionId,'boarding/manifest held open');
+      if(optionId==='offload_passenger') return withOptionTiming(task,incident,optionId,'passenger and bag removed');
     }
     if(task.key==='dispatch-medical-decision'){
-      if(optionId==='continue') return 'flight deck continues · possible +20 min arrival medical coordination delay';
+      if(optionId==='continue') return withOptionTiming(task,incident,optionId,'flight deck continues · arrival medical coordination');
       if(optionId==='divert') return `medical diversion requested · ${diversionConsequenceText(incident,{medical:true})}`;
       if(optionId==='return_origin') return `medical return requested · ${diversionConsequenceText(incident,{returnOrigin:true,medical:true})}`;
     }
     if(task.key==='dispatch-tech-decision'){
-      if(optionId==='continue') return 'flight deck continues · possible +10-15 min flight-watch coordination · arrival inspection may be needed';
+      if(optionId==='continue') return withOptionTiming(task,incident,optionId,'flight deck continues · arrival inspection may be needed',{baseDelayMin:12});
       if(optionId==='divert') return `technical diversion requested · ${diversionConsequenceText(incident)}`;
       if(optionId==='return_origin') return `technical return requested · ${diversionConsequenceText(incident,{returnOrigin:true})}`;
     }
@@ -455,21 +466,21 @@
     }
     if(task.key==='dispatch-reroute-strategy'){
       const delay=incident.context?.delayMin||currentDelay||15;
-      if(optionId==='accept') return `${consequenceDelayText(delay)} · downstream arrival may move`;
-      if(optionId==='direct') return `${consequenceDelayText(Math.max(5,delay*.4),delay)} · waits for ATC reply`;
+      if(optionId==='accept') return withOptionTiming(task,incident,optionId,'downstream arrival may move',{baseDelayMin:delay,exactDelay:Boolean(incident.context?.delayMin)});
+      if(optionId==='direct') return withOptionTiming(task,incident,optionId,'waits for ATC reply',{baseDelayMin:Math.max(5,delay*.45),exactDelay:Boolean(incident.context?.delayMin)});
     }
     if(task.key==='dispatch-cabin-decision'){
-      if(optionId==='continue') return 'flight deck continues · possible +15 min arrival security coordination delay';
+      if(optionId==='continue') return withOptionTiming(task,incident,optionId,'flight deck continues · arrival security coordination',{baseDelayMin:15});
       if(optionId==='divert') return `security diversion requested · ${diversionConsequenceText(incident)}`;
       if(optionId==='return_origin') return `security return requested · ${diversionConsequenceText(incident,{returnOrigin:true})}`;
     }
     if(task.key==='dispatch-weather-decision'){
       if(optionId==='monitor') return 'flight deck monitors destination · no immediate diversion · approach minima watched';
-      if(optionId==='hold') return 'flight deck/ATC holding plan · possible +20 min holding · fuel margin at risk';
+      if(optionId==='hold') return withOptionTiming(task,incident,optionId,'flight deck/ATC holding plan · fuel margin at risk',{baseDelayMin:20});
       if(optionId==='divert') return `weather diversion requested · ${diversionConsequenceText(incident)}`;
     }
     if(task.key==='dispatch-minima-decision'){
-      if(optionId==='hold') return 'flight deck/ATC holding plan · possible +20 min holding · fuel margin watched closely';
+      if(optionId==='hold') return withOptionTiming(task,incident,optionId,'flight deck/ATC holding plan · fuel margin watched closely',{baseDelayMin:20});
       if(optionId==='divert') return `weather diversion requested · ${diversionConsequenceText(incident)}`;
       if(optionId==='return_origin') return `return requested · ${diversionConsequenceText(incident,{returnOrigin:true})}`;
     }
@@ -480,7 +491,7 @@
     }
     if(task.key==='dispatch-diversion-airport-decision'){
       if(optionId==='reselect') return `new diversion requested · ${diversionConsequenceText(incident)}`;
-      if(optionId==='hold') return 'flight deck/ATC holding plan · possible +20 min holding · fuel margin watched closely';
+      if(optionId==='hold') return withOptionTiming(task,incident,optionId,'flight deck/ATC holding plan · fuel margin watched closely',{baseDelayMin:20});
       if(optionId==='return_origin') return `return requested · ${diversionConsequenceText(incident,{returnOrigin:true})}`;
     }
     if(task.key==='dispatch-lightning-decision'){
@@ -494,7 +505,7 @@
       if(optionId==='return_origin') return `return requested · ${diversionConsequenceText(incident,{returnOrigin:true})}`;
     }
     if(task.key==='dispatch-pressure-decision'){
-      if(optionId==='continue_low') return 'flight deck continues lower · possible +25 min delay · higher fuel burn';
+      if(optionId==='continue_low') return withOptionTiming(task,incident,optionId,'flight deck continues lower · higher fuel burn',{baseDelayMin:25});
       if(optionId==='divert') return `technical diversion requested · ${diversionConsequenceText(incident)}`;
       if(optionId==='return_origin') return `technical return requested · ${diversionConsequenceText(incident,{returnOrigin:true})}`;
     }

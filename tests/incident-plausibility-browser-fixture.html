@@ -163,7 +163,7 @@
       assert(w.processIncidentDeadlines(now),'ground-stop default deadline did not report a change');
       assert(incident.status==='open'&&incident.defaultApplied,'ground-stop default should keep the incident open');
       assert(!flight.cancelled,'ground-stop hold default cancelled the flight');
-      assert(flight.incidentDelayMin>=15,'ground-stop hold default did not hold the flight');
+      assert((flight.incidentDelayMin||0)===0,'ground-stop hold default should not move a future flight before its departure is due');
     }
 
     {

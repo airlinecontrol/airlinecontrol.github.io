@@ -93,6 +93,53 @@
     w.refreshAll();
     await wait(150);
 
+    {
+      const holdAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const held=w.createFlightRecord({
+        aircraftId:holdAc.id,
+        from:'JFK',
+        to:'FRA',
+        departure:base-30*MIN,
+        fare:{economy:140,business:360,first:700}
+      });
+      held.weatherChecked=true;
+      held.constraintChecked=true;
+      held.opsChecked=true;
+      w.recalculateOperations();
+      const blocker=w.createIncident('aircraft_out_of_position',held,{
+        training:true,
+        detectedAt:base-45*MIN,
+        source:'fixture',
+        sourceKey:`stable-ground-hold:${held.id}`,
+        context:{sourceId:held.id,expectedLocation:'JFK',currentLocation:'FRA'}
+      });
+      blocker.deadline=base-40*MIN;
+      setNow(w,base);
+      w.processEvents();
+      w.recalculateOperations();
+      const firstDelay=held.incidentDelayMin||0;
+      const firstDeparture=w.flightActualDeparture(held);
+      assert(blocker.status==='open'&&blocker.defaultApplied,'ground hold blocker did not remain open after missed default deadline');
+      assert(held.incidentHoldStartedAt,'ground hold did not record a stable hold marker');
+      for(let step=1;step<=8;step++){
+        setNow(w,base+step*20*MIN);
+        w.processEvents();
+        w.recalculateOperations();
+        assert((held.incidentDelayMin||0)===firstDelay,`ground hold kept rolling incident delay at step ${step}: ${firstDelay} -> ${held.incidentDelayMin||0}`);
+        assert(w.flightActualDeparture(held)===firstDeparture,`ground hold kept moving actual departure at step ${step}`);
+        assert(blocker.status==='open','ground hold blocker closed while the resource problem still existed');
+      }
+      blocker.status='resolved';
+      blocker.blocking=false;
+      blocker.resolvedAt=base+200*MIN;
+      setNow(w,base+200*MIN);
+      assert(w.updateIncidentConstraints(w.simNow()),'ground hold release did not retime the held flight once');
+      w.recalculateOperations();
+      assert((held.incidentDelayMin||0)>firstDelay,'ground hold release did not apply the accumulated delay');
+      assert(w.flightActualDeparture(held)>w.simNow(),'released ground hold should schedule a future departure instead of departing in the past');
+      held.cancelled=true;
+    }
+
     const warningStates=new Map();
     const warningFlickers=[];
     const duplicateIncidents=[];

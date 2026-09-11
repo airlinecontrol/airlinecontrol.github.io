@@ -752,6 +752,55 @@ function departureBlockingIncidentsForFlight(flight){
   });
 }
 
+function departureGroundBlockersForFlight(flight){
+  if(!flight) return [];
+  const blockers=[...departureBlockingIncidentsForFlight(flight)];
+  if(flight.positioningBlocked) blockers.push({type:'aircraft_positioning'});
+  if(flight.staffingBlocked) blockers.push({type:'staffing'});
+  if(flight.maintenanceBlocked) blockers.push({type:'maintenance'});
+  return blockers;
+}
+
+function stableGroundHoldFields(kind){
+  return {
+    startedAt:`${kind}HoldStartedAt`,
+    reason:`${kind}HoldReason`,
+    releasedAt:`${kind}HoldReleasedAt`
+  };
+}
+
+function markStableGroundHold(flight,kind,reason='',t=simNow(),startAt=null){
+  if(!flight||flight.cancelled||flight.settled||flight.departureLogged) return false;
+  const holdStart=Number.isFinite(startAt)?startAt:flight.departure;
+  if(t<holdStart) return false;
+  const fields=stableGroundHoldFields(kind);
+  const normalizedReason=String(reason||kind);
+  let changed=false;
+  if(!flight[fields.startedAt]){ flight[fields.startedAt]=t; changed=true; }
+  if(flight[fields.reason]!==normalizedReason){ flight[fields.reason]=normalizedReason; changed=true; }
+  return changed;
+}
+
+function releaseStableGroundHold(flight,kind,delayField,t=simNow(),{bufferMin=1,quantumMin=1,targetAt=null}={}){
+  if(!flight||flight.cancelled||flight.settled||flight.departureLogged) return false;
+  const fields=stableGroundHoldFields(kind);
+  if(!flight[fields.startedAt]) return false;
+  let changed=false;
+  const releaseAt=Number.isFinite(targetAt)?targetAt:t+Math.max(0,Number(bufferMin)||0)*MIN;
+  const quantum=Math.max(1,Number(quantumMin)||1);
+  if(t>=flight.departure&&flightActualDeparture(flight)<=t){
+    const releaseDelay=Math.max(0,Math.ceil((releaseAt-flight.departure)/(quantum*MIN))*quantum);
+    if((Number(flight[delayField])||0)<releaseDelay){
+      flight[delayField]=releaseDelay;
+      changed=true;
+    }
+  }
+  if(flight[fields.releasedAt]!==t){ flight[fields.releasedAt]=t; changed=true; }
+  if(flight[fields.startedAt]){ flight[fields.startedAt]=0; changed=true; }
+  if(flight[fields.reason]){ flight[fields.reason]=''; changed=true; }
+  return changed;
+}
+
 function crewSickRoleForFlight(flight){
   const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
   const cabinNeed=aircraft?Math.max(1,Math.ceil(cabinSeatCount(aircraft)/50)):3;
@@ -2237,7 +2286,7 @@ function processFlightLifecycleTransitions(t=simNow()){
       logEvent(`${f.id}: original ${f.from} slot missed; new slot ${formatTime(f.assignedSlot)}.`);
       changed=true;
     }
-    if(!flightHasDeparted(f,t) && t>=f.departure && t>=flightActualDeparture(f) && !departureBlockingIncidentsForFlight(f).length){
+    if(!flightHasDeparted(f,t) && t>=f.departure && t>=flightActualDeparture(f) && !departureGroundBlockersForFlight(f).length){
       f.departureLogged=true;
       if(maybeGenerateEnrouteIssue(f,t)){ changed=true; needsRecalc=true; }
       const d=flightTotalDepartureDelayMin(f);
@@ -2446,17 +2495,23 @@ function processFlightGenerationEvents(ctx){
 function processLifecycleAndConstraintEvents(ctx){
   const t=ctx.t;
   if(processIncidentDeadlines(t)) ctx.markChanged('processIncidentDeadlines',true);
+  ctx.flushRecalc();
+  if(updateStaffingConstraints(t)) ctx.markChanged('updateStaffingConstraints',true);
+  if(updateMaintenanceConstraints(t)) ctx.markChanged('updateMaintenanceConstraints',true);
+  if(updatePositioningConstraints(t)) ctx.markChanged('updatePositioningConstraints',true);
+  if(updateIncidentConstraints(t)) ctx.markChanged('updateIncidentConstraints',true);
+  ctx.flushRecalc();
   const lifecycle=processFlightLifecycleTransitions(t);
   if(lifecycle.changed){
     ctx.markChanged('processFlightLifecycleTransitions');
     invalidateOperationalIndex();
   }
   if(lifecycle.needsRecalc) ctx.needsRecalc=true;
-  if(updateIncidentConstraints(t)) ctx.markChanged('updateIncidentConstraints',true);
   ctx.flushRecalc();
-  if(updateStaffingConstraints(t)) ctx.markChanged('updateStaffingConstraints',true);
-  if(updateMaintenanceConstraints(t)) ctx.markChanged('updateMaintenanceConstraints',true);
-  if(updatePositioningConstraints(t)) ctx.markChanged('updatePositioningConstraints',true);
+  if(updateStaffingConstraints(t)) ctx.markChanged('updateStaffingConstraintsAfterLifecycle',true);
+  if(updateMaintenanceConstraints(t)) ctx.markChanged('updateMaintenanceConstraintsAfterLifecycle',true);
+  if(updatePositioningConstraints(t)) ctx.markChanged('updatePositioningConstraintsAfterLifecycle',true);
+  if(updateIncidentConstraints(t)) ctx.markChanged('updateIncidentConstraintsAfterLifecycle',true);
   ctx.flushRecalc();
   if(updatePassengerConnections()) ctx.markChanged('updatePassengerConnections');
   if(processDerivedOperationalIncidents(t)) ctx.markChanged('processDerivedOperationalIncidents',true);
@@ -2497,14 +2552,19 @@ function updateMaintenanceConstraints(t=simNow()){
       continue;
     }
     if(maintenance.grounding){
-      const delayTarget=job?job.end:t+15*MIN;
-      const delay=Math.max(15,Math.ceil((delayTarget-f.departure)/(15*MIN))*15);
-      if(!f.maintenanceBlocked||f.maintenanceDelayMin!==delay) changed=true;
+      const reason=job?.reason||job?.label||maintenance.reason||'Aircraft under maintenance';
+      if(!f.maintenanceBlocked) changed=true;
       f.maintenanceBlocked=true;
-      f.maintenanceDelayMin=delay;
+      if(markStableGroundHold(f,'maintenance',reason,t)) changed=true;
+      if(job){
+        const delay=Math.max(15,Math.ceil((job.end-f.departure)/(15*MIN))*15);
+        if(f.maintenanceDelayMin!==delay){ f.maintenanceDelayMin=delay; changed=true; }
+      }
     }else if(f.maintenanceBlocked||f.maintenanceDelayMin){
       f.maintenanceBlocked=false;
-      f.maintenanceDelayMin=0;
+      if(!releaseStableGroundHold(f,'maintenance','maintenanceDelayMin',t) && f.maintenanceDelayMin){
+        f.maintenanceDelayMin=0;
+      }
       changed=true;
     }
   }
@@ -2524,18 +2584,17 @@ function updatePositioningConstraints(t=simNow()){
       const dep=flightActualDeparture(flight),destination=flightOperationalDestination(flight);
       const outOfPosition=flight.from!==projectedLocation;
       const inActionWindow=t>=dep-6*HOUR;
-      const delay=outOfPosition&&inActionWindow
-        ? Math.max(15,Math.ceil((Math.max(t+15*MIN,availableAt)-flight.departure)/(15*MIN))*15)
-        : 0;
       if(outOfPosition){
-        if(!flight.positioningBlocked||flight.positioningDelayMin!==delay) changed=true;
+        if(!flight.positioningBlocked) changed=true;
         flight.positioningBlocked=true;
-        flight.positioningDelayMin=delay;
+        if(inActionWindow&&markStableGroundHold(flight,'positioning',`${projectedLocation}->${flight.from}`,t,dep)) changed=true;
         continue;
       }
-      if(flight.positioningBlocked||flight.positioningDelayMin){
+      if(flight.positioningBlocked||flight.positioningDelayMin||flight.positioningHoldStartedAt){
         flight.positioningBlocked=false;
-        flight.positioningDelayMin=0;
+        if(!releaseStableGroundHold(flight,'positioning','positioningDelayMin',t) && flight.positioningDelayMin){
+          flight.positioningDelayMin=0;
+        }
         changed=true;
       }
       if(dep>=availableAt){
@@ -2559,11 +2618,16 @@ function updateStaffingConstraints(t=simNow()){
     const evaluationDeparture=Math.max(f.departure,t);
     const shortages=staffingShortagesForFlight(ac,evaluationDeparture,f.arrival-f.departure,f.from,f.id,flightUsesLocalCrew(f),f.flightType);
     if(shortages.length){
-      const delay=Math.max(15,Math.ceil((t+15*MIN-f.departure)/(15*MIN))*15);
-      if(f.staffingDelayMin!==delay || !f.staffingBlocked){ changed=true; }
-      f.staffingDelayMin=delay; f.staffingBlocked=true; f.staffingShortage=shortages.join(' · ');
-    }else if(f.staffingBlocked || f.staffingDelayMin){
-      f.staffingDelayMin=0; f.staffingBlocked=false; f.staffingShortage=''; changed=true;
+      const shortageText=shortages.join(' · ');
+      if(!f.staffingBlocked||f.staffingShortage!==shortageText){ changed=true; }
+      f.staffingBlocked=true; f.staffingShortage=shortageText;
+      if(markStableGroundHold(f,'staffing',shortageText,t)) changed=true;
+    }else if(f.staffingBlocked || f.staffingDelayMin || f.staffingHoldStartedAt){
+      f.staffingBlocked=false; f.staffingShortage='';
+      if(!releaseStableGroundHold(f,'staffing','staffingDelayMin',t) && f.staffingDelayMin){
+        f.staffingDelayMin=0;
+      }
+      changed=true;
     }
   }
   return changed;

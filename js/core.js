@@ -817,7 +817,7 @@ function migrateState(parsed){
     if(!ac.cabin) ac.cabin=defaultCabin(ac.model);
   }
   for(const f of parsed.flights){
-    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','incidentDelayMin','enrouteDelayMin','enrouteRecoveryMin','enrouteRecoveryCost','enrouteRecoveryFuelPenaltyGal','liveWeatherDelayMin','propagatedDelayMin','slotDelayMin','turnaroundRecoveryMin','slotPriorityMin','nightRestrictionDelayMin','nightRestrictionConflictDelayMin','taxiOutDelayMin','taxiInDelayMin','deicingCompletedAt','deicingHoldoverUntil','nightRecoveryApprovedAt'])
+    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','incidentDelayMin','enrouteDelayMin','enrouteRecoveryMin','enrouteRecoveryCost','enrouteRecoveryFuelPenaltyGal','liveWeatherDelayMin','propagatedDelayMin','slotDelayMin','turnaroundRecoveryMin','slotPriorityMin','nightRestrictionDelayMin','nightRestrictionConflictDelayMin','taxiOutDelayMin','taxiInDelayMin','deicingCompletedAt','deicingHoldoverUntil','nightRecoveryApprovedAt','incidentHoldStartedAt','incidentHoldReleasedAt','positioningHoldStartedAt','positioningHoldReleasedAt','staffingHoldStartedAt','staffingHoldReleasedAt','maintenanceHoldStartedAt','maintenanceHoldReleasedAt'])
       if(f[k]===undefined) f[k]=0;
     if(f.enrouteRecoveryPlan===undefined) f.enrouteRecoveryPlan='';
     if(f.enrouteRecoveryCause===undefined) f.enrouteRecoveryCause='';
@@ -828,6 +828,7 @@ function migrateState(parsed){
     if(f.nightRestrictionConflictLabel===undefined) f.nightRestrictionConflictLabel='';
     if(f.nightRecoveryDecision===undefined) f.nightRecoveryDecision='';
     if(f.nightRecoverySourceKey===undefined) f.nightRecoverySourceKey='';
+    for(const k of ['incidentHoldReason','positioningHoldReason','staffingHoldReason','maintenanceHoldReason']) if(f[k]===undefined) f[k]='';
     if(f.arrivalCurfewCoordinatedKey===undefined) f.arrivalCurfewCoordinatedKey='';
     if(f.arrivalCurfewCoordinatedAt===undefined) f.arrivalCurfewCoordinatedAt=0;
     if(f.constraintChecked===undefined) f.constraintChecked=Boolean(f.departureLogged);

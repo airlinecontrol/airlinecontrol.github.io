@@ -60,6 +60,11 @@
     assert(!d.querySelector('#taskInboxButton'),'Tasks still appears in the top bar');
     assert(!d.querySelector('[data-workspace="management"]'),'Planning & resources still appears in the top bar');
     assert(d.querySelector('[data-training-incident]'),'training incident control is missing');
+    assert(d.querySelector('#left-rail-splitter')&&d.querySelector('#right-rail-splitter'),'side rail resize handles are missing');
+    w.eval(`applyRailWidths({left:360,right:390},{persist:true})`);
+    await wait(80);
+    const shellColumns=getComputedStyle(d.querySelector('#operationsView')).gridTemplateColumns;
+    assert(shellColumns.includes('360px')&&shellColumns.includes('390px'),'side rail resize widths were not applied to the operations shell');
     const incident=w.createIncident('crew_sick',flight,{training:true});
     incident.affectedRole='captains';
     w.save();
@@ -69,6 +74,17 @@
     const openIncidentTitle=`(${w.openOperationalIncidents().length}) Airline Operations Control Center`;
     assert(d.title===openIncidentTitle,`browser title does not show open incident count badge: ${d.title}`);
     assert(incident?.training,'training scenario was not created');
+
+    const heldAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const heldNow=w.simNow();
+    const heldFlight=w.createFlightRecord({aircraftId:heldAc.id,from:'JFK',to:'FRA',departure:heldNow+2*60*60_000,fare:{economy:140,business:360,first:700}});
+    heldFlight.actualDeparture=heldNow+7*60*60_000;
+    heldFlight.actualArrival=heldNow+15*60*60_000;
+    const heldIncident=w.createIncident('aircraft_out_of_position',heldFlight,{training:true,detectedAt:heldNow,context:{expectedLocation:'FRA',requiredLocation:'JFK',sourceId:heldFlight.id}});
+    heldIncident.severity='';
+    heldIncident.deadline=heldNow+30*60_000;
+    assert(w.incidentQueueBucket(heldIncident,heldNow)==='actionable','open blocking incident with visible work was parked outside the actionable queue');
+
     assert(d.querySelector('#operationFilterBar'),'global operation filter bar is missing');
     w.applyOperationFilter({airport:'FRA'}); await wait(100);
     assert(d.querySelector('[data-remove-airport-filter="FRA"]'),'airport filter did not create an FRA pill');
@@ -92,6 +108,22 @@
     assert(d.activeElement===focusedDestination,'planning destination combobox was replaced during refresh');
     assert(focusedDestination.value==='JFK','planning destination combobox value changed during refresh');
     focusedDestination.blur();
+    const scheduleType=d.querySelector('#scheduleType');
+    const turnaroundInput=d.querySelector('#turnaround');
+    scheduleType.value='recurring';
+    scheduleType.dispatchEvent(new Event('change',{bubbles:true}));
+    await wait(80);
+    let selectedPlannerAircraftId=d.querySelector('#aircraft').value;
+    let expectedTurn=w.eval(`minimumTurnMinutes(state.aircraft.find(item=>item.id==='${selectedPlannerAircraftId}'), '${d.querySelector('#destination').value}')`);
+    assert(Number(turnaroundInput.value)===expectedTurn,'recurring planner did not fill turnaround with the selected aircraft minimum');
+    turnaroundInput.value='25';
+    turnaroundInput.dispatchEvent(new Event('input',{bubbles:true}));
+    d.querySelector('#destination').value='LHR';
+    d.querySelector('#destination').dispatchEvent(new Event('change',{bubbles:true}));
+    await wait(80);
+    selectedPlannerAircraftId=d.querySelector('#aircraft').value;
+    expectedTurn=w.eval(`minimumTurnMinutes(state.aircraft.find(item=>item.id==='${selectedPlannerAircraftId}'), 'LHR')`);
+    assert(Number(turnaroundInput.value)===expectedTurn,'planner did not raise a too-low turnaround to the airport/aircraft minimum');
     w.eval(`setDeskPanel('corporate','')`);
     w.refreshCorporateResources(true);
     await wait(80);
@@ -288,11 +320,14 @@
     const speedRecovery=d.querySelector(`[data-dispatch-occ-flight="${recoveryFlight.id}"] [data-enroute-recovery="${recoveryFlight.id}"][data-recovery-option="speed"]`);
     const recoveryRow=d.querySelector(`[data-dispatch-occ-flight="${recoveryFlight.id}"] .enroute-recovery-row`);
     assert(recoveryRow?.textContent.includes('Recommend a higher cruise cost index'),'en-route recovery explanation is not visible under the option button');
+    assert(/\breply \d/.test(recoveryRow?.textContent||''),'en-route recovery option does not show the expected response range');
     assert(recoveryRow?.textContent.includes('fuel margin'),'en-route recovery impact details are not visible under the option button');
     const recoveryContext=w.enrouteRecoveryContextForFlight(recoveryFlight);
     assert(speedRecovery&&!speedRecovery.disabled,`dispatch does not expose higher-speed en-route recovery for a delayed airborne flight: ${JSON.stringify({reason:recoveryContext.unavailableReason,status:recoveryContext.status,arrDelay:recoveryContext.arrDelay,remainingMin:recoveryContext.remainingMin,fuel:w.fuelMarginContextForFlight(recoveryFlight),plan:recoveryPlan,onboard:recoveryFlight.fuelOnboardAtDeparture,options:recoveryContext.options.map(option=>({id:option.id,disabled:option.disabled,disabledReason:option.disabledReason,recoverMin:option.recoverMin,fuelMarginPct:option.fuelMarginPct}))})}`);
     speedRecovery.click(); await wait(140);
     assert(recoveryFlight.enrouteRecoveryRequest?.status==='pending','higher-speed recovery should wait for flight deck response');
+    assert(recoveryFlight.enrouteRecoveryRequest.responseMin>=3,'higher-speed recovery did not lock a response timer');
+    assert(recoveryFlight.enrouteRecoveryTimingPlans?.speed?.responseMin===recoveryFlight.enrouteRecoveryRequest.responseMin,'higher-speed recovery request did not reuse the locked timing plan');
     let acceptedRequestId='';
     for(let i=0;i<80;i++){
       const candidate=`fixture-speed-accepted-${i}`;
@@ -318,9 +353,9 @@
     const watchIncident=w.createIncident('aircraft_late_inbound',watchFlight,{training:true,detectedAt:w.simNow()});
     assert(!watchIncident,'late inbound should not be creatable as a standalone incident');
     w.refreshAll(); await wait(100);
-    assert(d.querySelector('[data-incident-filter="actionable"].active'),'incident widget does not default to actionable triage');
-    assert(Number(d.querySelector('[data-incident-filter="actionable"] b')?.textContent||0)>=1,'actionable incident count should include current operational cases');
-    assert(Number(d.querySelector('[data-incident-filter="all"] b')?.textContent||0)>=1,'all incident count is wrong');
+    assert(!d.querySelector('[data-incident-filter]'),'incident widget still renders the old triage tabs');
+    assert(d.querySelector('[data-desk-widget="incidents"] .incident-queue-section.actionable'),'incident widget does not render the actionable queue');
+    assert(Number(d.querySelector('[data-desk-widget="incidents"] .incident-queue-section.actionable>header span')?.textContent||0)>=1,'actionable queue count should include current operational cases');
     assert(!d.querySelector('[data-desk-widget="incidents"]')?.textContent.includes('Aircraft late inbound'),'late inbound leaked into incident triage');
     assert(d.querySelector('[data-desk-widget="planning"]'),'dispatch widget is missing from the right rail');
     assert(d.querySelector('[data-desk-widget="passengers"]'),'passenger impact widget is missing from the right rail');
@@ -410,13 +445,13 @@
     assert(getComputedStyle(d.querySelector('.schedule-toolbar')).backgroundColor===shellBg,'schedule toolbar background does not match the shell');
     const desktopLeftWidth=d.querySelector('.operations-rail').getBoundingClientRect().width;
     const desktopRightWidth=d.querySelector('.context-rail').getBoundingClientRect().width;
-    assert(Math.abs(desktopLeftWidth-desktopRightWidth)<=1,`desktop rail widths differ: left ${desktopLeftWidth}, right ${desktopRightWidth}`);
+    assert(Math.abs(desktopLeftWidth-360)<=1&&Math.abs(desktopRightWidth-390)<=1,`desktop rail resize widths were not preserved: left ${desktopLeftWidth}, right ${desktopRightWidth}`);
     frame.style.width='1120px';
     await wait(120);
     const compactLeftWidth=d.querySelector('.operations-rail').getBoundingClientRect().width;
     const compactRightWidth=d.querySelector('.context-rail').getBoundingClientRect().width;
     const compactCenterWidth=d.querySelector('#center-workspace').getBoundingClientRect().width;
-    assert(Math.abs(compactLeftWidth-compactRightWidth)<=1,`compact rail widths differ: left ${compactLeftWidth}, right ${compactRightWidth}`);
+    assert(compactLeftWidth>=240&&compactRightWidth>=240,`compact rail widths fell below the draggable minimum: left ${compactLeftWidth}, right ${compactRightWidth}`);
     assert(compactCenterWidth>=360,'compact responsive layout crushes the center workspace');
     frame.style.width='1440px';
     await wait(120);
@@ -616,6 +651,7 @@
     w.settleSelectedFlight(flight.id); await wait(80);
     d.querySelector('[data-desk-panel="personnel:relocation"]').click(); await wait(80);
     assert(d.querySelector('[data-rail-widget="personnel"] [data-management-content="relocation"]'),'relocation controls are not mounted in the personnel widget after opening the action');
+    assert(d.querySelector('[data-rail-widget="personnel"] .desk-action-tab.active')?.textContent.includes('Move personnel'),'personnel action did not render as the active tab');
     const openedTask=d.querySelector('[data-desk-widget="incidents"] .case-active-task [data-inline-task]');
     assert(openedTask?.querySelector('.inline-task-action'),'crew workflow controls are not shown directly in the incident widget');
     const openedTaskId=openedTask?.dataset.inlineTask;
@@ -631,7 +667,9 @@
     assert(w.eval('workspaceUi.nextActiveIncidentId')===incident.id,'incident case selection did not stay on the current case after allocation');
     assert(d.querySelector('[data-rail-widget="corporateResources"] .page-heading .info-tip'),'embedded planning helper is missing its info tooltip');
     assert(getComputedStyle(d.querySelector('[data-rail-widget="corporateResources"] .page-heading p')).display==='none','embedded planning helper copy is still visible');
-    assert(d.querySelector('[data-rail-widget="personnel"] .desk-list-row')?.textContent.includes('captains'),'personnel widget does not show station staffing');
+    d.querySelector('[data-desk-panel="personnel:overview"]').click(); await wait(80);
+    assert(d.querySelector('[data-rail-widget="personnel"] .desk-action-tab.active')?.textContent.includes('Overview'),'personnel overview tab is not active after selecting it');
+    assert(d.querySelector('[data-rail-widget="personnel"] .desk-list-row')?.textContent.includes('captains'),'personnel widget overview does not show station staffing');
     const fraStaffToggle=d.querySelector('[data-rail-widget="personnel"] [data-staff-airport="FRA"]');
     assert(fraStaffToggle,'staff airport row is not expandable');
     fraStaffToggle.click(); await wait(80);
@@ -657,6 +695,9 @@
     assert(autoIncident.status==='open','ground-stop coordination should wait for the external response instead of instantly resolving');
     assert(autoIncident.selectedStrategy==='hold_ground','single-click ground-stop action did not record the selected strategy');
     assert(autoIncident.coordinatedDelayMin===45,'single-click ground-stop hold did not record the expected coordinated delay');
+    const visibleWaitingCase=d.querySelector(`[data-desk-widget="incidents"] .incident-queue-section.waiting [data-incident-case="${autoIncident.id}"]`);
+    assert(visibleWaitingCase,'waiting incident should stay visible instead of being hidden in a collapsed group');
+    assert(!d.querySelector(`.incident-queue-more [data-incident-case="${autoIncident.id}"]`),'waiting incident was rendered inside a collapsed incident group');
     assert(!d.querySelector('[data-handle-incident]')&&!d.querySelector('[data-summary-task]')&&!d.querySelector('[data-full-flight]'),'left flight overview still exposes a separate details/task button');
     assert(d.querySelector('#scheduleType option[value="ferry"]'),'ferry planning is not available in the inline planner');
     assert(!d.querySelector('[data-desk-widget="selectedWork"]'),'selected-flight work widget should not exist');
