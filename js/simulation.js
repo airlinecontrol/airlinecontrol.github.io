@@ -90,7 +90,10 @@ function mapPush(map,key,value){
 
 function operationalIndex(t=simNow()){
   const incidentSignature=(state.incidents||[])
-    .map(item=>`${item.id}:${item.status}:${item.type}:${item.flightId}:${item.aircraftId}:${item.blocking?1:0}`)
+    .map(item=>{
+      const affectedIds=typeof incidentAffectedFlightIds==='function'?incidentAffectedFlightIds(item):(item.flightId?[item.flightId]:[]);
+      return `${item.id}:${item.status}:${item.type}:${item.flightId}:${item.aircraftId}:${item.scope?.kind||''}:${item.scope?.subjectId||''}:${affectedIds.join(',')}:${item.blocking?1:0}`;
+    })
     .join('|');
   const key=[
     operationalIndexRevision,
@@ -135,7 +138,8 @@ function operationalIndex(t=simNow()){
   for(const incident of state.incidents||[]){
     if(incident.status!=='open') continue;
     openIncidents.push(incident);
-    if(incident.flightId) mapPush(openIncidentsByFlight,incident.flightId,incident);
+    const affectedIds=typeof incidentAffectedFlightIds==='function'?incidentAffectedFlightIds(incident):(incident.flightId?[incident.flightId]:[]);
+    affectedIds.forEach(flightId=>mapPush(openIncidentsByFlight,flightId,incident));
     if(incident.aircraftId) mapPush(openIncidentsByAircraft,incident.aircraftId,incident);
   }
   const value={
@@ -745,10 +749,9 @@ function openIncidentsForFlight(flightId){
 
 function departureBlockingIncidentsForFlight(flight){
   if(!flight) return [];
-  return (state.incidents||[]).filter(incident=>{
-    if(incident.flightId!==flight.id||incident.status!=='open'||!incident.blocking) return false;
-    const definition=INCIDENT_DEFINITIONS[incident.type]||{};
-    return !definition.airborneOnly;
+  return openIncidentsForFlight(flight.id).filter(incident=>{
+    if(incident.status!=='open'||!incident.blocking) return false;
+    return AeroIncidentModel.phaseForType(incident.type)!=='airborne';
   });
 }
 
@@ -817,173 +820,6 @@ function crewSickRoleForFlight(flight){
   return 'cabinCrew';
 }
 
-function incidentAirport(type,flight){
-  if(['destination_closure','destination_closure_ground'].includes(type)) return flight.to;
-  if(['destination_handling_unavailable'].includes(type)) return flightOperationalDestination(flight);
-  if(['night_curfew_conflict','arrival_curfew_coordination'].includes(type)) return flightOperationalDestination(flight);
-  if(['onboard_medical','inflight_technical_fault','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute','unruly_passenger','destination_weather_deterioration','destination_below_minima','alternate_unsuitable','diversion_airport_unavailable','lightning_strike','pressurization_issue','crew_duty_extension'].includes(type)) return flightOperationalDestination(flight);
-  return flight.from;
-}
-
-function incidentIsDerivedType(type,source=''){
-  return source==='derived'||DERIVED_INCIDENT_TYPES.has(type);
-}
-
-function incidentCaseParentScore(candidate,type,flight,context,detectedAt,sourceKey){
-  if(!candidate||candidate.status!=='open'||candidate.sourceKey&&sourceKey&&candidate.sourceKey===sourceKey) return 0;
-  if(candidate.flightId===flight.id&&candidate.type===type) return 0;
-  const index=operationalIndex(detectedAt);
-  const candidateFlight=candidate.flightId?index.flightsById.get(candidate.flightId):null;
-  let score=0;
-  if(context?.sourceIncidentId&&candidate.id===context.sourceIncidentId) score+=120;
-  if(context?.sourceId&&(candidate.id===context.sourceId||candidate.flightId===context.sourceId)) score+=80;
-  if(context?.previousFlightId&&candidate.flightId===context.previousFlightId) score+=85;
-  if(candidate.flightId===flight.id) score+=72;
-  if(candidate.aircraftId&&candidate.aircraftId===flight.aircraftId) score+=34;
-  if(candidate.airport&&candidate.airport===incidentAirport(type,flight)) score+=8;
-  if(!incidentIsDerivedType(candidate.type,candidate.source)) score+=20;
-  if(candidate.rootIncidentId&&candidate.rootIncidentId===candidate.id) score+=8;
-  if(candidate.detectedAt<=detectedAt) score+=10;
-  else score-=18;
-  if(candidateFlight&&candidateFlight.departure<=flight.departure) score+=12;
-  if(candidate.type==='night_curfew_conflict'&&type==='night_curfew_conflict') score-=60;
-  return score;
-}
-
-function findIncidentCaseParent(type,flight,context,detectedAt,source,sourceKey){
-  if(!incidentIsDerivedType(type,source)||!flight) return null;
-  let best=null,bestScore=0;
-  for(const candidate of state.incidents||[]){
-    const score=incidentCaseParentScore(candidate,type,flight,context,detectedAt,sourceKey);
-    if(score>bestScore){ best=candidate; bestScore=score; }
-  }
-  return bestScore>=55?best:null;
-}
-
-function incidentChainReason(type,parent,flight,context){
-  if(!parent) return '';
-  if(context?.previousFlightId&&parent.flightId===context.previousFlightId) return `Knock-on from inbound ${context.previousFlightId}`;
-  if(parent.flightId===flight.id) return 'Same disrupted flight';
-  if(parent.aircraftId===flight.aircraftId) return 'Same aircraft rotation';
-  if(context?.sourceId) return `Linked operational source ${context.sourceId}`;
-  return 'Linked operational consequence';
-}
-
-function ensureIncidentCaseFields(incident,parent=null,flight=null,context=null){
-  if(!incident) return false;
-  let changed=false;
-  if(parent){
-    const caseId=parent.caseId||parent.id;
-    const rootIncidentId=parent.rootIncidentId||parent.id;
-    if(incident.caseId!==caseId){ incident.caseId=caseId; changed=true; }
-    if(incident.rootIncidentId!==rootIncidentId){ incident.rootIncidentId=rootIncidentId; changed=true; }
-    if(incident.triggeredByIncidentId!==parent.id){ incident.triggeredByIncidentId=parent.id; changed=true; }
-    const reason=incidentChainReason(incident.type,parent,flight||state.flights.find(item=>item.id===incident.flightId),context||incident.context||null);
-    if(incident.chainReason!==reason){ incident.chainReason=reason; changed=true; }
-  }else{
-    if(!incident.caseId){ incident.caseId=incident.id; changed=true; }
-    if(!incident.rootIncidentId){ incident.rootIncidentId=incident.id; changed=true; }
-    if(incident.triggeredByIncidentId===undefined){ incident.triggeredByIncidentId=''; changed=true; }
-    if(incident.chainReason===undefined){ incident.chainReason=''; changed=true; }
-  }
-  return changed;
-}
-
-function repairIncidentCaseLinks(){
-  let changed=false;
-  for(const incident of state.incidents||[]) changed=ensureIncidentCaseFields(incident)||changed;
-  const open=(state.incidents||[]).filter(incident=>incident.status==='open'&&incidentIsDerivedType(incident.type,incident.source));
-  for(const incident of open){
-    if(incident.triggeredByIncidentId) continue;
-    const flight=state.flights.find(item=>item.id===incident.flightId);
-    if(!flight) continue;
-    const parent=findIncidentCaseParent(incident.type,flight,incident.context,incident.detectedAt||simNow(),incident.source,incident.sourceKey);
-    if(parent&&parent.id!==incident.id) changed=ensureIncidentCaseFields(incident,parent,flight,incident.context)||changed;
-  }
-  if(changed) invalidateOperationalIndex();
-  return changed;
-}
-
-function incidentCreationPhaseBlocker(type,flight,t=simNow()){
-  const definition=INCIDENT_DEFINITIONS[type];
-  if(!definition||!flight) return 'invalid';
-  if(definition.airborneOnly&&!flightIsAirborne(flight,t)) return 'requires_airborne';
-  if(flight.departureLogged&&!definition.allowAirborne) return 'requires_ground';
-  return '';
-}
-
-function incidentIsBeforeTakeoff(type,flight,t=simNow()){
-  const definition=INCIDENT_DEFINITIONS[type];
-  return Boolean(definition?.airborneOnly&&flight&&t<flightMovementTimes(flight).takeoffAt);
-}
-
-function createIncident(type,flight,{training=false,detectedAt=simNow(),source='random',sourceKey='',context=null}={}){
-  if(type==='destination_closure'&&flight&&!flightIsAirborne(flight,detectedAt)) type='destination_closure_ground';
-  const definition=INCIDENT_DEFINITIONS[type];
-  if(RETIRED_INCIDENT_TYPES.has(type)||!definition||!flight||flight.cancelled||flight.settled) return null;
-  if(!training&&!flight.departureLogged&&!definition.airborneOnly){
-    const leadMin=definition.maxAutoLeadMin||(source==='derived'?360:180);
-    if(detectedAt<flightActualDeparture(flight)-leadMin*MIN) return null;
-  }
-  if(incidentCreationPhaseBlocker(type,flight,detectedAt)) return null;
-  if(type==='destination_closure_ground'&&!context){
-    const destination=flightOperationalDestination(flight);
-    const weather=Management.weatherAt(destination,flightActualArrival(flight));
-    context={sourceId:flight.id,airport:destination,conditions:weather.conditions,capacityFactor:weather.capacityFactor,delayMin:Math.max(60,weather.delayMin||90),reason:'Destination unavailable before departure'};
-  }
-  if(type==='arrival_curfew_coordination'&&!context){
-    context=arrivalCurfewContextForFlight(flight,detectedAt);
-    if(!context) return null;
-    sourceKey=context.sourceKey;
-  }
-  const duplicate=state.incidents.find(incident=>incident.flightId===flight.id&&incident.type===type&&incident.status==='open');
-  if(duplicate){
-    const parent=duplicate.triggeredByIncidentId?null:findIncidentCaseParent(type,flight,context,detectedAt,source,sourceKey);
-    duplicate.context=context||duplicate.context||null;
-    duplicate.lastDetectedAt=detectedAt;
-    if(sourceKey&&!duplicate.sourceKey) duplicate.sourceKey=sourceKey;
-    ensureIncidentCaseFields(duplicate,parent,flight,duplicate.context);
-    invalidateOperationalIndex();
-    return duplicate;
-  }
-  const id='INC'+state.nextIncident++;
-  const parent=findIncidentCaseParent(type,flight,context,detectedAt,source,sourceKey);
-  const latestUsefulDeadline=Math.max(detectedAt+5*MIN,flight.departure);
-  const airborne=flightIsAirborne(flight,detectedAt);
-  const deadline=airborne
-    ? Math.min(detectedAt+definition.decisionMin*MIN,Math.max(detectedAt+5*MIN,flightActualArrival(flight)))
-    : Math.min(detectedAt+definition.decisionMin*MIN,latestUsefulDeadline);
-  const incident={
-    id,type,flightId:flight.id,aircraftId:flight.aircraftId,
-    airport:incidentAirport(type,flight),
-    detectedAt,deadline,status:'open',severity:definition.severity,blocking:true,
-    training:Boolean(training),selectedAction:'',resolvedAt:0,outcome:'',automaticResolution:false,
-    technicalContext:['mel_defect','postflight_technical_defect'].includes(type)?technicalContextForIncident(type,id,detectedAt,context):null,
-    classification:OperationalWorkflows.WORKFLOWS[type]?.classification||'incident',workflowCreatedAt:0,overdue:false,
-    defaultApplied:false,defaultAppliedAt:0,defaultPolicy:'',defaultOutcome:'',
-    firstVisibleAt:0,autoClosedAt:0,autoCloseReason:'',
-    affectedRole:type==='crew_sick'?crewSickRoleForFlight(flight):'',
-    recoveryPlan:'',recoveryPlanAt:0,source,sourceKey,context,lastDetectedAt:detectedAt,impacts:[],
-    caseId:parent?.caseId||parent?.id||id,
-    rootIncidentId:parent?.rootIncidentId||parent?.id||id,
-    triggeredByIncidentId:parent?.id||'',
-    chainReason:incidentChainReason(type,parent,flight,context)
-  };
-  if(type==='crew_fatigue_report') incident.affectedRole=crewSickRoleForFlight(flight);
-  if(['no_legal_crew','crew_fatigue_mid_rotation','crew_misposition_after_diversion','crew_report_delayed'].includes(type)) incident.affectedRole=context?.role||'captains';
-  if(type==='bird_strike') incident.technicalContext=OperationalIntelligence.melFinding(`${id}:bird`,detectedAt);
-  if(type==='crew_misconnect') incident.affectedRole=context?.role||'captains';
-  state.incidents.push(incident);
-  ensureIncidentWorkflow(incident);
-  if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'opened',{deadline,detectedAt,source,reason:context?.reason||context?.trigger||''});
-  if(state.incidents.length>250){
-    const removable=state.incidents.findIndex(item=>item.status!=='open');
-    if(removable>=0) state.incidents.splice(removable,1);
-  }
-  invalidateOperationalIndex();
-  return incident;
-}
-
 function technicalContextForIncident(type,id,detectedAt,context=null){
   const finding=OperationalIntelligence.melFinding(id,detectedAt);
   const forced=context&&(
@@ -1023,14 +859,14 @@ function upsertIncidentImpact(parent,type,context,t){
     const changed=existing.status!==status||impactContextSignature(existing.context)!==impactContextSignature(context);
     if(changed){
       existing.type=type; existing.context=context; existing.status=status; existing.updatedAt=t;
-      existing.title=INCIDENT_DEFINITIONS[type]?.title||type;
+      existing.title=AeroIncidentModel.titleForType(type);
       existing.summary=impactSummary(type,context,status);
     }
     return changed;
   }
   parent.impacts.push({
     key,type,status,context,createdAt:t,updatedAt:t,
-    title:INCIDENT_DEFINITIONS[type]?.title||type,
+    title:AeroIncidentModel.titleForType(type),
     summary:impactSummary(type,context,status)
   });
   return true;
@@ -1044,7 +880,7 @@ function impactSummary(type,context,status='open'){
   }
   if(type==='crew_duty_risk') return `${prefix}${context?.label||'Crew duty limit risk projected.'}`;
   if(type==='crew_duty_extension') return `${prefix}+${context?.overrunMin||0} minutes beyond duty limit projected${context?.primaryCause?` · ${context.primaryCause}`:''}.`;
-  return INCIDENT_DEFINITIONS[type]?.summary||'Operational impact projected.';
+  return AeroIncidentModel.summaryForType(type);
 }
 
 function addSlotCause(causes,label,minutes,detail=''){
@@ -2482,6 +2318,7 @@ function processOperationalTimerEvents(ctx){
 
 function processFlightGenerationEvents(ctx){
   const t=ctx.t;
+  if(typeof processNetworkOperationalIncidents==='function'&&processNetworkOperationalIncidents(t)) ctx.markChanged('processNetworkOperationalIncidents',true);
   for(const f of state.flights){
     if(maybeApplyWeatherDelay(f,t)) ctx.markChanged(`maybeApplyWeatherDelay:${f.id}`,true);
     if(maybeApplyLiveWeatherImpact(f,t)) ctx.markChanged(`maybeApplyLiveWeatherImpact:${f.id}`,true);

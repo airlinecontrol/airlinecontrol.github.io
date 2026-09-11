@@ -1,26 +1,14 @@
 /* Runtime save repairs and cleanup for retired simulation concepts. */
 
-function retiredIncidentOutcome(type){
-  if(type==='aircraft_late_inbound') return 'Late inbound risk is tracked directly on the schedule instead of as a standalone incident.';
-  if(type==='alternate_unsuitable') return 'Alternate suitability is tracked as a warning instead of as a standalone incident.';
-  if(type==='destination_weather_deterioration') return 'Destination weather deterioration is tracked as a warning instead of as a standalone incident.';
-  if(type==='atc_restriction') return 'ATC flow restrictions are tracked as airport-flow causes instead of standalone incidents.';
-  if(type==='gate_conflict') return 'Gate and stand pressure is tracked as station-readiness warnings unless it creates a stronger operational disruption.';
-  if(type==='baggage_loading_issue') return 'Load-control and baggage trouble is tracked as station-readiness delay context unless a security or cancellation decision is required.';
-  if(type==='fueling_issue') return 'Routine fuel uplift constraints are tracked as station-readiness warnings; supplier outages remain incidents.';
-  if(type==='airport_capacity_reduction') return 'Airport flow restrictions are tracked as warnings unless they escalate into a ground stop or another OCC decision case.';
-  return 'Slot risk is tracked on the schedule and as linked disruption context instead of as a standalone incident.';
-}
-
 function retireTrackedIncidents(t=simNow()){
   let changed=false;
-  for(const incident of state.incidents.filter(item=>RETIRED_INCIDENT_TYPES.has(item.type)&&item.status==='open')){
+  for(const incident of state.incidents.filter(item=>AeroIncidentModel.isRetiredType(item.type)&&item.status==='open')){
     incident.status='resolved';
     incident.blocking=false;
     incident.resolvedAt=t;
     incident.automaticResolution=true;
     incident.selectedAction='tracked_on_schedule';
-    incident.outcome=retiredIncidentOutcome(incident.type);
+    incident.outcome=AeroIncidentModel.retiredOutcomeForType(incident.type);
     for(const task of incidentTasks(incident.id)){
       if(!['completed','cancelled'].includes(task.status)) task.status='cancelled';
     }
@@ -40,8 +28,12 @@ function duplicateIncidentProgressScore(incident){
 function repairDuplicateOpenIncidents(t=simNow()){
   const groups=new Map();
   for(const incident of state.incidents||[]){
-    if(incident.status!=='open'||!incident.flightId||!incident.type) continue;
-    const key=`${incident.flightId}:${incident.type}`;
+    if(incident.status!=='open'||!incident.type) continue;
+    if(typeof ensureIncidentIdentityFields==='function') ensureIncidentIdentityFields(incident,null,incident.context,t);
+    const scope=incident.scope||null;
+    const key=scope?.kind&&scope.subjectId
+      ? `${scope.kind}:${incident.type}:${scope.subjectId}`
+      : incident.dedupeKey||`${incident.flightId||incident.aircraftId||incident.airport||incident.id}:${incident.type}`;
     if(!groups.has(key)) groups.set(key,[]);
     groups.get(key).push(incident);
   }
@@ -55,12 +47,15 @@ function repairDuplicateOpenIncidents(t=simNow()){
         keeper.lastDetectedAt=duplicate.lastDetectedAt||duplicate.detectedAt;
         if(duplicate.context) keeper.context=duplicate.context;
       }
+      if(typeof incidentAffectedFlightIds==='function'){
+        keeper.affectedFlightIds=[...new Set([...incidentAffectedFlightIds(keeper),...incidentAffectedFlightIds(duplicate)])];
+      }
       duplicate.status='resolved';
       duplicate.blocking=false;
       duplicate.resolvedAt=t;
       duplicate.automaticResolution=true;
       duplicate.selectedAction='duplicate_case_merged';
-      duplicate.outcome=`Merged into existing ${keeper.id} ${INCIDENT_DEFINITIONS[keeper.type]?.title||keeper.type} case for the same flight.`;
+      duplicate.outcome=`Merged into existing ${keeper.id} ${AeroIncidentModel.titleForType(keeper.type)} case for the same operational subject.`;
       for(const task of incidentTasks(duplicate.id)){
         if(!['completed','cancelled'].includes(task.status)) task.status='cancelled';
       }

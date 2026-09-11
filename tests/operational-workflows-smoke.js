@@ -1,9 +1,13 @@
 const assert=require('node:assert/strict');
 
 global.window=global;
+require('../js/incident-model.js');
 require('../js/operational-workflows.js');
 
+const model=global.AeroIncidentModel;
 const workflows=global.AeroOperationalWorkflows;
+assert.equal(global.INCIDENT_DEFINITIONS,undefined,'old incident definition global should not be exported');
+assert.equal(global.INCIDENT_DEFAULT_POLICIES,undefined,'old incident default-policy global should not be exported');
 const assertRecordedAuthorityOptions=task=>{
   for(const option of task.strategyOptions||[]){
     if(option.id==='cancel') continue;
@@ -11,12 +15,28 @@ const assertRecordedAuthorityOptions=task=>{
   }
 };
 assert.deepEqual(Object.keys(workflows.DEPARTMENTS),['dispatch','crew','maintenance','station']);
+assert.equal(workflows.WORKFLOWS,model.workflowDefinitions(),'operational workflows should expose the central incident model definitions');
+assert.deepEqual(model.activeIncidentTypes(),Object.keys(workflows.WORKFLOWS));
+for(const type of model.activeIncidentTypes()){
+  const incidentModel=model.incidentModel(type);
+  assert(incidentModel,`${type} is missing a model`);
+  assert(['flight','aircraft','airport','network'].includes(incidentModel.scope),`${type} has invalid scope`);
+  assert(['ground','airborne','any'].includes(incidentModel.phase),`${type} has invalid phase`);
+  assert(['origin','destination'].includes(incidentModel.airportRole),`${type} has invalid airport role`);
+  assert(incidentModel.defaultPolicy,`${type} is missing a no-action default`);
+  assert(incidentModel.finalizer,`${type} is missing a finalizer key`);
+  for(const step of incidentModel.steps){
+    for(const option of step.options||[]){
+      assert.equal(model.optionForTask(type,step.key,option.id),option,`${type}:${step.key}:${option.id} is not addressable through the model`);
+    }
+  }
+}
 assert.deepEqual(Object.keys(workflows.WORKFLOWS),[
   'crew_sick','mel_defect','night_curfew_conflict','arrival_curfew_coordination','destination_closure','destination_closure_ground',
   'aircraft_out_of_position','aircraft_misposition_after_diversion','postflight_technical_defect',
   'crew_misconnect','crew_misposition_after_diversion','crew_report_delayed','crew_duty_risk','crew_fatigue_report','crew_fatigue_mid_rotation','crew_duty_extension',
   'no_legal_crew','fuel_supplier_outage','maintenance_resource_unavailable','deicing_required','deicing_capacity_collapse',
-  'holdover_expired','atc_ground_stop','performance_limited',
+  'holdover_expired','atc_ground_stop','network_atc_sector_capacity','network_airspace_closure','network_convective_weather','performance_limited',
   'destination_handling_unavailable','security_screening','bird_strike','onboard_medical',
   'inflight_technical_fault','fuel_margin_low','atc_holding_fuel_conflict','airborne_atc_reroute',
   'unruly_passenger','destination_below_minima',
@@ -25,10 +45,13 @@ assert.deepEqual(Object.keys(workflows.WORKFLOWS),[
 
 const tasks=workflows.tasksForIncident({id:'INC9',type:'destination_closure',flightId:'AS9',aircraftId:'AC9',detectedAt:1000});
 assert.equal(tasks.length,4);
+assert.equal(tasks[0].problemId,'INC9');
+assert.equal(Object.prototype.propertyIsEnumerable.call(tasks[0],'incidentId'),false,'incidentId should only be a compatibility alias on materialized tasks');
 assert.equal(tasks[0].status,'available');
 assert.equal(tasks[1].status,'blocked');
 assert.equal(tasks[0].kind,'flight_watch_assessment');
 assert.equal(tasks[1].kind,'authority_decision');
+assert.equal(tasks[1].dependsOn[0],tasks[0].id);
 assert.deepEqual(tasks[0].resources,[{type:'occ_desk',amount:1}]);
 assert.deepEqual(tasks[1].strategyOptions.map(option=>option.id),['alternate','return_origin']);
 assertRecordedAuthorityOptions(tasks[1]);
@@ -128,6 +151,22 @@ assert.equal(deicingCollapseTasks.find(task=>task.key==='station-deice-queue').k
 const groundStopTasks=workflows.tasksForIncident({id:'INC16D',type:'atc_ground_stop',flightId:'AS16D',aircraftId:'AC16D',detectedAt:1000});
 assert.deepEqual(groundStopTasks.find(task=>task.key==='dispatch-groundstop-strategy').strategyOptions.map(option=>option.id),['hold_ground','priority','cancel']);
 assert.equal(groundStopTasks.length,1);
+
+const networkAtcTasks=workflows.tasksForIncident({id:'INC16D1',type:'network_atc_sector_capacity',flightId:'AS16D1',aircraftId:'AC16D1',detectedAt:1000});
+assert.deepEqual(networkAtcTasks.find(task=>task.key==='dispatch-network-atc-strategy').strategyOptions.map(option=>option.id),['accept_flow','reroute_around','hold_departures']);
+assert.equal(networkAtcTasks.find(task=>task.key==='dispatch-network-atc-flow').kind,'network_event_coordination');
+assert.equal(networkAtcTasks.find(task=>task.key==='dispatch-network-atc-reroute').kind,'network_route_revision');
+assert.equal(networkAtcTasks.find(task=>task.key==='dispatch-network-atc-reroute').branch,'reroute_around');
+
+const networkAirspaceTasks=workflows.tasksForIncident({id:'INC16D2',type:'network_airspace_closure',flightId:'AS16D2',aircraftId:'AC16D2',detectedAt:1000});
+assert.deepEqual(networkAirspaceTasks.find(task=>task.key==='dispatch-network-airspace-strategy').strategyOptions.map(option=>option.id),['reroute_around','hold_departures']);
+assert.equal(networkAirspaceTasks.find(task=>task.key==='dispatch-network-airspace-reroute').kind,'network_route_revision');
+assert.equal(networkAirspaceTasks.find(task=>task.key==='dispatch-network-airspace-hold').kind,'network_event_coordination');
+
+const networkWeatherTasks=workflows.tasksForIncident({id:'INC16D3',type:'network_convective_weather',flightId:'AS16D3',aircraftId:'AC16D3',detectedAt:1000});
+assert.deepEqual(networkWeatherTasks.find(task=>task.key==='dispatch-network-weather-strategy').strategyOptions.map(option=>option.id),['reroute_around','accept_tactical','hold_departures']);
+assert.equal(networkWeatherTasks.find(task=>task.key==='dispatch-network-weather-reroute').kind,'network_route_revision');
+assert.equal(networkWeatherTasks.find(task=>task.key==='dispatch-network-weather-tactical').kind,'network_event_coordination');
 
 const performanceTasks=workflows.tasksForIncident({id:'INC16E',type:'performance_limited',flightId:'AS16E',aircraftId:'AC16E',detectedAt:1000});
 assert.deepEqual(performanceTasks.find(task=>task.key==='dispatch-performance-strategy').strategyOptions.map(option=>option.id),['payload_reduce','delay_conditions','substitute','cancel']);

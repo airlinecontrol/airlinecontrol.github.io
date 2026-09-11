@@ -601,23 +601,25 @@ function newState(){
     nextSlotRight:1,
     nextTransaction:2,
     nextPersonnelTransfer:1,
-    nextIncident:1,
+    nextProblem:1,
+    nextProblemTask:1,
     nextResourceRequest:1,
     nextExternalRequest:1,
     nextResourceAssignment:1,
     nextRecoveryCostEvent:1,
     nextPassengerRecovery:1,
     nextCrewRecovery:1,
+    nextNetworkEvent:1,
     rng:{seed:`aoc-${sim}`,counter:0,log:[]},
     incidentExerciseIndex:0,
     slotRights:[],
     aircraft:[],
     flights:[],
     services:[],
-    incidents:[],
-    incidentTransitions:[],
+    problems:[],
+    problemTransitions:[],
     flightHistory:[],
-    coordinationTasks:[],
+    problemTasks:[],
     externalRequests:[],
     resourceAssignments:[],
     crewDuties:[],
@@ -628,26 +630,28 @@ function newState(){
     recoveryCostEvents:[],
     passengerRecoveries:[],
     crewRecoveries:[],
+    networkEvents:[],
     fuelMarket:{pricePerGallon:FUEL_MARKET_BASE_EUR_GAL,updatedAt:sim},
     personnel:{assignments:{},lastPayrollAt:sim},
     ops:{automaticDisruptions:true,caseLinksRepaired:true,phaseRealismRepaired:true},
     management:{cycleStart:sim,reviews:[]},
     stats:{revenue:0,costs:0,staffCosts:0,leaseCosts:0,transferCosts:0,recoveryCosts:0,cancellationCosts:0,passengerRecoveryCosts:0,crewRecoveryCosts:0,scheduledMaintenanceCosts:0,cancelled:0,pax:0,completed:0},
   };
-return s;
+  return window.AeroProblems?.installStateAliases?.(s)||s;
 }
 
 function migrateState(parsed){
   if(!parsed || parsed.version!==VERSION) return newState();
+  if(window.AeroProblems?.installStateAliases) window.AeroProblems.installStateAliases(parsed);
   if(!Array.isArray(parsed.services)) parsed.services=[];
   if(!Array.isArray(parsed.flights)) parsed.flights=[];
   if(!Array.isArray(parsed.aircraft)) parsed.aircraft=[];
   if(!Array.isArray(parsed.slotRights)) parsed.slotRights=[];
-  if(!Array.isArray(parsed.incidents)) parsed.incidents=[];
-  if(!Array.isArray(parsed.incidentTransitions)) parsed.incidentTransitions=[];
+  if(!Array.isArray(parsed.problems)) parsed.problems=[];
+  if(!Array.isArray(parsed.problemTransitions)) parsed.problemTransitions=[];
   if(!Array.isArray(parsed.flightHistory)) parsed.flightHistory=[];
   parsed.flightHistory=parsed.flightHistory.filter(item=>item&&item.id);
-  if(!Array.isArray(parsed.coordinationTasks)) parsed.coordinationTasks=[];
+  if(!Array.isArray(parsed.problemTasks)) parsed.problemTasks=[];
   if(!parsed.clock || typeof parsed.clock!=='object') parsed.clock={realBase:Date.now(),simBase:Date.now(),speed:1};
   if(!Number.isFinite(parsed.clock.realBase)) parsed.clock.realBase=Date.now();
   if(!Number.isFinite(parsed.clock.simBase)) parsed.clock.simBase=Date.now();
@@ -674,16 +678,19 @@ function migrateState(parsed){
   if(!Array.isArray(parsed.recoveryCostEvents)) parsed.recoveryCostEvents=[];
   if(!Array.isArray(parsed.passengerRecoveries)) parsed.passengerRecoveries=[];
   if(!Array.isArray(parsed.crewRecoveries)) parsed.crewRecoveries=[];
+  if(!Array.isArray(parsed.networkEvents)) parsed.networkEvents=[];
   if(!Number.isFinite(parsed.nextResourceRequest)) parsed.nextResourceRequest=parsed.resourceRequests.length+1;
   if(!Number.isFinite(parsed.nextRecoveryCostEvent)) parsed.nextRecoveryCostEvent=parsed.recoveryCostEvents.length+1;
   if(!Number.isFinite(parsed.nextPassengerRecovery)) parsed.nextPassengerRecovery=parsed.passengerRecoveries.length+1;
   if(!Number.isFinite(parsed.nextCrewRecovery)) parsed.nextCrewRecovery=parsed.crewRecoveries.length+1;
+  if(!Number.isFinite(parsed.nextNetworkEvent)) parsed.nextNetworkEvent=parsed.networkEvents.length+1;
   if(!parsed.rng || typeof parsed.rng!=='object') parsed.rng={seed:`aoc-${parsed.clock?.simBase||Date.now()}`,counter:0,log:[]};
   if(!parsed.rng.seed) parsed.rng.seed=`aoc-${parsed.clock?.simBase||Date.now()}`;
   if(!Number.isFinite(parsed.rng.counter)) parsed.rng.counter=0;
   if(!Array.isArray(parsed.rng.log)) parsed.rng.log=[];
   if(parsed.rng.log.length>80) parsed.rng.log=parsed.rng.log.slice(-80);
-  if(!Number.isFinite(parsed.nextIncident)) parsed.nextIncident=parsed.incidents.length+1;
+  if(!Number.isFinite(parsed.nextProblem)) parsed.nextProblem=parsed.problems.length+1;
+  if(!Number.isFinite(parsed.nextProblemTask)) parsed.nextProblemTask=parsed.problemTasks.length+1;
   if(!Number.isFinite(parsed.incidentExerciseIndex)) parsed.incidentExerciseIndex=0;
   for(const incident of parsed.incidents){
     if(!incident.status) incident.status=incident.resolvedAt?'resolved':'open';
@@ -834,6 +841,8 @@ function migrateState(parsed){
     if(f.constraintChecked===undefined) f.constraintChecked=Boolean(f.departureLogged);
     if(f.airportConstraintLabel===undefined) f.airportConstraintLabel='';
     if(f.airspaceConstraintLabel===undefined) f.airspaceConstraintLabel='';
+    if(f.networkConstraintLabel===undefined) f.networkConstraintLabel='';
+    if(!Array.isArray(f.networkConstraintIds)) f.networkConstraintIds=[];
     if(f.connectionPax===undefined) f.connectionPax=0;
     if(f.connectionCriticalPax===undefined) f.connectionCriticalPax=0;
     if(f.connectionAtRiskPax===undefined) f.connectionAtRiskPax=0;
@@ -913,7 +922,7 @@ function migrateState(parsed){
       svc.destinationSlotRightId=right.id;
     }
   }
-  return parsed;
+  return window.AeroProblems?.installStateAliases?.(parsed)||parsed;
 }
 function loadState(){
   try{
@@ -1019,23 +1028,29 @@ function simulationIsPaused(){
 }
 function traceIncidentTransition(incident,event,details={}){
   if(!incident) return null;
-  state.incidentTransitions??=[];
+  state.problemTransitions??=[];
   const now=simNow();
   const entry={
     at:now,realAt:Date.now(),event,
-    incidentId:incident.id,type:incident.type,flightId:incident.flightId||'',
+    problemId:incident.id,type:incident.type,flightId:incident.flightId||'',
     source:incident.source||'',sourceKey:incident.sourceKey||'',
     status:incident.status||'',selectedAction:incident.selectedAction||'',
     details
   };
-  state.incidentTransitions.push(entry);
-  if(state.incidentTransitions.length>80) state.incidentTransitions.splice(0,state.incidentTransitions.length-80);
-  return entry;
+  const transition=window.AeroProblems?.normalizeTransition
+    ? window.AeroProblems.normalizeTransition(entry)
+    : entry;
+  state.problemTransitions.push(transition);
+  if(state.problemTransitions.length>80) state.problemTransitions.splice(0,state.problemTransitions.length-80);
+  return transition;
 }
 function recentIncidentTransitions(limit=10){
-  return (state.incidentTransitions||[]).slice(-Math.max(1,limit));
+  return (state.problemTransitions||[]).slice(-Math.max(1,limit));
 }
-function save(){ localStorage.setItem(SAVE_KEY,JSON.stringify(state)); }
+function save(){
+  const snapshot=window.AeroProblems?.serializableState?window.AeroProblems.serializableState(state):state;
+  localStorage.setItem(SAVE_KEY,JSON.stringify(snapshot));
+}
 
 function setResetControlsDisabled(disabled){
   document.querySelectorAll('#resetBtn,#resetTopbarBtn').forEach(button=>{ button.disabled=disabled; });
@@ -1052,7 +1067,7 @@ function resetLocalSave(){
     // Write the replacement immediately so the periodic save and beforeunload
     // handlers can only persist the new blank state from this point onward.
     state=blank;
-    localStorage.setItem(SAVE_KEY,JSON.stringify(blank));
+    localStorage.setItem(SAVE_KEY,JSON.stringify(window.AeroProblems?.serializableState?window.AeroProblems.serializableState(blank):blank));
     localStorage.removeItem(WORKSPACE_UI_KEY);
     localStorage.removeItem(SPLIT_KEY);
     localStorage.removeItem(`${SPLIT_KEY}_occ`);

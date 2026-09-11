@@ -1,7 +1,23 @@
-/* Incident workflow execution, task progression, and default no-action handling. */
+/* Problem workflow execution, task progression, and default no-action handling. */
+
+function problemCollection(){
+  return state.problems||state.incidents||[];
+}
+
+function problemTaskCollection(){
+  return state.problemTasks||state.coordinationTasks||[];
+}
+
+function problemIdForTask(task){
+  return task?.problemId||task?.incidentId||'';
+}
+
+function problemById(problemId){
+  return problemCollection().find(item=>item.id===problemId)||null;
+}
 
 function incidentTasks(incidentId){
-  return (state.coordinationTasks||[]).filter(task=>task.incidentId===incidentId);
+  return problemTaskCollection().filter(task=>problemIdForTask(task)===incidentId);
 }
 
 function incidentDiversionDurationMs(incident,flight,aircraft,alternate){
@@ -54,8 +70,7 @@ function applyOperationalDiversionDestination(flight,incident,aircraft,alternate
 }
 
 function applyArrivalInspectionFollowUp(incident,flight){
-  const definition=incident&&INCIDENT_DEFINITIONS[incident.type];
-  if(!definition?.arrivalInspectionOnClose||!flight) return false;
+  if(!incident||!AeroIncidentModel.arrivalInspectionOnClose(incident.type)||!flight) return false;
   flight.arrivalInspectionRequired=true;
   const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
   if(aircraft) aircraft.arrivalInspectionRequired=true;
@@ -83,8 +98,10 @@ function playableIncidentTasks(incident){
 }
 
 function ensureIncidentWorkflow(incident){
-  if(!incident||incident.status!=='open'||!OperationalWorkflows.WORKFLOWS[incident.type]) return [];
-  state.coordinationTasks??=[];
+  if(!incident||incident.status!=='open') return [];
+  const model=globalThis.AeroIncidentModel.incidentModel(incident.type);
+  if(!model) return [];
+  state.problemTasks??=[];
   const existing=incidentTasks(incident.id);
   const tasks=OperationalWorkflows.tasksForIncident(incident);
   if(existing.length){
@@ -104,27 +121,27 @@ function ensureIncidentWorkflow(incident){
       if(task.status==='blocked'&&!task.dependsOn.length) task.status='available';
     }
     const existingKeys=new Set(existing.map(task=>task.key));
-    state.coordinationTasks.push(...tasks.filter(task=>!existingKeys.has(task.key)));
+    state.problemTasks.push(...tasks.filter(task=>!existingKeys.has(task.key)));
     unlockOperationalTasks(incident.id);
     return incidentTasks(incident.id);
   }
-  state.coordinationTasks.push(...tasks);
+  state.problemTasks.push(...tasks);
   incident.workflowCreatedAt=simNow();
-  incident.classification=OperationalWorkflows.WORKFLOWS[incident.type].classification;
+  incident.classification=model?.classification||'incident';
   return tasks;
 }
 
 function ensureOperationalWorkflows(){
   let changed=false;
-  for(const incident of state.incidents.filter(item=>item.status==='open')){
+  for(const incident of problemCollection().filter(item=>item.status==='open')){
     if(!incidentTasks(incident.id).length&&ensureIncidentWorkflow(incident).length) changed=true;
   }
   return changed;
 }
 
 function incidentIsAfterAirbornePhase(type,flight,t=simNow()){
-  const definition=INCIDENT_DEFINITIONS[type];
-  if(!definition?.airborneOnly||!flight) return false;
+  const model=globalThis.AeroIncidentModel.incidentModel(type);
+  if(model?.phase!=='airborne'||!flight) return false;
   return flightHasCompleted(flight,t)||statusOfFlight(flight,t)==='arrived';
 }
 
@@ -142,19 +159,18 @@ function closeIncidentForPhaseRepair(incident,t,outcome,reason='phase_repair'){
 }
 
 function closeArrivedAirborneIncident(incident,flight,t){
-  const definition=INCIDENT_DEFINITIONS[incident.type]||{};
   applyArrivalInspectionFollowUp(incident,flight);
-  const followUp=definition.arrivalInspectionOnClose?' Arrival inspection is now required.':'';
+  const followUp=AeroIncidentModel.arrivalInspectionOnClose(incident.type)?' Arrival inspection is now required.':'';
   closeIncidentForPhaseRepair(
     incident,t,
-    `Closed: ${definition.title||incident.type} is no longer an active in-flight case because ${flight.id} has arrived.${followUp}`,
+    `Closed: ${AeroIncidentModel.titleForType(incident.type)} is no longer an active in-flight case because ${flight.id} has arrived.${followUp}`,
     'flight_arrived'
   );
 }
 
 function repairIncidentPhaseRealism(t=simNow()){
   let changed=false;
-  for(const incident of state.incidents||[]){
+  for(const incident of problemCollection()){
     if(incident.status!=='open') continue;
     const flight=state.flights.find(item=>item.id===incident.flightId);
     if(!flight) continue;
@@ -182,18 +198,18 @@ function repairIncidentPhaseRealism(t=simNow()){
     const beforeTakeoff=incidentIsBeforeTakeoff(incident.type,flight,t);
     if(incident.type==='destination_closure'&&beforeTakeoff){
       incident.type='destination_closure_ground';
-      incident.summary=INCIDENT_DEFINITIONS.destination_closure_ground.summary;
+      incident.summary=AeroIncidentModel.summaryForType('destination_closure_ground');
       incident.context??={sourceId:flight.id,airport:flightOperationalDestination(flight),delayMin:90,reason:'Destination unavailable before departure'};
-      incident.classification=OperationalWorkflows.WORKFLOWS.destination_closure_ground.classification;
+      incident.classification=globalThis.AeroIncidentModel.classificationForType('destination_closure_ground');
       incident.selectedStrategy='';
       ensureIncidentWorkflow(incident);
       changed=true;
     }else if(incident.type==='bird_strike'&&beforeTakeoff){
       incident.type='mel_defect';
-      incident.summary=INCIDENT_DEFINITIONS.mel_defect.summary;
+      incident.summary=AeroIncidentModel.summaryForType('mel_defect');
       incident.context={...(incident.context||{}),phaseRepair:'Ground bird-strike report reframed as a ground technical defect'};
       incident.technicalContext=incident.technicalContext||technicalContextForIncident('mel_defect',`${incident.id}:ground`,incident.detectedAt||t,incident.context);
-      incident.classification=OperationalWorkflows.WORKFLOWS.mel_defect.classification;
+      incident.classification=globalThis.AeroIncidentModel.classificationForType('mel_defect');
       incident.selectedStrategy='';
       ensureIncidentWorkflow(incident);
       changed=true;
@@ -214,8 +230,8 @@ function repairIncidentPhaseRealism(t=simNow()){
 }
 
 function openDepartmentTasks(department){
-  return (state.coordinationTasks||[]).filter(task=>{
-    const incident=state.incidents.find(item=>item.id===task.incidentId);
+  return problemTaskCollection().filter(task=>{
+    const incident=problemById(problemIdForTask(task));
     return task.department===department&&!['completed','cancelled'].includes(task.status)&&taskRelevantToIncidentStrategy(task,incident);
   });
 }
@@ -240,7 +256,7 @@ function startOperationalTask(task,durationMin,status='in_progress',outcome=''){
 
 function createExternalWorkflowRequest(task,counterparty,durationMin,outcome){
   const request={
-    id:`XR${state.nextExternalRequest++}`,taskId:task.id,incidentId:task.incidentId,
+    id:`XR${state.nextExternalRequest++}`,taskId:task.id,problemId:problemIdForTask(task),
     counterparty,submittedAt:simNow(),respondsAt:simNow()+durationMin*MIN,status:'submitted',outcome
   };
   state.externalRequests.push(request);
@@ -292,14 +308,14 @@ function completeOperationalTask(task,outcome='',t=simNow()){
   task.status='completed'; task.completedAt=t; task.completesAt=task.completedAt;
   task.outcome=outcome||task.pendingOutcome||task.outcome||'Completed';
   delete task.pendingOutcome;
-  unlockOperationalTasks(task.incidentId);
-  const incident=state.incidents.find(item=>item.id===task.incidentId);
+  unlockOperationalTasks(problemIdForTask(task));
+  const incident=problemById(problemIdForTask(task));
   if(incident) finalizeOperationalCase(incident,t);
 }
 
 function unlockOperationalTasks(incidentId){
   const tasks=incidentTasks(incidentId);
-  const incident=state.incidents.find(item=>item.id===incidentId);
+  const incident=problemById(incidentId);
   let changed=true;
   while(changed){
     changed=false;
@@ -500,7 +516,7 @@ function reconcileManualCrewMoveIncident(incident,t=simNow()){
 
 function reconcileCrewResourceIncidents(t=simNow()){
   let changed=false;
-  for(const incident of state.incidents||[]){
+  for(const incident of problemCollection()){
     if(incident.status!=='open') continue;
     if(incident.type==='no_legal_crew'){
       if(reconcileNoLegalCrewIncident(incident,t)) changed=true;
@@ -682,47 +698,48 @@ function finalizeAirborneAtcRerouteIncident({incident,flight}){
   return true;
 }
 
-const INCIDENT_FINALIZERS={
-  crew_sick:finalizeCrewSickIncident,
-  mel_defect:finalizeTechnicalDefectIncident,
-  postflight_technical_defect:finalizeTechnicalDefectIncident,
-  maintenance_resource_unavailable:finalizeMaintenanceResourceIncident,
-  atc_ground_stop:finalizeAtcGroundStopIncident,
-  night_curfew_conflict:finalizeNightCurfewIncident,
-  arrival_curfew_coordination:finalizeArrivalCurfewIncident,
-  destination_closure:finalizeDestinationClosureIncident,
-  destination_closure_ground:finalizeGroundDestinationClosureIncident,
-  aircraft_out_of_position:finalizeAircraftPositionIncident,
-  aircraft_misposition_after_diversion:finalizeAircraftPositionIncident,
-  no_legal_crew:finalizeLegalCrewIncident,
-  crew_misconnect:finalizeCrewMisconnectIncident,
-  crew_misposition_after_diversion:finalizeCrewPositionIncident,
-  crew_report_delayed:finalizeCrewPositionIncident,
-  crew_duty_risk:finalizeCrewDutyIncident,
-  crew_fatigue_report:finalizeCrewDutyIncident,
-  crew_fatigue_mid_rotation:finalizeCrewDutyIncident,
-  crew_duty_extension:finalizeCrewDutyExtensionIncident,
-  fuel_supplier_outage:finalizeStationRecoveryIncident,
-  security_screening:finalizeStationRecoveryIncident,
-  deicing_required:finalizeStationRecoveryIncident,
-  deicing_capacity_collapse:finalizeStationRecoveryIncident,
-  holdover_expired:finalizeStationRecoveryIncident,
-  performance_limited:finalizePerformanceIncident,
-  destination_handling_unavailable:finalizeDestinationHandlingIncident,
-  onboard_medical:finalizeMedicalIncident,
-  inflight_technical_fault:finalizeInflightDiversionIncident,
-  fuel_margin_low:finalizeInflightDiversionIncident,
-  atc_holding_fuel_conflict:finalizeInflightDiversionIncident,
-  unruly_passenger:finalizeInflightDiversionIncident,
-  destination_below_minima:finalizeInflightDiversionIncident,
-  diversion_airport_unavailable:finalizeInflightDiversionIncident,
-  lightning_strike:finalizeInflightDiversionIncident,
-  bird_strike:finalizeInflightDiversionIncident,
-  pressurization_issue:finalizeInflightDiversionIncident,
-  airborne_atc_reroute:finalizeAirborneAtcRerouteIncident
-};
+function finalizeNetworkEventIncident({incident,flight}){
+  const outcome=incident.networkOutcome||null;
+  if(!outcome) return false;
+  incident.outcome=outcome.outcome||`${AeroIncidentModel.titleForType(incident.type)} coordinated for ${outcome.affectedCount||incident.context?.affectedCount||1} affected flight${(outcome.affectedCount||incident.context?.affectedCount||1)===1?'':'s'}.`;
+  if(outcome.cost&&!incident.recoveryCostEventId&&typeof recordRecoveryCostEvent==='function'){
+    const event=recordRecoveryCostEvent({
+      flight,
+      incident,
+      category:'dispatch',
+      kind:'network_recovery',
+      amount:outcome.cost,
+      airport:flight?.from||'',
+      description:`${AeroIncidentModel.titleForType(incident.type)}: ${outcome.label||outcome.action||'network plan'}`
+    });
+    if(event) incident.recoveryCostEventId=event.id;
+  }
+  return true;
+}
 
-window.AeroIncidentFinalizers=INCIDENT_FINALIZERS;
+const INCIDENT_FINALIZER_HANDLERS={
+  crew_sick:finalizeCrewSickIncident,
+  technical_defect:finalizeTechnicalDefectIncident,
+  maintenance_resource:finalizeMaintenanceResourceIncident,
+  atc_ground_stop:finalizeAtcGroundStopIncident,
+  night_curfew:finalizeNightCurfewIncident,
+  arrival_curfew:finalizeArrivalCurfewIncident,
+  destination_closure:finalizeDestinationClosureIncident,
+  ground_destination_closure:finalizeGroundDestinationClosureIncident,
+  aircraft_position:finalizeAircraftPositionIncident,
+  legal_crew:finalizeLegalCrewIncident,
+  crew_misconnect:finalizeCrewMisconnectIncident,
+  crew_position:finalizeCrewPositionIncident,
+  crew_duty:finalizeCrewDutyIncident,
+  crew_duty_extension:finalizeCrewDutyExtensionIncident,
+  station_recovery:finalizeStationRecoveryIncident,
+  performance:finalizePerformanceIncident,
+  destination_handling:finalizeDestinationHandlingIncident,
+  medical:finalizeMedicalIncident,
+  inflight_diversion:finalizeInflightDiversionIncident,
+  airborne_atc_reroute:finalizeAirborneAtcRerouteIncident,
+  network_event:finalizeNetworkEventIncident
+};
 
 function finalizeOperationalCase(incident,t=simNow()){
   if(!incident||incident.status!=='open') return false;
@@ -731,7 +748,7 @@ function finalizeOperationalCase(incident,t=simNow()){
   const flight=state.flights.find(item=>item.id===incident.flightId);
   const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
   if(!flight) return false;
-  const handler=INCIDENT_FINALIZERS[incident.type];
+  const handler=INCIDENT_FINALIZER_HANDLERS[AeroIncidentModel.finalizerForType(incident.type)];
   if(!handler) return false;
   if(!handler({incident,flight,aircraft,tasks,t})) return false;
   return completeFinalizedIncident(incident,t);
@@ -739,26 +756,26 @@ function finalizeOperationalCase(incident,t=simNow()){
 
 function processOperationalWorkflows(t=simNow()){
   let changed=ensureOperationalWorkflows();
-  for(const task of state.coordinationTasks||[]){
+  for(const task of problemTaskCollection()){
     if(!['in_progress','waiting_external'].includes(task.status)||!task.completesAt||t<task.completesAt) continue;
     if(task.externalRequestId){
       const request=state.externalRequests.find(item=>item.id===task.externalRequestId);
       if(request){ request.status='responded'; request.respondedAt=t; }
     }
     if(['maintenance_disposition','maintenance_repair'].includes(task.kind)&&task.selection?.action==='repair'){
-      const incident=state.incidents.find(item=>item.id===task.incidentId);
+      const incident=problemById(problemIdForTask(task));
       const flight=incident&&state.flights.find(item=>item.id===incident.flightId);
       const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
       if(aircraft){ aircraft.defectUntil=0; aircraft.defectReason=''; aircraft.condition=clamp((aircraft.condition??100)+5,0,100); }
     }
     if(['destination_handling','alternate_handling'].includes(task.kind)&&typeof confirmDestinationHandlingPlan==='function'){
-      const incident=state.incidents.find(item=>item.id===task.incidentId);
+      const incident=problemById(problemIdForTask(task));
       const flight=incident&&state.flights.find(item=>item.id===incident.flightId);
       if(flight) confirmDestinationHandlingPlan(flight,task.selection?.airport||incident?.selectedAlternate||flightOperationalDestination(flight),t);
     }
     completeOperationalTask(task,'',t); changed=true;
   }
-  for(const incident of state.incidents.filter(item=>item.status==='open')){
+  for(const incident of problemCollection().filter(item=>item.status==='open')){
     unlockOperationalTasks(incident.id);
     if(finalizeOperationalCase(incident,t)) changed=true;
   }
@@ -972,8 +989,8 @@ function cancelIncidentRecoveryTask(task,incident,flight){
   task.completedAt=simNow();
   task.completesAt=task.completedAt;
   task.outcome='Flight cancelled as the selected incident recovery.';
-  if(incident.type==='night_curfew_conflict') cancelSingleFlight(flight.id,{skipConfirm:true,reason:INCIDENT_DEFINITIONS[incident.type]?.title||incident.type});
-  else cancelFlight(flight.id,{skipConfirm:true,reason:INCIDENT_DEFINITIONS[incident.type]?.title||incident.type});
+  if(incident.type==='night_curfew_conflict') cancelSingleFlight(flight.id,{skipConfirm:true,reason:AeroIncidentModel.titleForType(incident.type)});
+  else cancelFlight(flight.id,{skipConfirm:true,reason:AeroIncidentModel.titleForType(incident.type)});
   return true;
 }
 
@@ -1037,7 +1054,7 @@ function handleCrewReportTask({task,incident}){
 }
 
 function handleMaintenanceInspectionTask({task}){
-  const incident=state.incidents.find(item=>item.id===task.incidentId);
+  const incident=problemById(problemIdForTask(task));
   const flight=incident&&state.flights.find(item=>item.id===incident.flightId);
   const timing=operationalTimingForTask(task,incident,flight,'inspect',{minResponseMin:15,maxResponseMin:55});
   startOperationalTask(task,responseMinutesForTiming(timing,25),'in_progress','Engineering inspection completed.');
@@ -1113,7 +1130,7 @@ function handleMaintenanceCheckSchedulingTask({task,incident,flight,payload}){
     preserveIncidentId:incident.id,
     workType:'urgent_repair',
     finding:incident.technicalContext,
-    reason:`${INCIDENT_DEFINITIONS[incident.type]?.title||incident.type}: ${incident.technicalContext?.title||'technical finding'}`
+    reason:`${AeroIncidentModel.titleForType(incident.type)}: ${incident.technicalContext?.title||'technical finding'}`
   });
   if(!plan) return false;
   incident.selectedStrategy='schedule_check';
@@ -1455,7 +1472,7 @@ function handleAlternateHandlingTask({task,incident}){
 }
 
 function handleMedicalAssessmentTask({task}){
-  const incident=state.incidents.find(item=>item.id===task.incidentId);
+  const incident=problemById(problemIdForTask(task));
   const flight=incident&&state.flights.find(item=>item.id===incident.flightId);
   const timing=operationalTimingForTask(task,incident,flight,'assess',{baseResponseMin:5,minResponseMin:4,maxResponseMin:14});
   task.selection={action:'assess',timing};
@@ -1472,7 +1489,7 @@ function handleMedicalCoordinationTask({task,incident,flight}){
 }
 
 function handleFlightWatchAssessmentTask({task}){
-  const incident=state.incidents.find(item=>item.id===task.incidentId);
+  const incident=problemById(problemIdForTask(task));
   const flight=incident&&state.flights.find(item=>item.id===incident.flightId);
   const timing=operationalTimingForTask(task,incident,flight,'assess',{baseResponseMin:6,minResponseMin:4,maxResponseMin:16});
   task.selection={action:'assess',timing};
@@ -1535,6 +1552,33 @@ function handleRerouteCoordinationTask({task,incident,flight,actionId}){
   return true;
 }
 
+function handleNetworkEventTask({task,incident,flight,actionId}){
+  const action=actionId||task.action||'accept_flow';
+  const timing=operationalTimingForTask(task,incident,flight,action,{
+    baseDelayMin:Math.max(8,Number(incident.context?.delayMin)||25),
+    exactDelay:Boolean(incident.context?.delayMin)
+  });
+  task.timing=timing;
+  const result=window.AeroNetworkEvents?.applyNetworkEventAction?.(incident,action,{task,t:simNow()});
+  if(!result?.ok) return toast(result?.reason||'Network event action is not available.');
+  task.selection={
+    action,
+    affectedCount:result.affectedCount||0,
+    routedCount:result.routedCount||0,
+    delayMin:result.delayMinAvg||0,
+    totalDelayMin:result.totalDelayMin||0,
+    cost:result.cost||0,
+    timing
+  };
+  createExternalWorkflowRequest(
+    task,
+    result.counterparty||'Network flow desk',
+    responseMinutesForTiming(timing,result.responseMin||8),
+    result.outcome||'Network plan coordinated.'
+  );
+  return true;
+}
+
 function handleCabinSecurityCoordinationTask({task,incident,flight,actionId}){
   const action=actionId||task.action||'assess';
   const timing=operationalTimingForTask(task,incident,flight,action,{baseDelayMin:action==='continue'?15:0,baseResponseMin:8,minDelayMin:0,maxDelayMin:45});
@@ -1554,7 +1598,7 @@ function handleArrivalMaintenanceCheckTask({task,flight}){
     ? maintenanceSupportAtAirport(destination,aircraft,simNow())
     : null;
   const responseMin=Math.max(12,Number(support?.responseMin)||12);
-  const timing=operationalTimingForTask(task,state.incidents.find(item=>item.id===task.incidentId),flight,'arrival_check',{
+  const timing=operationalTimingForTask(task,problemById(problemIdForTask(task)),flight,'arrival_check',{
     baseResponseMin:responseMin,
     exactResponse:Boolean(support?.responseMin),
     drivers:[support?.source==='contract'?'contract line maintenance':'line maintenance']
@@ -1615,6 +1659,8 @@ const TASK_KIND_HANDLERS={
   crew_extension_record:handleCrewExtensionRecordTask,
   fuel_monitoring:handleFuelMonitoringTask,
   reroute_coordination:handleRerouteCoordinationTask,
+  network_event_coordination:handleNetworkEventTask,
+  network_route_revision:handleNetworkEventTask,
   cabin_security_coordination:handleCabinSecurityCoordinationTask,
   arrival_maintenance_check:handleArrivalMaintenanceCheckTask,
   station_coordination:handleStationCoordinationTask
@@ -1623,10 +1669,10 @@ const TASK_KIND_HANDLERS={
 window.AeroIncidentTaskHandlers=TASK_KIND_HANDLERS;
 
 function performOperationalTask(taskId,actionId='',payload={}){
-  const task=state.coordinationTasks.find(item=>item.id===taskId);
-  const incident=task&&state.incidents.find(item=>item.id===task.incidentId&&item.status==='open');
+  const task=problemTaskCollection().find(item=>item.id===taskId);
+  const incident=task&&problemById(problemIdForTask(task));
   const flight=incident&&state.flights.find(item=>item.id===incident.flightId);
-  if(!task||!incident||!flight||!['available','in_progress'].includes(task.status)) return false;
+  if(!task||!incident||incident.status!=='open'||!flight||!['available','in_progress'].includes(task.status)) return false;
   const blocker=['technical_strategy','recovery_strategy'].includes(task.kind)?'':AeroIncidentResources.taskResourceBlocker(task,incident);
   if(blocker) return toast(blocker);
   if(['technical_strategy','recovery_strategy','authority_decision'].includes(task.kind)&&actionId==='cancel'){
@@ -1644,8 +1690,7 @@ function applyIncidentMinimumDelay(f,minutes){
 }
 
 function incidentDefaultPolicyForType(type){
-  if(RETIRED_INCIDENT_TYPES.has(type)) return {mode:'none',label:'none',summary:'This incident type is retired.'};
-  return INCIDENT_DEFAULT_POLICIES[type]||{mode:'manual_required_no_auto_fix',label:'manual required',summary:'No automatic recovery exists for this case. The flight remains held until the player takes the required OCC action.'};
+  return globalThis.AeroIncidentModel.defaultPolicyForType(type);
 }
 
 function defaultPolicyForIncident(incident){
@@ -1737,7 +1782,7 @@ function applyDefaultDelay(incident,policy,t){
   else applyIncidentMinimumDelay(flight,delay);
   return closeIncidentByDefault(
     incident,policy,t,
-    `${INCIDENT_DEFINITIONS[incident.type]?.title||incident.type}: no OCC action before deadline; ${delay}-minute ${flight.departureLogged?'en-route':'ground'} delay accepted.`,
+    `${AeroIncidentModel.titleForType(incident.type)}: no OCC action before deadline; ${delay}-minute ${flight.departureLogged?'en-route':'ground'} delay accepted.`,
     {impactStatus:'accepted',strategy}
   );
 }
@@ -1746,8 +1791,8 @@ function applyDefaultHold(incident,policy,t){
   const flight=state.flights.find(item=>item.id===incident.flightId);
   if(!flight||flight.cancelled) return false;
   const outcome=policy.mode==='manual_required_no_auto_fix'
-    ? `${INCIDENT_DEFINITIONS[incident.type]?.title||incident.type}: no automatic recovery is available. The flight remains held until the required resource/action is provided.`
-    : `${INCIDENT_DEFINITIONS[incident.type]?.title||incident.type}: held after the deadline; OCC action is still required.`;
+    ? `${AeroIncidentModel.titleForType(incident.type)}: no automatic recovery is available. The flight remains held until the required resource/action is provided.`
+    : `${AeroIncidentModel.titleForType(incident.type)}: held after the deadline; OCC action is still required.`;
   return markIncidentDefault(incident,policy,t,outcome);
 }
 
@@ -1760,7 +1805,7 @@ function applyDefaultCancellation(incident,policy,t){
   }
   const targets=(incident.type==='night_curfew_conflict'?[flight]:flightCancellationTargets(flight))
     .filter(item=>item&&flightCanBeCancelled(item,t));
-  const reason=`Default no-action decision: ${INCIDENT_DEFINITIONS[incident.type]?.title||incident.type}`;
+  const reason=`Default no-action decision: ${AeroIncidentModel.titleForType(incident.type)}`;
   for(const target of targets){
     applyFlightCancellation(target,reason,{preserveIncidentId:target.id===flight.id?incident.id:''});
   }
@@ -1825,7 +1870,7 @@ function applyDefaultFlightdeckManualFollowup(incident,policy,t,task,decision){
 
 function reopenSilentDefaultFlightdeckFollowups(t=simNow()){
   let changed=false;
-  for(const incident of state.incidents||[]){
+  for(const incident of problemCollection()){
     if(
       incident.status!=='resolved' ||
       incident.defaultPolicy!=='flightdeck_default' ||
@@ -1941,7 +1986,7 @@ function applyIncidentDefaultPolicy(incident,t=simNow()){
 
 function processIncidentDeadlines(t=simNow()){
   let changed=false;
-  for(const incident of state.incidents.filter(item=>item.status==='open'&&t>=item.deadline)){
+  for(const incident of problemCollection().filter(item=>item.status==='open'&&t>=item.deadline)){
     if(!incident.overdue){ incident.overdue=true; incident.deadlineMissedAt=t; changed=true; }
     if(applyIncidentDefaultPolicy(incident,t)){ changed=true; }
   }

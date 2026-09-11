@@ -2,18 +2,31 @@
 
 const DERIVED_INCIDENT_CLEAR_GRACE_MS=30*MIN;
 
+function derivedIncidentKey(type,flight,context,t=simNow()){
+  return typeof incidentDedupeKeyForRequest==='function'
+    ? incidentDedupeKeyForRequest(type,flight,{source:'derived',sourceKey:context?.sourceKey||'',context,detectedAt:t})
+    : context?.sourceKey||`derived:${type}:${context?.sourceId||flight.id}`;
+}
+
+function findOpenDerivedIncident(type,flight,key){
+  return (state.incidents||[]).find(item=>item.status==='open'&&item.type===type&&item.dedupeKey===key)
+    ||(state.incidents||[]).find(item=>item.status==='open'&&item.type===type&&item.flightId===flight.id&&item.sourceKey===key)
+    ||(state.incidents||[]).find(item=>item.status==='open'&&item.type===type&&item.flightId===flight.id&&!item.dedupeKey);
+}
+
 function updateOpenDerivedIncident(type,flight,active,context,t){
-  const key=context?.sourceKey||`derived:${type}:${context?.sourceId||flight.id}`;
-  const incident=state.incidents.find(item=>item.status==='open'&&item.type===type&&item.flightId===flight.id&&item.sourceKey===key)
-    ||(!context?.sourceKey?state.incidents.find(item=>item.status==='open'&&item.type===type&&item.flightId===flight.id):null);
+  const key=derivedIncidentKey(type,flight,context,t);
+  const incident=findOpenDerivedIncident(type,flight,key);
   if(active){
-    if(!incident&&state.incidents.some(item=>item.type===type&&item.flightId===flight.id&&item.sourceKey===key&&item.status==='resolved')) return false;
+    if(!incident&&state.incidents.some(item=>item.type===type&&item.dedupeKey===key&&item.status==='resolved')) return false;
     if(incident){
       const previous=JSON.stringify(incident.context||null);
       const next=JSON.stringify(context||null);
       let changed=false;
       if(previous!==next){ incident.context=context; changed=true; }
       if(incident.conditionClearedAt){ incident.conditionClearedAt=0; changed=true; }
+      if(incident.dedupeKey!==key){ incident.dedupeKey=key; changed=true; }
+      if(typeof ensureIncidentIdentityFields==='function') changed=ensureIncidentIdentityFields(incident,flight,context,t)||changed;
       incident.lastDetectedAt=t;
       return changed;
     }

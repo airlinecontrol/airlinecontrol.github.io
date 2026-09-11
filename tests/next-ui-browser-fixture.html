@@ -340,7 +340,7 @@
     w.recalculateOperations();
     w.refreshAll(); await wait(120);
     assert(recoveryFlight.enrouteRecoveryMin>0,'higher-speed recovery did not record recovered en-route minutes');
-    assert(w.flightActualArrival(recoveryFlight)<beforeRecoveryArrival,'higher-speed recovery did not improve projected arrival');
+    assert(w.flightActualArrival(recoveryFlight)<beforeRecoveryArrival,`higher-speed recovery did not improve projected arrival: ${JSON.stringify({before:beforeRecoveryArrival,after:w.flightActualArrival(recoveryFlight),recovered:recoveryFlight.enrouteRecoveryMin,request:recoveryFlight.enrouteRecoveryRequest,enrouteDelay:recoveryFlight.enrouteDelayMin,status:w.statusOfFlight(recoveryFlight),movement:w.flightMovementTimes(recoveryFlight)})}`);
     assert(recoveryFlight.enrouteRecoveryCost>0,'higher-speed recovery did not record recovery cost');
     const resultCard=d.querySelector(`[data-dispatch-occ-flight="${recoveryFlight.id}"] .enroute-result-card`);
     assert(resultCard?.textContent.includes('Accepted'),'completed en-route recovery does not show the accepted response');

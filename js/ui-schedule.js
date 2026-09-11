@@ -251,8 +251,11 @@ function scheduleLateInboundWarnings(flights,t=simNow(),index=operationalIndex(t
     .filter(item=>item.status.active);
 }
 function schedulePassengerConnectionPairs(renderedFlights,focusIds=new Set(),now=simNow()){
-  const visibleById=new Map(renderedFlights.filter(flight=>!flight.cancelled&&!flight.settled).map(flight=>[flight.id,flight]));
+  const visibleFlights=renderedFlights.filter(flight=>!flight.cancelled&&!flight.settled);
+  const visibleById=new Map(visibleFlights.map(flight=>[flight.id,flight]));
   if(!visibleById.size) return [];
+  const visibleByOrigin=new Map();
+  for(const flight of visibleFlights) mapPush(visibleByOrigin,flight.from,flight);
   const pairs=[];
   const seen=new Set();
   const selectedId=selectedFlightId||'';
@@ -260,7 +263,7 @@ function schedulePassengerConnectionPairs(renderedFlights,focusIds=new Set(),now
   const warningPairs=[];
   for(const inbound of visibleById.values()){
     if(inbound.flightType==='ferry') continue;
-    const manifest=connectionStatusForFlight(inbound);
+    const manifest=connectionStatusForFlight(inbound,visibleByOrigin.get(flightOperationalDestination(inbound))||[]);
     for(const connection of manifest.connections||[]){
       if(connection.status==='missed') continue;
       const outbound=visibleById.get(connection.flightId);

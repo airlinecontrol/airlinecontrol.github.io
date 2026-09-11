@@ -1521,6 +1521,43 @@ body,
   display:grid;
   gap:6px;
 }
+.problem-flight-list{
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px;
+}
+.problem-flight-chip{
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr);
+  gap:5px;
+  align-items:center;
+  min-width:0;
+  padding:5px 7px;
+  border:0;
+  border-radius:6px;
+  background:#102530;
+  color:#d9edf4;
+  font-size:10px;
+  text-align:left;
+}
+.problem-flight-chip:hover{
+  color:#ffffff;
+  background:#16313d;
+}
+.problem-flight-chip b,
+.problem-flight-chip span{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.problem-flight-chip span,
+.problem-flight-more{
+  color:#91a6b0;
+}
+.problem-flight-more{
+  align-self:center;
+  font-size:10px;
+}
 .case-gate,
 .case-step,
 .case-blocked-task{

@@ -22,11 +22,11 @@
     await loadApp();
     const w=frame.contentWindow;
     const now=w.simNow();
-    assert(!w.eval('INCIDENT_TYPE_ORDER.includes("baggage_loading_issue")'),'baggage loading should not be in the automatic/training OCC incident order');
+    assert(!w.eval('AeroIncidentModel.incidentTypeOrder().includes("baggage_loading_issue")'),'baggage loading should not be in the automatic/training OCC incident order');
     assert(!w.eval('PRE_DEPARTURE_INCIDENT_GENERATORS.some(item=>item.type==="baggage_loading_issue")'),'baggage loading should not be a random top-level OCC incident');
     for(const retiredType of ['gate_conflict','fueling_issue','airport_capacity_reduction']){
-      assert(!w.eval(`INCIDENT_TYPE_ORDER.includes(${JSON.stringify(retiredType)})`),`${retiredType} should not be in the automatic/training OCC incident order`);
-      assert(w.eval(`RETIRED_INCIDENT_TYPES.has(${JSON.stringify(retiredType)})`),`${retiredType} should be marked retired`);
+      assert(!w.eval(`AeroIncidentModel.incidentTypeOrder().includes(${JSON.stringify(retiredType)})`),`${retiredType} should not be in the automatic/training OCC incident order`);
+      assert(w.eval(`AeroIncidentModel.isRetiredType(${JSON.stringify(retiredType)})`),`${retiredType} should be marked retired`);
     }
     assert(!w.eval('PRE_DEPARTURE_INCIDENT_GENERATORS.some(item=>item.type==="gate_conflict"||item.type==="fueling_issue")'),'routine gate and fuel-uplift cases should not be random top-level OCC incidents');
     for(const airport of ['FRA','AMS','CDG','LGW']){
@@ -227,9 +227,7 @@
     }
 
     {
-      const airborneTypes=w.eval(`Object.entries(INCIDENT_DEFINITIONS)
-        .filter(([type,definition])=>definition.airborneOnly&&!RETIRED_INCIDENT_TYPES.has(type))
-        .map(([type])=>type)`);
+      const airborneTypes=w.eval(`AeroIncidentModel.activeIncidentTypes().filter(type=>AeroIncidentModel.phaseForType(type)==='airborne')`);
       assert(airborneTypes.length,'fixture found no active airborne-only incidents');
       for(const type of airborneTypes){
         const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
@@ -256,7 +254,7 @@
         w.repairIncidentPhaseRealism(now);
         assert(!w.openIncidentsForFlight(flight.id).some(item=>item.id===incident.id),`${type} remained open after arrival`);
         assert(incident.autoCloseReason==='flight_arrived',`${type} did not record flight_arrived auto-close reason`);
-        const expectsInspection=Boolean(w.eval(`INCIDENT_DEFINITIONS[${JSON.stringify(type)}].arrivalInspectionOnClose`));
+        const expectsInspection=Boolean(w.eval(`AeroIncidentModel.arrivalInspectionOnClose(${JSON.stringify(type)})`));
         assert(Boolean(flight.arrivalInspectionRequired)===expectsInspection,`${type} arrival inspection flag mismatch`);
       }
     }
@@ -289,9 +287,7 @@
     }
 
     {
-      const staleAirborneTypes=w.eval(`Object.entries(INCIDENT_DEFINITIONS)
-        .filter(([type,definition])=>definition.airborneOnly&&!RETIRED_INCIDENT_TYPES.has(type))
-        .map(([type])=>type)`);
+      const staleAirborneTypes=w.eval(`AeroIncidentModel.activeIncidentTypes().filter(type=>AeroIncidentModel.phaseForType(type)==='airborne')`);
       const staleFailures=[];
       for(const type of staleAirborneTypes){
         const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
@@ -378,15 +374,17 @@
       assert(w.updateOpenDerivedIncident('aircraft_out_of_position',flight,false,null,now+32*60_000),'transient derived incident did not clear after the stability grace window');
       assert(incident.status==='resolved'&&incident.selectedAction==='condition_cleared','transient derived incident did not close as condition-cleared');
       const transitions=w.recentIncidentTransitions(10);
-      assert(transitions.some(item=>item.incidentId===incident.id&&item.event==='opened'),'incident transition trace did not record open');
-      assert(transitions.some(item=>item.incidentId===incident.id&&item.event==='auto_closed'&&item.details?.reason==='condition_cleared'),'incident transition trace did not record condition-cleared auto close');
+      assert(transitions.some(item=>item.problemId===incident.id&&item.event==='opened'),'problem transition trace did not record open');
+      assert(transitions.some(item=>item.problemId===incident.id&&item.event==='auto_closed'&&item.details?.reason==='condition_cleared'),'problem transition trace did not record condition-cleared auto close');
     }
 
     {
       const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
-      const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'AMS',departure:now-20*60_000,fare:{economy:120,business:300,first:0}});
+      const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'MAD',departure:now-60*60_000,fare:{economy:120,business:300,first:0}});
       flight.departureLogged=true;
+      flight.actualDeparture=flight.departure;
       w.recalculateOperations();
+      assert(w.flightIsAirborne(flight,now),`airborne medical fixture is not airborne: status=${w.statusOfFlight(flight,now)} dep=${w.hhmm(w.flightMovementTimes(flight).takeoffAt)} arr=${w.hhmm(w.flightMovementTimes(flight).landingAt)}`);
       const incident=w.createIncident('onboard_medical',flight,{detectedAt:now,source:'test',sourceKey:`medical:${flight.id}`,context:{authorityDecision:'continue'}});
       assert(incident,'airborne medical incident was not created');
       assert(w.performOperationalTask(`${incident.id}:dispatch-medical-assess`),'medical assessment was rejected');

@@ -41,13 +41,19 @@
       w.changeQualification(airport,'firstOfficers','Airbus A320 family',30);
     }
 
-    const definitions=w.eval('INCIDENT_DEFINITIONS');
-    const workflows=w.eval('OperationalWorkflows.WORKFLOWS');
-    const retired=w.eval('Array.from(RETIRED_INCIDENT_TYPES)');
+    const definitions=w.eval('AeroIncidentModel.incidentDefinitions()');
+    const workflows=w.eval('AeroIncidentModel.workflowDefinitions()');
+    const retired=w.eval('Array.from(AeroIncidentModel.retiredIncidentTypes())');
+    assert(w.eval('Boolean(AeroIncidentModel)'),'central incident model is not loaded');
+    assert(w.eval('typeof INCIDENT_DEFINITIONS==="undefined"'),'old incident definitions global is still exported');
+    assert(w.eval('typeof INCIDENT_DEFAULT_POLICIES==="undefined"'),'old incident default-policy global is still exported');
     const activeTypes=Object.keys(definitions).filter(type=>!retired.includes(type));
+    const modelTypes=w.eval('AeroIncidentModel.activeIncidentTypes()');
+    const missingModels=activeTypes.filter(type=>!modelTypes.includes(type));
+    assert(!missingModels.length,'active incident definitions missing central incident model: '+missingModels.join(', '));
     const missingWorkflows=activeTypes.filter(type=>!workflows[type]);
     assert(!missingWorkflows.length,'active incident definitions missing workflows: '+missingWorkflows.join(', '));
-    const missingDefaults=w.eval('Object.keys(INCIDENT_DEFINITIONS).filter(type=>!RETIRED_INCIDENT_TYPES.has(type)&&!INCIDENT_DEFAULT_POLICIES[type])');
+    const missingDefaults=w.eval('Object.keys(AeroIncidentModel.incidentDefinitions()).filter(type=>!AeroIncidentModel.isRetiredType(type)&&!AeroIncidentModel.defaultPolicyForType(type))');
     assert(!missingDefaults.length,'active incident definitions missing no-action default policies: '+missingDefaults.join(', '));
     const orphanWorkflows=Object.keys(workflows).filter(type=>!definitions[type]&&!retired.includes(type));
     assert(!orphanWorkflows.length,'workflow exists without an incident definition: '+orphanWorkflows.join(', '));
@@ -85,12 +91,12 @@
     const groundFailures=[];
     const airborneFailures=[];
     for(const type of activeTypes){
-      const definition=definitions[type];
-      if(definition.airborneOnly&&type!=='destination_closure'){
+      const phase=w.eval(`AeroIncidentModel.phaseForType(${JSON.stringify(type)})`);
+      if(phase==='airborne'&&type!=='destination_closure'){
         const created=w.createIncident(type,makeGround(type),{training:true,detectedAt:now});
         if(created) groundFailures.push(`${type}->${created.type}`);
       }
-      if(!definition.airborneOnly&&!definition.allowAirborne){
+      if(phase==='ground'){
         const created=w.createIncident(type,makeAirborne(type),{training:true,detectedAt:now});
         if(created) airborneFailures.push(`${type}->${created.type}`);
       }
@@ -105,7 +111,7 @@
 
     const workflowProblems=[];
     for(const type of activeTypes){
-      const flight=definitions[type].airborneOnly?makeAirborne(type):makeGround(type);
+      const flight=w.eval(`AeroIncidentModel.phaseForType(${JSON.stringify(type)})`)==='airborne'?makeAirborne(type):makeGround(type);
       const context=type==='destination_below_minima'
         ? {sourceId:flight.id,airport:flight.to,conditions:'Low visibility',level:'caution',visibilityKm:1.2,ceilingFt:400,minima:'visibility 1.2 km / ceiling 400 ft',active:true}
         : type==='aircraft_out_of_position'

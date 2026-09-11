@@ -114,6 +114,14 @@
     if(optionId==='cancel'){
       category='passenger';
       add('cancel/rebook exposure',cancellationRecoveryCost(flight));
+    }else if(['network_event_coordination','network_route_revision'].includes(task.kind)){
+      const count=Math.max(1,incidentAffectedFlightIds(incident).length||incident.context?.affectedCount||1);
+      const networkDelay=optionId==='reroute_around'
+        ? Math.max(8,incident.context?.rerouteDelayMin||Math.round((incident.context?.delayMin||30)*.65))
+        : Math.max(8,incident.context?.delayMin||25);
+      category='dispatch';
+      add('network coordination',count*(optionId==='reroute_around'?900:350));
+      add('affected-flight delay exposure',networkDelay*count*22);
     }else if(['crew-strategy','crew-duty-strategy','crew-fatigue-strategy','crew-misconnect-strategy','crew-diversion-strategy','crew-report-delay-strategy'].includes(task.key)){
       category='crew';
       if(optionId==='replace') add('reserve activation',crewRecoveryCost(flight,{replace:true}));
@@ -266,7 +274,7 @@
       passengers:summary.passengerAccommodationPax||0,
       crew:summary.category==='crew'?crewComplementForFlight(flight):0,
       airport:incident.airport||flight.from,
-      description:`${INCIDENT_DEFINITIONS[incident.type]?.title||incident.type}: ${summary.optionId||incident.selectedStrategy||'recovery'}`
+      description:`${AeroIncidentModel.titleForType(incident.type)}: ${summary.optionId||incident.selectedStrategy||'recovery'}`
     });
     if(event) incident.recoveryCostEventId=event.id;
     return event;
@@ -306,6 +314,16 @@
     if(!task||!incident||!flight) return '';
     const currentDelay=flightTotalDepartureDelayMin(flight);
     if(optionId==='cancel') return 'flight removed before departure · aircraft and crew released';
+    if(['network_event_coordination','network_route_revision'].includes(task.kind)){
+      const count=Math.max(1,incidentAffectedFlightIds(incident).length||incident.context?.affectedCount||1);
+      const delay=optionId==='reroute_around'
+        ? Math.max(8,incident.context?.rerouteDelayMin||Math.round((incident.context?.delayMin||30)*.65))
+        : Math.max(8,incident.context?.delayMin||25);
+      if(optionId==='reroute_around') return `new waypoint routes around polygon · ${count} affected flight${count===1?'':'s'} · average possible +${delay} min`;
+      if(optionId==='hold_departures') return `not-yet-departed flights held until the network area clears · ${count} affected flight${count===1?'':'s'}`;
+      if(optionId==='accept_tactical') return `flight deck / ATC tactical deviations recorded · ${count} affected flight${count===1?'':'s'} · possible +${delay} min`;
+      return `regulated flow applied across ${count} affected flight${count===1?'':'s'} · possible +${delay} min`;
+    }
 
     if(['crew-strategy','crew-duty-strategy','crew-fatigue-strategy','crew-misconnect-strategy','crew-diversion-strategy','crew-report-delay-strategy'].includes(task.key)&&optionId==='replace'){
       if(crewPoolOptions(incident).length) return withOptionTiming(task,incident,optionId,'reserve response and briefing');

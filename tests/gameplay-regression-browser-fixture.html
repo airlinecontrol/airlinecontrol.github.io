@@ -270,24 +270,22 @@
     airborneFlight.actualArrival=now+75*60_000;
     airborneFlight.fueled=true;
     w.recalculateOperations();
-    const incidentTypes=Object.keys(w.eval('INCIDENT_DEFINITIONS'));
+    const incidentTypes=Object.keys(w.eval('AeroIncidentModel.incidentDefinitions()'));
     const missingWorkflows=incidentTypes
-      .filter(type=>!w.eval(`RETIRED_INCIDENT_TYPES.has(${JSON.stringify(type)})`))
-      .filter(type=>!w.eval(`Boolean(OperationalWorkflows.WORKFLOWS[${JSON.stringify(type)}])`));
+      .filter(type=>!w.eval(`AeroIncidentModel.isRetiredType(${JSON.stringify(type)})`))
+      .filter(type=>!w.eval(`Boolean(AeroIncidentModel.workflowDefinitions()[${JSON.stringify(type)}])`));
     assert(!missingWorkflows.length,'incident definitions missing workflows: '+missingWorkflows.join(', '));
     const retiredFailures=['slot_miss_risk','aircraft_late_inbound','alternate_unsuitable']
       .filter(type=>w.createIncident(type,groundFlight,{training:true,detectedAt:now}));
     assert(!retiredFailures.length,'retired incident types are still creatable: '+retiredFailures.join(', '));
     const airborneOnlyFailures=incidentTypes.filter(type=>{
-      const definition=w.eval(`INCIDENT_DEFINITIONS[${JSON.stringify(type)}]`);
-      if(!definition?.airborneOnly) return false;
+      if(w.eval(`AeroIncidentModel.phaseForType(${JSON.stringify(type)})`)!=='airborne') return false;
       if(type==='destination_closure') return false;
       return Boolean(w.createIncident(type,groundFlight,{training:true,detectedAt:now}));
     });
     assert(!airborneOnlyFailures.length,'airborne-only incidents are creatable on a ground flight: '+airborneOnlyFailures.join(', '));
     const groundOnlyFailures=incidentTypes.filter(type=>{
-      const definition=w.eval(`INCIDENT_DEFINITIONS[${JSON.stringify(type)}]`);
-      if(definition?.allowAirborne||definition?.airborneOnly||w.eval(`RETIRED_INCIDENT_TYPES.has(${JSON.stringify(type)})`)) return false;
+      if(w.eval(`AeroIncidentModel.phaseForType(${JSON.stringify(type)})`)!=='ground'||w.eval(`AeroIncidentModel.isRetiredType(${JSON.stringify(type)})`)) return false;
       return Boolean(w.createIncident(type,airborneFlight,{training:true,detectedAt:now}));
     });
     assert(!groundOnlyFailures.length,'ground-only incidents are creatable on an airborne flight: '+groundOnlyFailures.join(', '));

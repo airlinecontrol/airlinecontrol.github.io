@@ -47,6 +47,7 @@ const aircraftMarkers = new Map();
 let routeSignature = '';
 let selectedRouteSignature = '';
 let weatherMapSignature = '';
+let networkEventMapSignature = '';
 let latestWeatherCells = [];
 const mapPopup = new maplibregl.Popup({
   closeButton:false,
@@ -108,11 +109,11 @@ function aircraftMapIncidentState(ac,p,index=operationalIndex()){
     ...(index.openIncidentsByAircraft.get(ac.id)||[]),
     ...(p.flight?(index.openIncidentsByFlight.get(p.flight.id)||[]):[])
   ].filter((incident,pos,items)=>items.findIndex(item=>item.id===incident.id)===pos);
-  const critical=open.find(incident=>incident.severity==='critical'||INCIDENT_DEFINITIONS[incident.type]?.severity==='critical');
-  const warning=open.find(incident=>incident.severity==='warning'||INCIDENT_DEFINITIONS[incident.type]?.severity==='warning');
+  const critical=open.find(incident=>incident.severity==='critical'||AeroIncidentModel.severityForType(incident.type)==='critical');
+  const warning=open.find(incident=>incident.severity==='warning'||AeroIncidentModel.severityForType(incident.type)==='warning');
   return {
     level:critical?'critical':warning?'warning':'normal',
-    label:(critical||warning)?(INCIDENT_DEFINITIONS[(critical||warning).type]?.title||'Open incident'):''
+    label:(critical||warning)?AeroIncidentModel.titleForType((critical||warning).type):''
   };
 }
 
@@ -319,6 +320,37 @@ function weatherCellFeature(cell,selected=false){
   };
 }
 
+function networkEventStyle(event){
+  if(event.incidentType==='network_airspace_closure') return {color:'#ff6b65',fillColor:'#ff6b65',fillOpacity:.16,opacity:.72,width:2};
+  if(event.incidentType==='network_convective_weather') return {color:'#d9b95f',fillColor:'#d9b95f',fillOpacity:.14,opacity:.7,width:2};
+  return {color:'#78c8ff',fillColor:'#78c8ff',fillOpacity:.10,opacity:.62,width:1.5};
+}
+
+function networkEventFeature(event){
+  const points=(event.polygon||[]).filter(point=>Number.isFinite(point?.lat)&&Number.isFinite(point?.lon));
+  if(points.length<3) return null;
+  const coordinates=points.map(point=>[point.lon,point.lat]);
+  coordinates.push(coordinates[0]);
+  const style=networkEventStyle(event);
+  const count=event.affectedCount||(event.affectedFlightIds||[]).length||0;
+  return {
+    type:'Feature',
+    id:event.id,
+    properties:{
+      id:event.id,
+      type:event.eventType||'network',
+      incidentType:event.incidentType||'network',
+      color:style.color,
+      fillColor:style.fillColor,
+      fillOpacity:style.fillOpacity,
+      opacity:style.opacity,
+      width:style.width,
+      tooltip:`${event.label||'Network event'} · ${count} affected flight${count===1?'':'s'} · possible +${event.delayMin||0}m`
+    },
+    geometry:{type:'Polygon',coordinates:[coordinates]}
+  };
+}
+
 function airportWeatherFeature(code,weather){
   const airport=AIRPORTS[code];
   if(!airport) return null;
@@ -362,6 +394,18 @@ function rebuildWeatherMapIfNeeded(){
   setMapSourceData('airport-weather',mapFeatureCollection(weatherByCode.map(item=>airportWeatherFeature(item.code,item.weather)).filter(Boolean)));
 }
 
+function rebuildNetworkEventsIfNeeded(){
+  if(!mapReady||!window.AeroNetworkEvents) return;
+  const t=simNow();
+  const events=window.AeroNetworkEvents.activeNetworkEvents(t);
+  const signature=events.map(event=>
+    `${event.id}:${event.incidentType}:${event.status}:${event.delayMin}:${event.affectedCount||(event.affectedFlightIds||[]).length}:${Math.round(event.activeFrom/MIN)}:${Math.round(event.activeUntil/MIN)}`
+  ).join('|');
+  if(signature===networkEventMapSignature) return;
+  networkEventMapSignature=signature;
+  setMapSourceData('network-events',mapFeatureCollection(events.map(networkEventFeature).filter(Boolean)));
+}
+
 function createAircraftMarker(ac,p,index){
   const element=document.createElement('button');
   element.type='button';
@@ -382,6 +426,7 @@ function createAircraftMarker(ac,p,index){
 function updateMapData() {
   if(!mapReady) return;
   rebuildWeatherMapIfNeeded();
+  rebuildNetworkEventsIfNeeded();
   rebuildRoutesIfNeeded();
   rebuildSelectedRouteIfNeeded();
   const t = simNow();
@@ -449,7 +494,7 @@ function showLayerPopup(event){
 }
 
 function bindMapLayerInteractions(){
-  for(const layerId of ['routes','selected-route-flown','selected-route-remaining','weather-cells-fill','airport-weather-fill']){
+  for(const layerId of ['routes','selected-route-flown','selected-route-remaining','weather-cells-fill','airport-weather-fill','network-events-fill']){
     map.on('mouseenter',layerId,()=>{ map.getCanvas().style.cursor='pointer'; });
     map.on('mousemove',layerId,showLayerPopup);
     map.on('mouseleave',layerId,()=>{
@@ -472,11 +517,18 @@ function bindMapLayerInteractions(){
     const cell=latestWeatherCells.find(item=>item.id===id);
     if(cell&&typeof setOperationsWeatherFilter==='function') setOperationsWeatherFilter(cell);
   });
+  map.on('click','network-events-fill',event=>{
+    const id=event.features?.[0]?.properties?.id;
+    const networkEvent=window.AeroNetworkEvents?.activeNetworkEvents?.(simNow()).find(item=>item.id===id);
+    const firstFlightId=networkEvent?.affectedFlightIds?.[0];
+    if(firstFlightId) settleSelectedFlight(firstFlightId);
+  });
 }
 
 function initialiseMapLayers(){
   addGeoJsonSource('airport-weather');
   addGeoJsonSource('weather-cells');
+  addGeoJsonSource('network-events');
   addGeoJsonSource('route-weather');
   addGeoJsonSource('routes');
   addGeoJsonSource('selected-route-flown');
@@ -496,6 +548,15 @@ function initialiseMapLayers(){
     'fill-opacity':['get','fillOpacity']
   });
   addLineLayer('weather-cells-line','weather-cells',{
+    'line-color':['get','color'],
+    'line-opacity':['get','opacity'],
+    'line-width':['get','width']
+  });
+  addFillLayer('network-events-fill','network-events',{
+    'fill-color':['get','fillColor'],
+    'fill-opacity':['get','fillOpacity']
+  });
+  addLineLayer('network-events-line','network-events',{
     'line-color':['get','color'],
     'line-opacity':['get','opacity'],
     'line-width':['get','width']
@@ -530,6 +591,7 @@ function initialiseMapLayers(){
 const routeLayer={clearLayers:()=>{ routeSignature=''; selectedRouteSignature=''; clearMapSource('routes'); clearMapSource('route-weather'); clearMapSource('selected-route-flown'); clearMapSource('selected-route-remaining'); }};
 const aircraftLayer={clearLayers:()=>{ for(const record of aircraftMarkers.values()) record.marker.remove(); aircraftMarkers.clear(); }};
 const weatherLayer={clearLayers:()=>{ weatherMapSignature=''; clearMapSource('weather-cells'); }};
+const networkEventLayer={clearLayers:()=>{ networkEventMapSignature=''; clearMapSource('network-events'); }};
 const airportWeatherLayer={clearLayers:()=>{ weatherMapSignature=''; clearMapSource('airport-weather'); }};
 const airportLayer={clearLayers:()=>{ for(const marker of airportMarkers.values()) marker.remove(); airportMarkers.clear(); }};
 

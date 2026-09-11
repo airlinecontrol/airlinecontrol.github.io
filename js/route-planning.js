@@ -119,6 +119,127 @@
     }
     return out;
   }
+  function normalizePolygonPoints(polygon){
+    return (polygon||[])
+      .map(point=>Array.isArray(point)?{lon:Number(point[0]),lat:Number(point[1])}:{lon:Number(point.lon),lat:Number(point.lat)})
+      .filter(point=>Number.isFinite(point.lat)&&Number.isFinite(point.lon));
+  }
+  function pointInPolygon(point,polygon){
+    if(!point||!polygon?.length) return false;
+    let inside=false;
+    for(let index=0,previous=polygon.length-1;index<polygon.length;previous=index++){
+      const a=polygon[index],b=polygon[previous];
+      const intersects=((a.lat>point.lat)!==(b.lat>point.lat)) &&
+        (point.lon<(b.lon-a.lon)*(point.lat-a.lat)/((b.lat-a.lat)||1e-9)+a.lon);
+      if(intersects) inside=!inside;
+    }
+    return inside;
+  }
+  function orientation(a,b,c){
+    const value=(b.lon-a.lon)*(c.lat-a.lat)-(b.lat-a.lat)*(c.lon-a.lon);
+    return Math.abs(value)<1e-10?0:value>0?1:-1;
+  }
+  function onSegment(a,b,c){
+    return Math.min(a.lon,c.lon)-1e-10<=b.lon&&b.lon<=Math.max(a.lon,c.lon)+1e-10 &&
+      Math.min(a.lat,c.lat)-1e-10<=b.lat&&b.lat<=Math.max(a.lat,c.lat)+1e-10;
+  }
+  function segmentsIntersect(a,b,c,d){
+    const o1=orientation(a,b,c),o2=orientation(a,b,d),o3=orientation(c,d,a),o4=orientation(c,d,b);
+    if(o1!==o2&&o3!==o4) return true;
+    if(o1===0&&onSegment(a,c,b)) return true;
+    if(o2===0&&onSegment(a,d,b)) return true;
+    if(o3===0&&onSegment(c,a,d)) return true;
+    if(o4===0&&onSegment(c,b,d)) return true;
+    return false;
+  }
+  function pathIntersectsPolygon(points,polygon){
+    const path=(points||[]).filter(point=>Number.isFinite(point?.lat)&&Number.isFinite(point?.lon));
+    const poly=normalizePolygonPoints(polygon);
+    if(path.length<2||poly.length<3) return false;
+    if(path.some(point=>pointInPolygon(point,poly))) return true;
+    for(let index=1;index<path.length;index++){
+      const a=path[index-1],b=path[index];
+      for(let edge=0;edge<poly.length;edge++){
+        if(segmentsIntersect(a,b,poly[edge],poly[(edge+1)%poly.length])) return true;
+      }
+    }
+    return false;
+  }
+  function polygonBounds(polygon){
+    const poly=normalizePolygonPoints(polygon);
+    return {
+      minLat:Math.min(...poly.map(point=>point.lat)),
+      maxLat:Math.max(...poly.map(point=>point.lat)),
+      minLon:Math.min(...poly.map(point=>point.lon)),
+      maxLon:Math.max(...poly.map(point=>point.lon))
+    };
+  }
+  function avoidanceCandidates(start,end,polygon,seed){
+    const bounds=polygonBounds(polygon);
+    if(!Number.isFinite(bounds.minLat)) return [];
+    const centerLat=(bounds.minLat+bounds.maxLat)/2;
+    const marginLat=Math.max(.45,(bounds.maxLat-bounds.minLat)*.32);
+    const marginLon=Math.max(.65,(bounds.maxLon-bounds.minLon)*.32,marginLat/Math.max(.25,Math.cos(centerLat*Math.PI/180)));
+    const west=bounds.minLon-marginLon,east=bounds.maxLon+marginLon;
+    const north=bounds.maxLat+marginLat,south=bounds.minLat-marginLat;
+    const westFirst=start.lon<=end.lon;
+    const southFirst=start.lat<=end.lat;
+    const candidates=[
+      westFirst?[{lat:north,lon:west},{lat:north,lon:east}]:[{lat:north,lon:east},{lat:north,lon:west}],
+      westFirst?[{lat:south,lon:west},{lat:south,lon:east}]:[{lat:south,lon:east},{lat:south,lon:west}],
+      southFirst?[{lat:south,lon:east},{lat:north,lon:east}]:[{lat:north,lon:east},{lat:south,lon:east}],
+      southFirst?[{lat:south,lon:west},{lat:north,lon:west}]:[{lat:north,lon:west},{lat:south,lon:west}]
+    ];
+    return candidates
+      .map((via,index)=>{
+        const points=[start,...via,end];
+        return {
+          via,
+          intersects:pathIntersectsPolygon(points,polygon),
+          distance:routeDistanceKmForWaypoints(points),
+          index,
+          jitter:stableUnit(`${seed}:avoid:${index}`)
+        };
+      })
+      .sort((a,b)=>Number(a.intersects)-Number(b.intersects)||a.distance-b.distance||a.jitter-b.jitter);
+  }
+  function buildRevisionFromWaypoints({flight,fromCode,toCode,waypoints,mode='filed',reason='Filed route',createdAt=null,startKind='airport'}){
+    const model=modelForFlight(flight);
+    const created=finite(createdAt,typeof simNow==='function'?simNow():Date.now());
+    const compact=compactWaypoints(waypoints);
+    const first=compact[0],last=compact[compact.length-1];
+    const distanceKm=Math.round(routeDistanceKmForWaypoints(compact));
+    const directDistanceKm=Math.round(first&&last?distanceBetween(first,last):0);
+    const altitude=altitudeProfileForRoute(compact,model,`${flight?.id||fromCode}-${created}-${mode}`);
+    return {
+      id:'',
+      mode,
+      reason,
+      from:fromCode||'',
+      to:toCode||'',
+      createdAt:created,
+      activatedAt:created,
+      startKind,
+      distanceKm,
+      directDistanceKm,
+      waypoints:compact,
+      altitude,
+      cruiseLevel:altitude.cruiseLevel
+    };
+  }
+  function buildAvoidanceRevision({flight,fromCode,toCode,startPoint,endPoint,polygon,mode,reason,createdAt,startKind,startLabel,endLabel,seed}){
+    const candidates=avoidanceCandidates(startPoint,endPoint,polygon,seed);
+    const selected=candidates[0];
+    if(!selected?.via?.length) return null;
+    const waypoints=[
+      routeWaypoint(startCodeLabel(fromCode,startLabel,'POS'),startLabel||fromCode||'POS',startPoint,startKind,fromCode),
+      ...selected.via.map((point,index)=>routeWaypoint(`AVD${index+1}`,index?'Avoid exit':'Avoid entry',point,'network_avoidance')),
+      routeWaypoint(toCode||endLabel||'DEST',endLabel||toCode||'DEST',endPoint,'airport',toCode)
+    ];
+    const revision=buildRevisionFromWaypoints({flight,fromCode,toCode,waypoints,mode,reason,createdAt,startKind});
+    revision.avoidanceIntersectsConstraint=selected.intersects;
+    return revision;
+  }
   function routeDistanceKmForWaypoints(waypoints){
     let total=0;
     for(let index=1;index<(waypoints||[]).length;index++) total+=distanceBetween(waypoints[index-1],waypoints[index]);
@@ -401,21 +522,42 @@
       const detour=detourWaypointForHazard(start,end,primaryHazard,`${flight.id}:${created}:${targetCode}`);
       if(detour) via.push(detour);
     }
-    const revision=buildRevision({
-      flight,
-      fromCode:airborne?'':flight.from,
-      toCode:targetCode,
-      startPoint:start,
-      endPoint:end,
-      mode,
-      reason:reason||routeReasonForMode(mode,targetCode),
-      createdAt:created,
-      startKind:airborne?'current_position':'airport',
-      endKind:'airport',
-      startLabel:airborne?'Current position':flight.from,
-      endLabel:targetCode,
-      via
-    });
+    const routeSeed=`${flight.id}:${created}:${targetCode}:${mode}`;
+    const revision=mode==='network_avoidance'
+      ? buildAvoidanceRevision({
+        flight,
+        fromCode:airborne?'':flight.from,
+        toCode:targetCode,
+        startPoint:start,
+        endPoint:end,
+        polygon:metadata?.avoidPolygon||metadata?.polygon||(hazards||[])[0]?.polygon||[],
+        mode,
+        reason:reason||routeReasonForMode(mode,targetCode),
+        createdAt:created,
+        startKind:airborne?'current_position':'airport',
+        startLabel:airborne?'Current position':flight.from,
+        endLabel:targetCode,
+        seed:routeSeed
+      }) || buildRevision({
+        flight,fromCode:airborne?'':flight.from,toCode:targetCode,startPoint:start,endPoint:end,mode:'direct',
+        reason:reason||routeReasonForMode(mode,targetCode),createdAt:created,startKind:airborne?'current_position':'airport',
+        endKind:'airport',startLabel:airborne?'Current position':flight.from,endLabel:targetCode,via:[]
+      })
+      : buildRevision({
+        flight,
+        fromCode:airborne?'':flight.from,
+        toCode:targetCode,
+        startPoint:start,
+        endPoint:end,
+        mode,
+        reason:reason||routeReasonForMode(mode,targetCode),
+        createdAt:created,
+        startKind:airborne?'current_position':'airport',
+        endKind:'airport',
+        startLabel:airborne?'Current position':flight.from,
+        endLabel:targetCode,
+        via
+      });
     revision.id=`R${(plan.revisions||[]).length+1}`;
     revision.previousRevisionId=previous?.id||'';
     revision.metadata=metadata||{};
@@ -438,9 +580,24 @@
     if(mode==='speed') return 'Cost-index recommendation; geometry unchanged';
     if(mode==='priority') return 'Priority recovery route revision';
     if(mode==='weather_detour') return 'Weather avoidance routing';
+    if(mode==='network_avoidance') return 'Network constraint avoidance routing';
     if(mode==='return_origin') return `Return route to ${target}`;
     if(mode==='diversion') return `Diversion route to ${target}`;
     return 'Operational route revision';
+  }
+  function createAvoidanceRouteRevision(flight,event,{createdAt=null,reason=''}={}){
+    if(!flight||!event) return null;
+    return createRouteRevision(flight,{
+      mode:'network_avoidance',
+      reason:reason||`Avoid ${event.label||event.type||'network constraint'}`,
+      createdAt:createdAt||simNow(),
+      metadata:{
+        source:'network_event',
+        networkEventId:event.id||event.networkId||'',
+        networkIncidentType:event.incidentType||'',
+        avoidPolygon:event.polygon||[]
+      }
+    });
   }
   function applyDiversionRouteRevision(flight,airport,{incident=null,mode='',reason=''}={}){
     if(!flight||!airport) return null;
@@ -531,6 +688,7 @@
     ensureFlightRoutePlan,
     buildFiledRoutePlan,
     createRouteRevision,
+    createAvoidanceRouteRevision,
     applyDiversionRouteRevision,
     noteRecoveryRouteRevision,
     routeCoordinatesForFlight,
@@ -538,6 +696,8 @@
     routeHazardSummaryForFlight,
     routeHazardSummaryForRevision,
     routeHazardsForWaypoints,
+    pathIntersectsPolygon,
+    normalizePolygonPoints,
     clearRouteWeatherCache:()=>routeWeatherCache.clear(),
     routeDistanceKmForWaypoints,
     routeProgressForFlight,

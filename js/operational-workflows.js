@@ -1,445 +1,76 @@
-/* Pure workflow definitions for persistent OCC case coordination. */
+/* Runtime task materialization from the central problem model. */
 (function(global){
-  const DEPARTMENTS={
-    dispatch:{label:'Dispatch & Flight Watch',widget:'dispatch-control'},
-    crew:{label:'Crew Control',widget:'crew-control'},
-    maintenance:{label:'Maintenance Control',widget:'maintenance-control'},
-    station:{label:'Station Operations',widget:'station-operations'}
-  };
+  'use strict';
 
-  const CANCEL_OPTION={
-    id:'cancel',
-    label:'Cancel flight',
-    detail:'Cancel the affected flight before departure when recovery is not acceptable.'
-  };
-  function withCancellation(steps){
-    const index=steps.findIndex(step=>['recovery_strategy','technical_strategy','authority_decision'].includes(step.kind));
-    if(index<0) return steps;
-    return steps.map((step,stepIndex)=>stepIndex===index
-      ? {...step,options:[...(step.options||[]),{...CANCEL_OPTION}]}
-      : step);
+  const IncidentModel=global.AeroProblemModel||global.AeroIncidentModel;
+  if(!IncidentModel) throw new Error('AeroProblemModel must load before AeroOperationalWorkflows.');
+
+  const DEPARTMENTS=IncidentModel.DEPARTMENTS;
+  const KIND_META=IncidentModel.KIND_META;
+  const WORKFLOWS=IncidentModel.workflowDefinitions();
+
+  function taskId(problemId,key,targetId=''){
+    return global.AeroProblems?.createProblemTaskId
+      ? global.AeroProblems.createProblemTaskId(problemId,key,targetId)
+      : [problemId,key,targetId].filter(Boolean).join(':');
   }
 
-  const OCC_DESK=[{type:'occ_desk',amount:1}];
-  const DESTINATION_MAINTENANCE=[{type:'maintenance_support',location:'destination',amount:1}];
-
-  const KIND_META={
-    aircraft_substitution:{eligibility:{phase:'pre_departure_unfueled'},resources:[{type:'aircraft',mode:'replacement'}]},
-    maintenance_check_scheduling:{resources:[]},
-    mobile_maintenance_team:{resources:[]},
-    manual_maintenance_ferry_required:{resources:[]},
-    crew_allocation:{resources:[{type:'crew_pool',location:'origin'}]},
-    manual_crew_move_required:{resources:[]},
-    crew_augmentation:{resources:[{type:'augmented_crew',location:'origin'}]},
-    stand_request:{resources:[{type:'personnel',role:'groundHandling',location:'origin',amount:1}]},
-    station_coordination:{resources:[{type:'personnel',role:'groundHandling',location:'origin',amount:1}]},
-    turnaround_expedite:{resources:[{type:'personnel',role:'groundHandling',location:'origin',amount:1}]},
-    station_recovery:{resources:[{type:'personnel',role:'groundHandling',location:'origin',amount:1}]},
-    fuel_recovery:{resources:[{type:'personnel',role:'groundHandling',location:'origin',amount:1}]},
-    security_coordination:{resources:[{type:'personnel',role:'groundHandling',location:'origin',amount:1},{type:'personnel',role:'customerService',location:'origin',amount:1}]},
-    alternate_selection:{resources:[{type:'alternate',mode:'operational'}]},
-    return_origin_selection:{resources:[{type:'alternate',mode:'return_origin'}]},
-    alternate_handling:{resources:[]},
-    inbound_wait:{resources:OCC_DESK},
-    authority_decision:{resources:OCC_DESK},
-    flightdeck_recommendation:{resources:OCC_DESK},
-    diversion_clearance:{resources:OCC_DESK},
-    medical_assessment:{resources:OCC_DESK},
-    medical_coordination:{resources:OCC_DESK},
-    flight_watch_assessment:{resources:OCC_DESK},
-    flight_watch_coordination:{resources:OCC_DESK},
-    fuel_monitoring:{resources:OCC_DESK},
-    performance_coordination:{resources:OCC_DESK},
-    reroute_coordination:{resources:OCC_DESK},
-    crew_extension_record:{resources:OCC_DESK},
-    cabin_security_coordination:{resources:OCC_DESK},
-    arrival_maintenance_check:{resources:DESTINATION_MAINTENANCE},
-    destination_handling:{resources:[]}
-  };
-
-  function metadataForStep(step){
-    const meta=KIND_META[step.kind]||{};
-    return {
-      eligibility:step.eligibility||meta.eligibility||null,
-      resources:step.resources||meta.resources||[]
-    };
-  }
-
-  const WORKFLOWS={
-    crew_sick:{classification:'incident',steps:withCancellation([
-      {key:'crew-strategy',department:'crew',kind:'recovery_strategy',label:'Choose crew recovery',detail:'Select the viable crew recovery path for this duty.',options:[
-        {id:'replace',label:'Activate local reserve crew',detail:'Use a legal qualified reserve already at the operating airport.'}
-      ]},
-      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Activate local reserve crew',detail:'Select a legal, qualified local pool. The reserve must still report and brief before the duty is protected.',dependsOn:['crew-strategy'],branch:'replace'},
-      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve response and briefing',detail:'Crew Control waits for the reserve to report, complete briefing, and become usable for the duty.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
-    ])},
-    mel_defect:{classification:'incident',steps:withCancellation([
-      {key:'mx-inspect',department:'maintenance',kind:'maintenance_inspection',label:'Inspect reported defect',detail:'Assign an engineering inspection before choosing a technical disposition.'},
-      {key:'mx-strategy',department:'maintenance',kind:'recovery_strategy',label:'Choose ground technical recovery',detail:'Select whether to defer under MEL, schedule a repair, or substitute aircraft.',dependsOn:['mx-inspect'],options:[
-        {id:'defer',label:'Defer under MEL',detail:'Continue with documented restrictions.'},
-        {id:'schedule_check',label:'Schedule technical repair',detail:'Plan a repair window and hold the aircraft until engineering clears the defect.'},
-        {id:'substitute',label:'Use replacement aircraft',detail:'Assign a serviceable spare or borrowed aircraft.'}
-      ]},
-      {key:'mx-defer',department:'maintenance',kind:'maintenance_defer',label:'Defer defect under MEL',detail:'Document restrictions and confirm the aircraft can continue under MEL.',dependsOn:['mx-strategy'],branch:'defer'},
-      {key:'mx-schedule-check',department:'maintenance',kind:'maintenance_check_scheduling',label:'Schedule technical repair',detail:'Choose a repair window for the affected aircraft. The aircraft remains unavailable until engineering clears the defect.',dependsOn:['mx-strategy'],branch:'schedule_check'},
-      {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign replacement aircraft',detail:'Use a serviceable spare at origin or position one in before departure.',dependsOn:['mx-strategy'],branch:'substitute'},
-    ])},
-    night_curfew_conflict:{classification:'derived',steps:withCancellation([
-      {key:'dispatch-night-curfew-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose night-curfew recovery',detail:'A delay now conflicts with an airport night curfew. Decide whether to protect the flight after reopening or cancel before departure.',options:[
-        {id:'change_departure',label:'Change departure in Dispatch',detail:'Use Dispatch OCC actions to manually hold the flight until the curfew conflict is clear.'}
-      ]},
-      {key:'dispatch-night-departure-change',department:'dispatch',kind:'manual_departure_change_required',label:'Confirm revised departure',detail:'Change the selected flight departure in Dispatch OCC actions, then confirm the updated timing no longer violates a hard curfew.',dependsOn:['dispatch-night-curfew-strategy'],branch:'change_departure'}
-    ])},
-    arrival_curfew_coordination:{classification:'derived',steps:[
-      {key:'dispatch-arrival-curfew-coordinate',department:'dispatch',kind:'flight_watch_coordination',label:'Coordinate curfew arrival exception',detail:'The flight is already airborne and projected to arrive inside a hard night curfew. Coordinate airport, ATC, station, and handling acceptance.'}
-    ]},
-    destination_closure:{classification:'incident',steps:[
-      {key:'dispatch-diversion-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess destination closure',detail:'Build the fuel, weather, alternate, and return-to-origin picture for the flight deck.'},
-      {key:'dispatch-flightdeck-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck diversion plan',detail:'After OCC provides the operating picture, record the captain/ATC plan and coordinate the required support.',dependsOn:['dispatch-diversion-assess'],action:'flightdeck',options:[
-        {id:'alternate',label:'Record alternate request',detail:'Flight deck requests an alternate; OCC chooses and coordinates a suitable airport.'},
-        {id:'return_origin',label:'Record return request',detail:'Flight deck requests return; OCC confirms fuel, weather, ATC, and handling for origin.'}
-      ]},
-      {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate operational alternate',detail:'Choose a suitable alternate using fuel, weather, distance, and handling information.',dependsOn:['dispatch-flightdeck-decision'],branch:'alternate'},
-      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, weather, and handling for a return to the departure airport.',dependsOn:['dispatch-flightdeck-decision'],branch:'return_origin'},
-    ]},
-    destination_closure_ground:{classification:'incident',steps:withCancellation([
-      {key:'dispatch-ground-destination-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose destination-closure recovery',detail:'The aircraft is still on the ground, so OCC decides whether to wait, retime, use another destination, or cancel.',options:[
-        {id:'delay_reopen',label:'Delay until destination reopens',detail:'Hold the departure until the destination can accept the flight.'},
-        {id:'alternate_destination',label:'Use alternate destination',detail:'Operate to a suitable alternate destination if the commercial and operational plan allows it.'}
-      ]},
-      {key:'dispatch-destination-hold',department:'dispatch',kind:'inbound_wait',label:'Publish destination-closure delay',detail:'Retain the flight on the ground until destination availability is expected to recover.',dependsOn:['dispatch-ground-destination-strategy'],branch:'delay_reopen',action:'wait_destination_reopen'},
-      {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate alternate destination',detail:'Choose a suitable airport with range, weather, and handling resources before departure.',dependsOn:['dispatch-ground-destination-strategy'],branch:'alternate_destination'},
-    ])},
-    aircraft_out_of_position:{classification:'derived',steps:withCancellation([
-      {key:'dispatch-position-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose aircraft positioning recovery',detail:'Select whether to create a positioning ferry or protect the flight with another aircraft.',options:[
-        {id:'position_ferry',label:'Create positioning ferry',detail:'Manually schedule a ferry / positioning leg that brings the assigned aircraft to the planned origin.'},
-        {id:'substitute',label:'Use replacement aircraft',detail:'Assign a serviceable spare or borrowed aircraft at the operating airport.'}
-      ]},
-      {key:'dispatch-plan-ferry',department:'dispatch',kind:'manual_ferry_required',label:'Plan positioning ferry',detail:'Create the ferry movement in Dispatch, then return here to confirm the aircraft is projected at origin.',dependsOn:['dispatch-position-strategy'],branch:'position_ferry',action:'check_ferry'},
-      {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign replacement aircraft',detail:'Use a serviceable spare or borrowed aircraft before the disrupted departure.',dependsOn:['dispatch-position-strategy'],branch:'substitute'},
-    ])},
-    aircraft_misposition_after_diversion:{classification:'derived',steps:withCancellation([
-      {key:'dispatch-position-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose post-diversion aircraft recovery',detail:'Select how to protect the next sector after the assigned aircraft diverted away from origin.',options:[
-        {id:'position_ferry',label:'Create recovery ferry',detail:'Manually schedule a positioning leg from the diversion airport to the next origin.'},
-        {id:'substitute',label:'Use replacement aircraft',detail:'Assign a serviceable spare or borrowed aircraft at the next origin.'}
-      ]},
-      {key:'dispatch-plan-ferry',department:'dispatch',kind:'manual_ferry_required',label:'Plan recovery ferry',detail:'Create the ferry movement in Dispatch, then return here to confirm the aircraft is projected at origin.',dependsOn:['dispatch-position-strategy'],branch:'position_ferry',action:'check_ferry'},
-      {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign replacement aircraft',detail:'Use a serviceable spare or borrowed aircraft before the disrupted departure.',dependsOn:['dispatch-position-strategy'],branch:'substitute'},
-    ])},
-    postflight_technical_defect:{classification:'derived',steps:withCancellation([
-      {key:'mx-postflight-inspect',department:'maintenance',kind:'maintenance_inspection',label:'Inspect inbound aircraft',detail:'Engineering checks the aircraft after the previous sector before releasing it for the next departure.'},
-      {key:'mx-postflight-strategy',department:'maintenance',kind:'recovery_strategy',label:'Choose post-flight technical recovery',detail:'Select whether to defer the finding, schedule a repair, or substitute aircraft.',dependsOn:['mx-postflight-inspect'],options:[
-        {id:'defer',label:'Defer under MEL',detail:'Continue with documented restrictions if the finding is deferrable.'},
-        {id:'schedule_check',label:'Schedule technical repair',detail:'Plan a repair window before this aircraft is released.'},
-        {id:'substitute',label:'Use replacement aircraft',detail:'Assign a serviceable spare or borrowed aircraft.'}
-      ]},
-      {key:'mx-postflight-defer',department:'maintenance',kind:'maintenance_defer',label:'Defer post-flight finding',detail:'Document restrictions and confirm the aircraft can operate the next sector.',dependsOn:['mx-postflight-strategy'],branch:'defer'},
-      {key:'mx-postflight-schedule-check',department:'maintenance',kind:'maintenance_check_scheduling',label:'Schedule technical repair',detail:'Choose a repair window for the inbound aircraft and hold it until engineering clears the defect.',dependsOn:['mx-postflight-strategy'],branch:'schedule_check'},
-      {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign replacement aircraft',detail:'Use a serviceable spare or borrowed aircraft before departure.',dependsOn:['mx-postflight-strategy'],branch:'substitute'},
-    ])},
-    crew_misconnect:{classification:'derived',steps:withCancellation([
-      {key:'crew-misconnect-strategy',department:'crew',kind:'recovery_strategy',label:'Choose crew misconnect recovery',detail:'Select whether to wait for the positioned crew or use local replacement crew.',options:[
-        {id:'wait_crew',label:'Wait for connecting crew',detail:'Accept the crew transfer ETA and publish the revised departure.'},
-        {id:'replace',label:'Activate local reserve crew',detail:'Use a legal qualified reserve already at the departure station.'}
-      ]},
-      {key:'crew-wait-connect',department:'crew',kind:'inbound_wait',label:'Accept crew connection ETA',detail:'Use the crew transfer arrival and reporting time as the operating plan.',dependsOn:['crew-misconnect-strategy'],branch:'wait_crew',action:'wait_crew'},
-      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Activate local reserve crew',detail:'Select a legal qualified local pool. The reserve must report before the flight can use that crew.',dependsOn:['crew-misconnect-strategy'],branch:'replace'},
-      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve response and briefing',detail:'Crew Control waits for the reserve to report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
-    ])},
-    crew_misposition_after_diversion:{classification:'derived',steps:withCancellation([
-      {key:'crew-diversion-strategy',department:'crew',kind:'recovery_strategy',label:'Choose post-diversion crew recovery',detail:'Select how to recover the through crew after a diversion left them away from the next departure station.',options:[
-        {id:'move_crew',label:'Move diverted crew to origin',detail:'Manually position the displaced crew to the next origin in the Personnel widget.'},
-        {id:'replace',label:'Activate local reserve crew',detail:'Use a legal qualified reserve already at the departure station.'},
-        {id:'wait_crew',label:'Delay for displaced crew',detail:'Accept the crew positioning ETA and publish the revised departure.'}
-      ]},
-      {key:'crew-move-diverted',department:'crew',kind:'manual_crew_move_required',label:'Move displaced crew',detail:'Book the personnel move, then return here once the crew is projected at the departure station.',dependsOn:['crew-diversion-strategy'],branch:'move_crew',action:'check_crew_move'},
-      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Activate local reserve crew',detail:'Select a legal qualified local pool. The reserve must report before the flight can use that crew.',dependsOn:['crew-diversion-strategy'],branch:'replace'},
-      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve response and briefing',detail:'Crew Control waits for the reserve to report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
-      {key:'crew-wait-connect',department:'crew',kind:'inbound_wait',label:'Publish crew-positioning delay',detail:'Use the displaced crew movement time as the operating plan.',dependsOn:['crew-diversion-strategy'],branch:'wait_crew',action:'wait_crew'},
-    ])},
-    crew_report_delayed:{classification:'incident',steps:withCancellation([
-      {key:'crew-report-delay-strategy',department:'crew',kind:'recovery_strategy',label:'Choose crew-report recovery',detail:'Select how Crew Control protects a departure when the assigned crew cannot complete report on time.',options:[
-        {id:'wait_crew',label:'Wait for assigned crew',detail:'Accept the late report and publish the revised departure.'},
-        {id:'replace',label:'Activate local reserve crew',detail:'Use a legal qualified reserve already at the departure station.'},
-        {id:'move_reserve',label:'Move reserve crew to origin',detail:'Manually position qualified reserve crew from another station, then confirm local availability.'}
-      ]},
-      {key:'crew-wait-report',department:'crew',kind:'inbound_wait',label:'Publish crew-report delay',detail:'Use the crew report ETA as the operating plan.',dependsOn:['crew-report-delay-strategy'],branch:'wait_crew',action:'wait_crew'},
-      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Activate local reserve crew',detail:'Select a legal qualified local pool. The reserve must report before the flight can use that crew.',dependsOn:['crew-report-delay-strategy'],branch:'replace'},
-      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve response and briefing',detail:'Crew Control waits for the reserve to report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
-      {key:'crew-move-reserve',department:'crew',kind:'manual_crew_move_required',label:'Move reserve crew',detail:'Book the personnel move, then return here once the reserve crew is projected at the departure station.',dependsOn:['crew-report-delay-strategy'],branch:'move_reserve',action:'check_crew_move'},
-    ])},
-    crew_duty_risk:{classification:'derived',steps:withCancellation([
-      {key:'crew-duty-strategy',department:'crew',kind:'recovery_strategy',label:'Choose duty recovery',detail:'Select a legal crew recovery before the duty limit is exceeded.',options:[
-        {id:'augment',label:'Activate augmented crew',detail:'Use additional qualified local crew if the augmented duty remains legal.'},
-        {id:'replace',label:'Activate local reserve crew',detail:'Replace the duty with legal qualified reserve crew at the operating airport.'}
-      ]},
-      {key:'crew-augment',department:'crew',kind:'crew_augmentation',label:'Activate augmented crew',detail:'Crew Control calls the additional flight and cabin crew; they must report before the duty envelope is protected.',dependsOn:['crew-duty-strategy'],branch:'augment'},
-      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Activate local reserve crew',detail:'Select a legal, qualified local pool. The reserve must report before the duty is protected.',dependsOn:['crew-duty-strategy'],branch:'replace'},
-      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve response and briefing',detail:'Crew Control waits for the reserve to travel, report, and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
-    ])},
-    crew_fatigue_report:{classification:'incident',steps:withCancellation([
-      {key:'crew-fatigue-strategy',department:'crew',kind:'recovery_strategy',label:'Choose fatigue recovery',detail:'Select a crew-control response to a fatigue report before departure.',options:[
-        {id:'replace',label:'Activate local reserve crew',detail:'Use a legal qualified reserve already at the operating airport.'},
-        {id:'augment',label:'Activate augmented crew',detail:'Use additional crew where the duty can remain legal with augmentation.'}
-      ]},
-      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Activate local reserve crew',detail:'Select a legal, qualified local pool. The reserve must report before the duty is protected.',dependsOn:['crew-fatigue-strategy'],branch:'replace'},
-      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve response and briefing',detail:'Crew Control waits for the reserve to report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
-      {key:'crew-augment',department:'crew',kind:'crew_augmentation',label:'Activate augmented crew',detail:'Crew Control calls additional flight and cabin crew for this sector.',dependsOn:['crew-fatigue-strategy'],branch:'augment'},
-    ])},
-    crew_fatigue_mid_rotation:{classification:'derived',steps:withCancellation([
-      {key:'crew-fatigue-strategy',department:'crew',kind:'recovery_strategy',label:'Choose mid-rotation fatigue recovery',detail:'Select a crew-control response when the current duty margin is too thin for the remaining sector.',options:[
-        {id:'replace',label:'Activate local reserve crew',detail:'Replace the operating crew at the departure station before continuing the rotation.'},
-        {id:'augment',label:'Activate augmented crew',detail:'Use additional crew where the duty can remain legal with augmentation.'}
-      ]},
-      {key:'crew-allocate',department:'crew',kind:'crew_allocation',label:'Activate local reserve crew',detail:'Select a legal, qualified local pool. The reserve must report before the duty is protected.',dependsOn:['crew-fatigue-strategy'],branch:'replace'},
-      {key:'crew-report',department:'crew',kind:'crew_report',label:'Reserve response and briefing',detail:'Crew Control waits for the reserve to report and complete briefing.',dependsOn:['crew-allocate'],branch:'replace',automatic:true},
-      {key:'crew-augment',department:'crew',kind:'crew_augmentation',label:'Activate augmented crew',detail:'Crew Control calls additional flight and cabin crew for this sector.',dependsOn:['crew-fatigue-strategy'],branch:'augment'},
-    ])},
-    crew_duty_extension:{classification:'derived',steps:[
-      {key:'crew-extension-strategy',department:'crew',kind:'recovery_strategy',label:'Choose airborne duty response',detail:'The crew keeps operating to a safe landing; choose the OCC / Crew Control support plan for the duty overrun.',options:[
-        {id:'record_extension',label:'Record duty extension',detail:'Record commander discretion / unforeseen duty extension and plan post-arrival review.'},
-        {id:'priority',label:'Request priority handling',detail:'Ask Flight Watch / ATC coordination for a realistic shortcut or priority arrival opportunity.'},
-        {id:'protect_next',label:'Protect next sector crew',detail:'Stand down the current crew on arrival and activate reserve crew for the next unflown sector.'}
-      ]},
-      {key:'crew-extension-record',department:'crew',kind:'crew_extension_record',label:'Record duty-extension plan',detail:'Crew Control records the duty extension and post-arrival review. The flight continues to safe landing.',dependsOn:['crew-extension-strategy'],branch:'record_extension',action:'record_extension'},
-      {key:'dispatch-extension-priority',department:'dispatch',kind:'reroute_coordination',label:'Request priority handling',detail:'Coordinate a shorter routing or arrival-priority request via the flight deck / ATC.',dependsOn:['crew-extension-strategy'],branch:'priority',action:'direct'},
-      {key:'crew-extension-record-priority',department:'crew',kind:'crew_extension_record',label:'Record duty-extension plan',detail:'Record the extension after the priority-handling reply and keep post-arrival crew review active.',dependsOn:['dispatch-extension-priority'],branch:'priority',action:'record_priority'},
-      {key:'crew-next-sector-replacement',department:'crew',kind:'crew_next_sector_replacement',label:'Activate reserve for next sector',detail:'Use local reserve crew at the next departure station. If none is available, move/request crew manually first.',dependsOn:['crew-extension-strategy'],branch:'protect_next'},
-      {key:'crew-extension-standdown',department:'crew',kind:'crew_extension_record',label:'Stand down current crew on arrival',detail:'Crew Control records the current crew as removed from downstream flying and requiring post-arrival rest review.',dependsOn:['crew-next-sector-replacement'],branch:'protect_next',action:'stand_down'},
-    ]},
-    no_legal_crew:{classification:'derived',steps:withCancellation([
-      {key:'crew-legal-strategy',department:'crew',kind:'recovery_strategy',label:'Choose legal crew recovery',detail:'Select how to recover the flight when no complete legal qualified crew is locally available.',options:[
-        {id:'confirm',label:'Confirm legal crew available',detail:'Use this after the required crew has been moved or requested into the departure station.'}
-      ]},
-    ])},
-    fuel_supplier_outage:{classification:'incident',steps:withCancellation([
-      {key:'station-fuel-outage-strategy',department:'station',kind:'recovery_strategy',label:'Choose fuel-supplier recovery',detail:'Select the station/OCC response when the local fuel provider cannot support normal uplift.',options:[
-        {id:'priority',label:'Request priority fuel truck',detail:'Escalate the affected flight with the fuel provider or airport fuel desk.'},
-        {id:'wait_supply',label:'Wait for supplier recovery',detail:'Accept the provider recovery ETA and update the departure plan.'},
-        {id:'tanker_inbound',label:'Tanker fuel on inbound',detail:'Overfuel the aircraft before it reaches the disrupted station so the next sector can depart without local uplift.'},
-        {id:'minimum_uplift',label:'Use minimum compliant uplift',detail:'Dispatch with legal fuel only if the supplier can provide the minimum required uplift.'},
-        {id:'substitute',label:'Use already fueled replacement aircraft',detail:'Assign a serviceable aircraft that can depart without waiting for the affected aircraft uplift.'}
-      ]},
-      {key:'station-fuel-priority',department:'station',kind:'fuel_recovery',label:'Escalate fuel priority',detail:'Coordinate priority truck dispatch or hydrant access with the provider.',dependsOn:['station-fuel-outage-strategy'],branch:'priority',action:'fuel_outage_priority'},
-      {key:'station-fuel-wait',department:'station',kind:'fuel_recovery',label:'Publish supplier recovery ETA',detail:'Accept the supplier outage recovery time as the departure driver.',dependsOn:['station-fuel-outage-strategy'],branch:'wait_supply',action:'wait_supply'},
-      {key:'station-fuel-tanker',department:'station',kind:'fuel_recovery',label:'Coordinate inbound tanker fuel',detail:'Confirm the previous station can load enough fuel for this sector before the aircraft reaches the disrupted airport.',dependsOn:['station-fuel-outage-strategy'],branch:'tanker_inbound',action:'tanker_inbound'},
-      {key:'station-fuel-minimum',department:'station',kind:'fuel_recovery',label:'Confirm minimum compliant uplift',detail:'Use the legal dispatch fuel plan without discretionary uplift if the provider can support it.',dependsOn:['station-fuel-outage-strategy'],branch:'minimum_uplift',action:'minimum_uplift'},
-      {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign fueled replacement aircraft',detail:'Use a suitable spare or borrowed aircraft before departure.',dependsOn:['station-fuel-outage-strategy'],branch:'substitute'},
-    ])},
-    maintenance_resource_unavailable:{classification:'derived',steps:withCancellation([
-      {key:'mx-resource-strategy',department:'maintenance',kind:'recovery_strategy',label:'Choose maintenance-resource recovery',detail:'Required engineering work is at a station without maintenance support. Choose how OCC protects the aircraft and schedule.',options:[
-        {id:'send_mobile_team',label:'Send mobile maintenance team',detail:'Dispatch a mobile engineering team from the nearest capable station, then schedule the check locally after they arrive.'},
-        {id:'ferry_to_maintenance',label:'Create ferry to maintenance station',detail:'Manually plan a ferry to a maintenance-capable station if the aircraft is legal to reposition.'},
-        {id:'substitute',label:'Use replacement aircraft',detail:'Protect the passenger flight with a serviceable aircraft while the original aircraft remains unavailable.'}
-      ]},
-      {key:'mx-mobile-team',department:'maintenance',kind:'mobile_maintenance_team',label:'Send mobile maintenance team',detail:'Coordinate an engineering callout and wait until the mobile team is available at the aircraft.',dependsOn:['mx-resource-strategy'],branch:'send_mobile_team',action:'send_mobile_team'},
-      {key:'dispatch-maintenance-ferry',department:'dispatch',kind:'manual_maintenance_ferry_required',label:'Plan maintenance ferry',detail:'Create a ferry movement to a maintenance-capable airport, then confirm the plan here.',dependsOn:['mx-resource-strategy'],branch:'ferry_to_maintenance',action:'check_maintenance_ferry'},
-      {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign replacement aircraft',detail:'Use a serviceable spare at origin or position one in before departure.',dependsOn:['mx-resource-strategy'],branch:'substitute'},
-    ])},
-    deicing_required:{classification:'derived',steps:withCancellation([
-      {key:'station-deicing-strategy',department:'station',kind:'recovery_strategy',label:'Choose deicing recovery',detail:'Select the departure-station response when snow or ice requires treatment before departure.',options:[
-        {id:'deice',label:'Request deicing',detail:'Enter the deicing queue and treat the aircraft before departure.'},
-        {id:'priority_deice',label:'Request priority deicing',detail:'Ask station/ramp control for an earlier deicing slot.'},
-        {id:'wait_weather',label:'Wait for condition improvement',detail:'Hold the flight until deicing demand or precipitation eases.'}
-      ]},
-      {key:'station-deice',department:'station',kind:'station_recovery',label:'Request deicing',detail:'Coordinate deicing truck, stand access, and post-treatment release.',dependsOn:['station-deicing-strategy'],branch:'deice',action:'deice'},
-      {key:'station-priority-deice',department:'station',kind:'station_recovery',label:'Request priority deicing',detail:'Coordinate an earlier deicing sequence with station and ramp control.',dependsOn:['station-deicing-strategy'],branch:'priority_deice',action:'priority_deice'},
-      {key:'station-wait-weather',department:'station',kind:'station_recovery',label:'Hold for weather improvement',detail:'Keep the departure held until snow or ice exposure decreases.',dependsOn:['station-deicing-strategy'],branch:'wait_weather',action:'wait_weather'},
-    ])},
-    deicing_capacity_collapse:{classification:'derived',steps:withCancellation([
-      {key:'station-deicing-collapse-strategy',department:'station',kind:'recovery_strategy',label:'Choose deicing-queue recovery',detail:'Select the station/OCC response when local deicing demand overwhelms available treatment capacity.',options:[
-        {id:'join_queue',label:'Join deicing queue',detail:'Accept the station queue and publish the likely departure delay.'},
-        {id:'priority_deice',label:'Request priority deicing',detail:'Escalate for an earlier treatment slot where operational priority is justified.'},
-        {id:'wait_weather',label:'Wait for weather improvement',detail:'Hold until precipitation or deicing demand eases.'}
-      ]},
-      {key:'station-deice-queue',department:'station',kind:'station_recovery',label:'Publish deicing queue time',detail:'Coordinate station queueing, stand access, and a treatment sequence.',dependsOn:['station-deicing-collapse-strategy'],branch:'join_queue',action:'deice_queue'},
-      {key:'station-priority-deice',department:'station',kind:'station_recovery',label:'Request priority deicing',detail:'Coordinate an earlier deicing sequence with station and ramp control.',dependsOn:['station-deicing-collapse-strategy'],branch:'priority_deice',action:'priority_deice'},
-      {key:'station-wait-weather',department:'station',kind:'station_recovery',label:'Hold for weather improvement',detail:'Keep the departure held until snow or ice exposure decreases.',dependsOn:['station-deicing-collapse-strategy'],branch:'wait_weather',action:'wait_weather'},
-    ])},
-    holdover_expired:{classification:'derived',steps:withCancellation([
-      {key:'station-holdover-strategy',department:'station',kind:'recovery_strategy',label:'Choose holdover recovery',detail:'Select the recovery when the previous deicing holdover window has expired before takeoff.',options:[
-        {id:'redeice',label:'Repeat deicing',detail:'Return to treatment before departure.'},
-        {id:'wait_deice_slot',label:'Wait for deicing slot',detail:'Hold until station can repeat treatment.'}
-      ]},
-      {key:'station-redeice',department:'station',kind:'station_recovery',label:'Repeat deicing',detail:'Coordinate repeat treatment and a new holdover window.',dependsOn:['station-holdover-strategy'],branch:'redeice',action:'redeice'},
-      {key:'station-wait-deice-slot',department:'station',kind:'station_recovery',label:'Wait for deicing slot',detail:'Accept station queueing until repeat treatment is available.',dependsOn:['station-holdover-strategy'],branch:'wait_deice_slot',action:'wait_deice_slot'},
-    ])},
-    atc_ground_stop:{classification:'derived',steps:withCancellation([
-      {key:'dispatch-groundstop-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose ground-stop recovery',detail:'Select how to handle a destination or airspace ground stop before departure.',options:[
-        {id:'hold_ground',label:'Hold on ground',detail:'Keep the aircraft at the gate/stand until the ground stop releases.'},
-        {id:'priority',label:'Request exemption or earlier release',detail:'Ask flow control for an earlier opportunity if the flight qualifies.'}
-      ]},
-    ])},
-    performance_limited:{classification:'derived',steps:withCancellation([
-      {key:'dispatch-performance-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose performance recovery',detail:'Select an operational plan when route, fuel, weather, or MEL limits erode dispatch performance margin.',options:[
-        {id:'payload_reduce',label:'Reduce payload',detail:'Offload payload/passengers to bring the flight back inside performance margin.'},
-        {id:'delay_conditions',label:'Delay for better conditions',detail:'Hold the departure until weather or runway performance improves.'},
-        {id:'substitute',label:'Use replacement aircraft',detail:'Assign an aircraft with enough performance margin for the route.'}
-      ]},
-      {key:'dispatch-payload-reduce',department:'dispatch',kind:'performance_coordination',label:'Coordinate payload reduction',detail:'Coordinate payload limits with load control, station, and flight crew.',dependsOn:['dispatch-performance-strategy'],branch:'payload_reduce',action:'payload_reduce'},
-      {key:'dispatch-delay-performance',department:'dispatch',kind:'performance_coordination',label:'Delay for performance window',detail:'Retain the flight until forecast operating conditions improve enough for dispatch.',dependsOn:['dispatch-performance-strategy'],branch:'delay_conditions',action:'delay_conditions'},
-      {key:'dispatch-substitute',department:'dispatch',kind:'aircraft_substitution',label:'Assign performance-suitable aircraft',detail:'Use a serviceable spare or borrowed aircraft with enough range/performance margin.',dependsOn:['dispatch-performance-strategy'],branch:'substitute'},
-    ])},
-    destination_handling_unavailable:{classification:'derived',steps:withCancellation([
-      {key:'station-destination-handling-strategy',department:'station',kind:'recovery_strategy',label:'Choose destination handling recovery',detail:'Select how to protect arrival when destination station handling is unavailable.',options:[
-        {id:'request_handling',label:'Request destination handling',detail:'Secure own-station or contract handling acceptance before the flight arrives.'},
-        {id:'delay_departure',label:'Delay until handling is available',detail:'Hold the departure until the destination station can accept the aircraft.'},
-        {id:'prepare_alternate',label:'Prepare arrival alternate',detail:'For airborne flights, prepare an alternate if destination handling cannot accept.'}
-      ]},
-      {key:'station-destination-handling',department:'station',kind:'destination_handling',label:'Secure destination handling',detail:'Request stand, ramp, and passenger handling acceptance at the destination.',dependsOn:['station-destination-handling-strategy'],branch:'request_handling',action:'request_handling'},
-      {key:'dispatch-destination-wait',department:'dispatch',kind:'inbound_wait',label:'Publish destination-handling hold',detail:'Delay departure until destination handling can accept the aircraft.',dependsOn:['station-destination-handling-strategy'],branch:'delay_departure',action:'wait_destination_handling',eligibility:{phase:'pre_departure'}},
-      {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate handling alternate',detail:'Choose a suitable airport with handling capacity for the airborne arrival.',dependsOn:['station-destination-handling-strategy'],branch:'prepare_alternate'},
-    ])},
-    security_screening:{classification:'incident',steps:withCancellation([
-      {key:'station-security-strategy',department:'station',kind:'recovery_strategy',label:'Choose manifest recovery',detail:'Select a response when a security irregularity affects the passenger, baggage, or manifest closeout.',options:[
-        {id:'hold_screening',label:'Hold for rescreening',detail:'Keep the flight open while airport security completes checks.'},
-        {id:'offload_passenger',label:'Offload affected passenger',detail:'Remove the affected passenger and baggage, then depart.'}
-      ]},
-      {key:'station-security-hold',department:'station',kind:'security_coordination',label:'Coordinate rescreening hold',detail:'Hold boarding and coordinate completion of security checks.',dependsOn:['station-security-strategy'],branch:'hold_screening',action:'hold_screening'},
-      {key:'station-security-offload',department:'station',kind:'security_coordination',label:'Offload passenger and baggage',detail:'Coordinate passenger offload, baggage removal, and document closeout.',dependsOn:['station-security-strategy'],branch:'offload_passenger',action:'offload_passenger'},
-    ])},
-    bird_strike:{classification:'incident',steps:[
-      {key:'dispatch-bird-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess suspected bird strike',detail:'Coordinate with the flight deck and maintenance control for aircraft status and inspection needs.'},
-      {key:'dispatch-bird-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck bird-strike plan',detail:'The captain decides continuation, diversion, or return after aircraft status checks; OCC coordinates maintenance and station support.',dependsOn:['dispatch-bird-assess'],action:'flightdeck',options:[
-        {id:'continue',label:'Record continuation with inspection',detail:'Flight deck continues; OCC arranges arrival inspection if systems remain normal.'},
-        {id:'divert',label:'Record inspection diversion request',detail:'Flight deck requests diversion; OCC prepares a suitable airport for immediate inspection.'},
-        {id:'return_origin',label:'Record return request',detail:'Flight deck requests return; OCC confirms fuel, ATC, and handling at the departure airport.'}
-      ]},
-      {key:'mx-arrival-check',department:'maintenance',kind:'arrival_maintenance_check',label:'Arrange arrival inspection',detail:'Ensure receiving station can inspect the aircraft after landing.',dependsOn:['dispatch-bird-decision'],branch:'continue',action:'arrival_check'},
-      {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate inspection diversion airport',detail:'Choose a suitable airport with fuel, weather, range, and handling support.',dependsOn:['dispatch-bird-decision'],branch:'divert'},
-      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, weather, and handling for a return to the departure airport.',dependsOn:['dispatch-bird-decision'],branch:'return_origin'},
-    ]},
-    onboard_medical:{classification:'incident',steps:[
-      {key:'dispatch-medical-assess',department:'dispatch',kind:'medical_assessment',label:'Assess onboard medical case',detail:'Coordinate with the flight deck and medical advisory service.'},
-      {key:'dispatch-medical-decision',department:'dispatch',kind:'authority_decision',label:'Record medical / flight deck plan',detail:'Medical advisory and the captain determine the operating plan; OCC records it and coordinates support.',dependsOn:['dispatch-medical-assess'],action:'medical',options:[
-        {id:'continue',label:'Record destination continuation',detail:'Flight deck continues; OCC arranges medical assistance at planned arrival.'},
-        {id:'divert',label:'Record medical diversion request',detail:'Flight deck requests diversion; OCC prepares a suitable airport and medical reception.'},
-        {id:'return_origin',label:'Record medical return request',detail:'Flight deck requests return; OCC confirms fuel, ATC, handling, and medical reception at origin.'}
-      ]},
-      {key:'dispatch-medical-continue',department:'dispatch',kind:'medical_coordination',label:'Coordinate destination medical meet',detail:'Arrange medical assistance on arrival and update the flight deck.',dependsOn:['dispatch-medical-decision'],branch:'continue',action:'continue'},
-      {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate medical diversion airport',detail:'Choose a suitable airport with fuel, weather, and handling support.',dependsOn:['dispatch-medical-decision'],branch:'divert'},
-      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, weather, medical reception, and handling for a return to the departure airport.',dependsOn:['dispatch-medical-decision'],branch:'return_origin'},
-    ]},
-    inflight_technical_fault:{classification:'incident',steps:[
-      {key:'dispatch-tech-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess inflight technical fault',detail:'Coordinate with the flight deck and maintenance control to classify the fault.'},
-      {key:'dispatch-tech-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck technical plan',detail:'The captain decides continuation, diversion, or return after maintenance-control guidance; OCC records and supports the plan.',dependsOn:['dispatch-tech-assess'],action:'flightdeck',options:[
-        {id:'continue',label:'Record monitored continuation',detail:'Flight deck continues; OCC maintains flight watch and prepares arrival maintenance.'},
-        {id:'divert',label:'Record technical diversion request',detail:'Flight deck requests diversion; OCC prepares engineering and passenger handling.'},
-        {id:'return_origin',label:'Record technical return request',detail:'Flight deck requests return; OCC confirms fuel, ATC, handling, and engineering support at origin.'}
-      ]},
-      {key:'dispatch-tech-monitor',department:'dispatch',kind:'flight_watch_coordination',label:'Coordinate continued flight watch',detail:'Confirm abnormal checklist status, arrival priority, and maintenance readiness at destination.',dependsOn:['dispatch-tech-decision'],branch:'continue',action:'continue'},
-      {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate technical diversion airport',detail:'Choose a suitable airport with fuel, weather, range, and handling support.',dependsOn:['dispatch-tech-decision'],branch:'divert'},
-      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, weather, handling, and maintenance support for a return to the departure airport.',dependsOn:['dispatch-tech-decision'],branch:'return_origin'},
-    ]},
-    fuel_margin_low:{classification:'derived',steps:[
-      {key:'dispatch-fuel-assess',department:'dispatch',kind:'fuel_monitoring',label:'Assess fuel margin',detail:'Compare projected landing fuel against dispatch reserve and current delay exposure.'},
-      {key:'dispatch-fuel-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck fuel plan',detail:'The flight deck declares the fuel plan after OCC and ATC provide options; OCC coordinates the selected support.',dependsOn:['dispatch-fuel-assess'],action:'flightdeck',options:[
-        {id:'conserve',label:'Record conservation plan',detail:'Flight deck accepts conservation; OCC monitors profile and landing-fuel estimate.'},
-        {id:'direct',label:'Record priority / shortcut request',detail:'Flight deck requests priority or direct routing; OCC coordinates with ATC via the crew.'},
-        {id:'divert',label:'Record fuel diversion request',detail:'Flight deck requests diversion; OCC prepares a suitable fuel-protection alternate.'},
-        {id:'return_origin',label:'Record return request',detail:'Flight deck requests return; OCC confirms fuel, ATC, weather, and handling at origin.'}
-      ]},
-      {key:'dispatch-fuel-conserve',department:'dispatch',kind:'fuel_monitoring',label:'Coordinate fuel-conservation profile',detail:'Coordinate a conservative speed/level plan with flight crew monitoring.',dependsOn:['dispatch-fuel-decision'],branch:'conserve',action:'conserve'},
-      {key:'dispatch-fuel-direct',department:'dispatch',kind:'reroute_coordination',label:'Request ATC shortcut or priority',detail:'Coordinate a shorter route, direct routing, or arrival priority with ATC via the flight deck.',dependsOn:['dispatch-fuel-decision'],branch:'direct',action:'direct'},
-      {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate fuel diversion airport',detail:'Choose a suitable airport using fuel, weather, range, and handling resources.',dependsOn:['dispatch-fuel-decision'],branch:'divert'},
-      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, weather, and handling for a return to the departure airport.',dependsOn:['dispatch-fuel-decision'],branch:'return_origin'},
-    ]},
-    atc_holding_fuel_conflict:{classification:'derived',steps:[
-      {key:'dispatch-holding-fuel-assess',department:'dispatch',kind:'fuel_monitoring',label:'Assess holding fuel exposure',detail:'Compare assigned airborne holding against projected landing fuel and reserve.'},
-      {key:'dispatch-holding-fuel-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck holding-fuel plan',detail:'The flight deck decides whether priority handling is enough or diversion is required; OCC coordinates the plan.',dependsOn:['dispatch-holding-fuel-assess'],action:'flightdeck',options:[
-        {id:'direct',label:'Record priority / shortcut request',detail:'Flight deck requests priority sequencing, reduced holding, or direct routing.'},
-        {id:'divert',label:'Record fuel diversion request',detail:'Flight deck requests diversion; OCC prepares a suitable fuel-protection alternate.'}
-      ]},
-      {key:'dispatch-holding-fuel-direct',department:'dispatch',kind:'reroute_coordination',label:'Request priority or shortcut',detail:'Coordinate priority sequencing, reduced holding, or a direct route with ATC via the flight deck.',dependsOn:['dispatch-holding-fuel-decision'],branch:'direct',action:'direct'},
-      {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate fuel-protection diversion',detail:'Choose a suitable airport using fuel, weather, range, and handling resources.',dependsOn:['dispatch-holding-fuel-decision'],branch:'divert'},
-    ]},
-    airborne_atc_reroute:{classification:'derived',steps:[
-      {key:'dispatch-reroute-strategy',department:'dispatch',kind:'recovery_strategy',label:'Choose reroute coordination',detail:'Select the OCC response to an ATC-amended airborne route.',options:[
-        {id:'accept',label:'Record amended route',detail:'Record the ATC-assigned reroute and publish the revised arrival estimate.'},
-        {id:'direct',label:'Coordinate shorter-route request',detail:'Coordinate an ATC request for direct or less delay-heavy routing via the flight crew.'}
-      ]},
-      {key:'dispatch-reroute-accept',department:'dispatch',kind:'reroute_coordination',label:'Accept amended route',detail:'Record the reroute and update arrival and downstream planning.',dependsOn:['dispatch-reroute-strategy'],branch:'accept',action:'accept'},
-      {key:'dispatch-reroute-direct',department:'dispatch',kind:'reroute_coordination',label:'Request shorter routing',detail:'Coordinate an ATC request for a shorter route or priority.',dependsOn:['dispatch-reroute-strategy'],branch:'direct',action:'direct'},
-    ]},
-    unruly_passenger:{classification:'incident',steps:[
-      {key:'dispatch-cabin-assess',department:'dispatch',kind:'cabin_security_coordination',label:'Assess cabin security report',detail:'Coordinate with the flight deck, cabin lead, and destination security support.'},
-      {key:'dispatch-cabin-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck security plan',detail:'The captain decides whether the situation is contained, diversion is needed, or return is requested; OCC coordinates security support.',dependsOn:['dispatch-cabin-assess'],action:'flightdeck',options:[
-        {id:'continue',label:'Record destination continuation',detail:'Flight deck continues; OCC arranges police/security reception at destination.'},
-        {id:'divert',label:'Record security diversion request',detail:'Flight deck requests diversion; OCC prepares an airport for immediate security handover.'},
-        {id:'return_origin',label:'Record security return request',detail:'Flight deck requests return; OCC coordinates ATC, handling, and security reception at origin.'}
-      ]},
-      {key:'dispatch-cabin-continue',department:'dispatch',kind:'cabin_security_coordination',label:'Coordinate arrival security meet',detail:'Arrange destination security/law enforcement and update the flight deck.',dependsOn:['dispatch-cabin-decision'],branch:'continue',action:'continue'},
-      {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate security diversion airport',detail:'Choose a suitable airport with handling and security support.',dependsOn:['dispatch-cabin-decision'],branch:'divert'},
-      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, ATC, handling, and security reception at the departure airport.',dependsOn:['dispatch-cabin-decision'],branch:'return_origin'},
-    ]},
-    destination_below_minima:{classification:'derived',steps:[
-      {key:'dispatch-minima-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess landing-minima picture',detail:'Review destination minima, fuel state, alternates, and return-to-origin feasibility.'},
-      {key:'dispatch-minima-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck minima plan',detail:'The captain decides the missed-approach, holding, diversion, or return plan with ATC; OCC coordinates the result.',dependsOn:['dispatch-minima-assess'],action:'flightdeck',options:[
-        {id:'hold',label:'Record holding plan',detail:'Flight deck/ATC plan to hold; OCC monitors fuel exposure and weather trend.'},
-        {id:'divert',label:'Record weather diversion request',detail:'Flight deck requests diversion; OCC prepares a suitable weather alternate.'},
-        {id:'return_origin',label:'Record return request',detail:'Flight deck requests return; OCC confirms fuel, weather, ATC, and handling for origin.'}
-      ]},
-      {key:'dispatch-minima-hold',department:'dispatch',kind:'flight_watch_coordination',label:'Coordinate minima hold',detail:'Coordinate holding fuel, approach minima trend, and diversion trigger point.',dependsOn:['dispatch-minima-decision'],branch:'hold',action:'hold'},
-      {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate weather alternate',detail:'Choose a suitable alternate using fuel, weather, range, and handling resources.',dependsOn:['dispatch-minima-decision'],branch:'divert'},
-      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, weather, and handling for a return to the departure airport.',dependsOn:['dispatch-minima-decision'],branch:'return_origin'},
-    ]},
-    diversion_airport_unavailable:{classification:'derived',steps:[
-      {key:'dispatch-diversion-airport-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess diversion-airport failure',detail:'Review why the planned diversion airport is unusable and prepare updated fuel/alternate choices.'},
-      {key:'dispatch-diversion-airport-decision',department:'dispatch',kind:'authority_decision',label:'Record amended diversion plan',detail:'The captain and ATC decide whether to hold, reselect, or return after OCC updates the picture.',dependsOn:['dispatch-diversion-airport-assess'],action:'flightdeck',options:[
-        {id:'reselect',label:'Record new-diversion request',detail:'Flight deck requests a new diversion airport; OCC chooses another suitable airport.'},
-        {id:'hold',label:'Record holding plan',detail:'Flight deck/ATC plan to hold; OCC monitors fuel and airport acceptance trend.'},
-        {id:'return_origin',label:'Record return request',detail:'Flight deck requests return; OCC confirms fuel, weather, ATC, and handling for origin.'}
-      ]},
-      {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate new diversion airport',detail:'Choose a suitable airport using fuel, weather, range, and handling resources.',dependsOn:['dispatch-diversion-airport-decision'],branch:'reselect'},
-      {key:'dispatch-diversion-hold',department:'dispatch',kind:'flight_watch_coordination',label:'Coordinate diversion-airport hold',detail:'Coordinate holding fuel, airport acceptance trend, and next diversion trigger point.',dependsOn:['dispatch-diversion-airport-decision'],branch:'hold',action:'hold'},
-      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, weather, and handling for a return to the departure airport.',dependsOn:['dispatch-diversion-airport-decision'],branch:'return_origin'},
-    ]},
-    lightning_strike:{classification:'derived',steps:[
-      {key:'dispatch-lightning-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess reported lightning strike',detail:'Coordinate with flight deck and maintenance control for systems status.'},
-      {key:'dispatch-lightning-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck lightning plan',detail:'The captain decides continued flight, diversion, or return after aircraft status checks; OCC coordinates inspection support.',dependsOn:['dispatch-lightning-assess'],action:'flightdeck',options:[
-        {id:'continue',label:'Record continuation with inspection',detail:'Flight deck continues; OCC arranges arrival inspection if systems remain normal.'},
-        {id:'divert',label:'Record inspection diversion request',detail:'Flight deck requests diversion; OCC prepares a suitable airport for immediate inspection.'},
-        {id:'return_origin',label:'Record inspection return request',detail:'Flight deck requests return; OCC confirms fuel, ATC, handling, and inspection support at origin.'}
-      ]},
-      {key:'mx-arrival-check',department:'maintenance',kind:'arrival_maintenance_check',label:'Arrange arrival inspection',detail:'Ensure receiving station can inspect the aircraft after landing.',dependsOn:['dispatch-lightning-decision'],branch:'continue',action:'arrival_check'},
-      {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate inspection diversion airport',detail:'Choose a suitable airport with fuel, weather, range, and handling support.',dependsOn:['dispatch-lightning-decision'],branch:'divert'},
-      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, weather, handling, and inspection support for a return to the departure airport.',dependsOn:['dispatch-lightning-decision'],branch:'return_origin'},
-    ]},
-    pressurization_issue:{classification:'incident',steps:[
-      {key:'dispatch-pressure-assess',department:'dispatch',kind:'flight_watch_assessment',label:'Assess pressurization issue',detail:'Coordinate with the flight deck after abnormal pressurization indications.'},
-      {key:'dispatch-pressure-decision',department:'dispatch',kind:'authority_decision',label:'Record flight deck pressurization plan',detail:'The captain decides low-altitude continuation, diversion, or return after checklist actions; OCC coordinates fuel and support.',dependsOn:['dispatch-pressure-assess'],action:'flightdeck',options:[
-        {id:'continue_low',label:'Record lower-altitude continuation',detail:'Flight deck continues at lower altitude; OCC monitors fuel burn and prepares destination support.'},
-        {id:'divert',label:'Record technical diversion request',detail:'Flight deck requests diversion; OCC prepares a suitable airport for technical inspection.'},
-        {id:'return_origin',label:'Record technical return request',detail:'Flight deck requests return; OCC confirms fuel, ATC, handling, and technical support at origin.'}
-      ]},
-      {key:'dispatch-pressure-continue',department:'dispatch',kind:'flight_watch_coordination',label:'Coordinate lower-altitude profile',detail:'Coordinate fuel burn, ATC clearance, and arrival support for continued flight.',dependsOn:['dispatch-pressure-decision'],branch:'continue_low',action:'continue_low'},
-      {key:'dispatch-alternate',department:'dispatch',kind:'alternate_selection',label:'Evaluate pressurization diversion airport',detail:'Choose a suitable airport with fuel, weather, range, and handling support.',dependsOn:['dispatch-pressure-decision'],branch:'divert'},
-      {key:'dispatch-return-origin',department:'dispatch',kind:'return_origin_selection',label:'Evaluate return to origin',detail:'Confirm fuel, weather, handling, and technical support for a return to the departure airport.',dependsOn:['dispatch-pressure-decision'],branch:'return_origin'},
-    ]}
-  };
-
-  function taskId(incidentId,key){ return `${incidentId}:${key}`; }
-  function tasksForIncident(incident){
-    const workflow=WORKFLOWS[incident.type];
+  function tasksForProblem(problem){
+    const workflow=WORKFLOWS[problem.type];
     if(!workflow) return [];
     return workflow.steps.map(step=>{
-      const meta=metadataForStep(step);
-      return {
-      id:taskId(incident.id,step.key),incidentId:incident.id,flightId:incident.flightId,
-      aircraftId:incident.aircraftId,department:step.department,kind:step.kind,key:step.key,
-      label:step.label,detail:step.detail,dependsOn:(step.dependsOn||[]).map(key=>taskId(incident.id,key)),
-      branch:step.branch||'',strategies:step.strategies||null,
-      action:step.action||'',strategyOptions:step.options||null,
-      eligibility:meta.eligibility,resources:meta.resources,
-      automatic:Boolean(step.automatic),required:!step.optional,status:step.dependsOn?.length?'blocked':'available',
-      createdAt:incident.detectedAt,startedAt:0,completesAt:0,completedAt:0,selection:null,outcome:''
-    };});
+      const meta=IncidentModel.metadataForStep(step);
+      const task={
+        id:taskId(problem.id,step.key),
+        problemId:problem.id,
+        flightId:problem.flightId,
+        aircraftId:problem.aircraftId,
+        target:{kind:'flight',id:problem.flightId||''},
+        department:step.department,
+        kind:step.kind,
+        key:step.key,
+        label:step.label,
+        detail:step.detail,
+        dependsOn:(step.dependsOn||[]).map(key=>taskId(problem.id,key)),
+        branch:step.branch||'',
+        strategies:step.strategies||null,
+        action:step.action||'',
+        strategyOptions:step.options||null,
+        eligibility:meta.eligibility,
+        resources:meta.resources,
+        automatic:Boolean(step.automatic),
+        required:!step.optional,
+        status:step.dependsOn?.length?'blocked':'available',
+        createdAt:problem.detectedAt,
+        startedAt:0,
+        completesAt:0,
+        completedAt:0,
+        selection:null,
+        outcome:''
+      };
+      return global.AeroProblems?.normalizeProblemTask?.(task)||task;
+    });
   }
+
+  function tasksForIncident(incident){
+    return tasksForProblem(incident);
+  }
+
   function progress(task,now){
     if(task.status==='completed') return 1;
     if(!['in_progress','waiting_external'].includes(task.status)||!task.startedAt||!task.completesAt) return 0;
     return Math.max(0,Math.min(1,(now-task.startedAt)/(task.completesAt-task.startedAt)));
   }
 
-  global.AeroOperationalWorkflows={DEPARTMENTS,WORKFLOWS,taskId,tasksForIncident,progress,KIND_META};
-})(window);
+  const ProblemTasks={
+    DEPARTMENTS,
+    WORKFLOWS,
+    taskId,
+    tasksForProblem,
+    tasksForIncident,
+    progress,
+    KIND_META
+  };
+  global.AeroProblemTasks=ProblemTasks;
+  global.AeroOperationalWorkflows=ProblemTasks;
+})(typeof window!=='undefined'?window:globalThis);

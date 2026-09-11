@@ -86,15 +86,17 @@ function generatedIncidentContext(type,flight,t=simNow()){
 }
 
 function generateTrainingIncident(){
-  const type=INCIDENT_TYPE_ORDER[state.incidentExerciseIndex%INCIDENT_TYPE_ORDER.length];
-  const definition=INCIDENT_DEFINITIONS[type];
+  const order=AeroIncidentModel.incidentTypeOrder();
+  const type=order[state.incidentExerciseIndex%order.length];
+  const definition=AeroIncidentModel.definitionForType(type);
+  const phase=AeroIncidentModel.phaseForType(type);
   const flight=state.flights
-    .filter(item=>!item.cancelled&&!item.settled&&(definition?.airborneOnly?flightIsAirborne(item):(!item.departureLogged&&flightActualDeparture(item)>simNow()))&&!state.incidents.some(incident=>incident.flightId===item.id&&incident.type===type&&incident.status==='open'))
+    .filter(item=>!item.cancelled&&!item.settled&&(phase==='airborne'?flightIsAirborne(item):(!item.departureLogged&&flightActualDeparture(item)>simNow()))&&!state.incidents.some(incident=>incident.flightId===item.id&&incident.type===type&&incident.status==='open'))
     .sort((a,b)=>flightActualDeparture(a)-flightActualDeparture(b))[0];
-  if(!flight) return toast(definition?.airborneOnly?'No airborne flight is available for that exercise.':'Create a future flight before generating a training incident.');
+  if(!flight) return toast(phase==='airborne'?'No airborne flight is available for that exercise.':'Create a future flight before generating a training incident.');
   const incident=createIncident(type,flight,{training:true});
   if(!incident) return toast('No eligible flight is available for that exercise.');
-  state.incidentExerciseIndex=(state.incidentExerciseIndex+1)%INCIDENT_TYPE_ORDER.length;
+  state.incidentExerciseIndex=(state.incidentExerciseIndex+1)%order.length;
   AeroServices.commit(); toast(`${incident.id} training scenario opened for ${flight.id}.`);
 }
 function maybeGeneratePreDepartureIssue(f,t){
@@ -170,7 +172,8 @@ function maybeApplyLiveWeatherImpact(f,t){
   if(updateOpenDerivedIncident('destination_below_minima',f,!closureActive&&Boolean(minimaContext?.active),minimaContext,t)) changed=true;
   if(maybeDetectLightningStrike(f,t)) changed=true;
   const routeContext=routeRerouteContextForFlight(f,t);
-  const routeActive=Boolean(routeContext&&routeContext.delayMin>=12);
+  const sharedConvectiveCase=Boolean(routeContext&&window.AeroNetworkEvents?.flightCoveredByActiveEvent?.(f,t,'network_convective_weather'));
+  const routeActive=Boolean(routeContext&&routeContext.delayMin>=12&&!sharedConvectiveCase);
   if(updateOpenDerivedIncident('airborne_atc_reroute',f,routeActive,routeContext,t)) changed=true;
   if(routeActive&&!f.weatherLiveChecks.routeApplied){
     const delay=Math.min(35,Math.max(8,routeContext.delayMin));
