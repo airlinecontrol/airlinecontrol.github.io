@@ -1,13 +1,13 @@
-/* Training, random, weather-triggered, and enroute incident generation. */
+/* Training, random, weather-triggered, and enroute problem generation. */
 
-const PRE_DEPARTURE_INCIDENT_GENERATORS=[
+const PRE_DEPARTURE_EVENT_GENERATORS=[
   {type:'crew_sick',weight:1.05,eligible:f=>flightUsesLocalCrew(f)},
   {type:'mel_defect',weight:.9,eligible:(f,t)=>Management.maintenanceStatus(state.aircraft.find(a=>a.id===f.aircraftId),t)?.due||simulationRandom(`mel-eligibility:${f.id}`)<.45},
   {type:'destination_closure_ground',weight:.5,eligible:f=>distanceKm(AIRPORTS[f.from],AIRPORTS[f.to])>250},
   {type:'fuel_supplier_outage',weight:.45},
   {type:'security_screening',weight:.55,eligible:f=>f.flightType!=='ferry'},
   {type:'crew_fatigue_report',weight:.55,eligible:f=>flightUsesLocalCrew(f)},
-  {type:'crew_report_delayed',weight:.45,eligible:f=>flightUsesLocalCrew(f)}
+  {type:'crew_report_delay',kind:'warning',weight:.45,eligible:f=>flightUsesLocalCrew(f)}
 ];
 
 const GROUND_DELAY_CAUSES=[
@@ -29,9 +29,9 @@ function chooseGroundDelayCause(f){
   return 'Ground handling delay';
 }
 
-function chooseIncidentGenerator(f,t){
-  const options=PRE_DEPARTURE_INCIDENT_GENERATORS.filter(item=>!item.eligible||item.eligible(f,t));
-  let roll=simulationRandom(`incident-generator:${f.id}`)*options.reduce((total,item)=>total+item.weight,0);
+function chooseOperationalEventGenerator(f,t){
+  const options=PRE_DEPARTURE_EVENT_GENERATORS.filter(item=>!item.eligible||item.eligible(f,t));
+  let roll=simulationRandom(`problem-generator:${f.id}`)*options.reduce((total,item)=>total+item.weight,0);
   for(const option of options){
     roll-=option.weight;
     if(roll<=0) return option;
@@ -39,22 +39,23 @@ function chooseIncidentGenerator(f,t){
   return options[0]||null;
 }
 
-function maybeGenerateOperationalIncident(f,t){
+function maybeGenerateOperationalEvent(f,t){
   if(f.cancelled||f.settled||f.departureLogged||!state.ops.automaticDisruptions) return false;
-  f.incidentChecks??={};
-  if(f.incidentChecks.operationalGeneration||t<f.departure-120*MIN||t>=f.departure) return false;
-  f.incidentChecks.operationalGeneration=true;
-  if(!openIncidentsForFlight(f.id).length&&simulationRandom(`operational-incident:${f.id}`)<.16){
-    const generator=chooseIncidentGenerator(f,t);
+  f.problemChecks??={};
+  if(f.problemChecks.operationalGeneration||t<f.departure-120*MIN||t>=f.departure) return false;
+  f.problemChecks.operationalGeneration=true;
+  if(!openProblemsForFlight(f.id).length&&simulationRandom(`operational-problem:${f.id}`)<.16){
+    const generator=chooseOperationalEventGenerator(f,t);
     if(generator){
-      const context=generatedIncidentContext(generator.type,f,t);
-      createIncident(generator.type,f,{detectedAt:t,source:'random',sourceKey:`random:${f.id}`,context});
+      const context=generatedOperationalEventContext(generator.type,f,t);
+      if(generator.kind==='warning') applyOperationalWarningCondition(generator.type,f,context,t);
+      else createProblem(generator.type,f,{detectedAt:t,source:'random',sourceKey:`random:${f.id}`,context});
     }
   }
   return true;
 }
 
-function generatedIncidentContext(type,flight,t=simNow()){
+function generatedOperationalEventContext(type,flight,t=simNow()){
   const roll=OperationalIntelligence.stableUnit(`${flight.id}:${type}:context`);
   if(type==='fuel_supplier_outage'){
     const reasons=['Fuel-truck fleet shortage','Supplier hydrant pump outage','Fuel farm delivery interruption','Airport fuel provider staffing gap'];
@@ -67,7 +68,7 @@ function generatedIncidentContext(type,flight,t=simNow()){
       active:true
     };
   }
-  if(type==='crew_report_delayed'){
+  if(type==='crew_report_delay'){
     const roles=['captains','firstOfficers','cabinCrew'];
     const reasons=['Crew transport delay','Security access delay','Late crew hotel shuttle','Crew briefing package reissue'];
     const role=roles[Math.min(roles.length-1,Math.floor(roll*roles.length))];
@@ -85,19 +86,28 @@ function generatedIncidentContext(type,flight,t=simNow()){
   return null;
 }
 
-function generateTrainingIncident(){
-  const order=AeroIncidentModel.incidentTypeOrder();
-  const type=order[state.incidentExerciseIndex%order.length];
-  const definition=AeroIncidentModel.definitionForType(type);
-  const phase=AeroIncidentModel.phaseForType(type);
+function applyOperationalWarningCondition(type,flight,context,t=simNow()){
+  if(type!=='crew_report_delay'||!context) return false;
+  flight.crewReportDelay={...context,detectedAt:t};
+  recordCrewUnavailability(flight,[context.role],{
+    reason:'late_report',sourceId:`crew-report:${flight.id}`,at:t,until:context.reportReadyAt
+  });
+  return true;
+}
+
+function generateTrainingProblem(){
+  const order=AeroProblemModel.activeProblemTypes();
+  const type=order[state.problemExerciseIndex%order.length];
+  const definition=AeroProblemModel.definitionForType(type);
+  const phase=AeroProblemModel.phaseForType(type);
   const flight=state.flights
-    .filter(item=>!item.cancelled&&!item.settled&&(phase==='airborne'?flightIsAirborne(item):(!item.departureLogged&&flightActualDeparture(item)>simNow()))&&!state.incidents.some(incident=>incident.flightId===item.id&&incident.type===type&&incident.status==='open'))
+    .filter(item=>!item.cancelled&&!item.settled&&(phase==='airborne'?flightIsAirborne(item):(!item.departureLogged&&flightActualDeparture(item)>simNow()))&&!state.problems.some(problem=>problem.flightId===item.id&&problem.type===type&&problem.status==='open'))
     .sort((a,b)=>flightActualDeparture(a)-flightActualDeparture(b))[0];
-  if(!flight) return toast(phase==='airborne'?'No airborne flight is available for that exercise.':'Create a future flight before generating a training incident.');
-  const incident=createIncident(type,flight,{training:true});
-  if(!incident) return toast('No eligible flight is available for that exercise.');
-  state.incidentExerciseIndex=(state.incidentExerciseIndex+1)%order.length;
-  AeroServices.commit(); toast(`${incident.id} training scenario opened for ${flight.id}.`);
+  if(!flight) return toast(phase==='airborne'?'No airborne flight is available for that exercise.':'Create a future flight before generating a training problem.');
+  const problem=createProblem(type,flight,{training:true});
+  if(!problem) return toast('No eligible flight is available for that exercise.');
+  state.problemExerciseIndex=(state.problemExerciseIndex+1)%order.length;
+  AeroServices.commit(); toast(`${problem.id} training scenario opened for ${flight.id}.`);
 }
 function maybeGeneratePreDepartureIssue(f,t){
   if(f.cancelled || f.opsChecked || !state.ops.automaticDisruptions) return false;
@@ -109,7 +119,7 @@ function maybeGeneratePreDepartureIssue(f,t){
   const conditionFactor=(1+(100-(ac?.condition??100))/25)*(maintenance?.due?1.55:1);
   const technicalChance=clamp(.025*conditionFactor,.025,.15);
   if(roll<technicalChance){
-    createIncident('mel_defect',f,{detectedAt:t});
+    createProblem('mel_defect',f,{detectedAt:t});
   }else if(roll<technicalChance+.135){
     const delay=10+Math.floor(simulationRandom(`predeparture-delay:${f.id}`)*31);
     const cause=chooseGroundDelayCause(f);
@@ -161,20 +171,20 @@ function maybeApplyLiveWeatherImpact(f,t){
     const source=weatherSourceRecord('live_destination_forecast','Destination forecast',{weather:destinationWeather,timestamp:t+45*MIN});
     const type=f.diversionAirport?'diversion_airport_unavailable':'destination_closure';
     const destinationKey=`weather-destination:${type}:${f.id}:${destination}`;
-    const incident=createIncident(type,f,{detectedAt:t,source:'weather',sourceKey:destinationKey,context:{
+    const problem=createProblem(type,f,{detectedAt:t,source:'weather',sourceKey:destinationKey,context:{
       airport:destination,conditions:destinationWeather.conditions,capacityFactor:destinationWeather.capacityFactor,delayMin:destinationWeather.delayMin,
       forecastAt:t+45*MIN,weatherSource:source,weatherSummary:weatherSourceText(source),
       reason:f.diversionAirport?`${destination} weather deteriorated after diversion selection`:'Destination airport closed by weather'
     }});
-    if(incident){ incident.airport=destination; changed=true; }
+    if(problem){ problem.airport=destination; changed=true; }
   }
   const minimaContext=destinationBelowMinimaContextForFlight(f,t);
-  if(updateOpenDerivedIncident('destination_below_minima',f,!closureActive&&Boolean(minimaContext?.active),minimaContext,t)) changed=true;
+  const minimaProblemRequired=!closureActive&&destinationBelowMinimaProblemRequired(f,minimaContext,t);
+  if(updateOpenDerivedProblem('destination_below_minima',f,minimaProblemRequired,minimaContext,t)) changed=true;
   if(maybeDetectLightningStrike(f,t)) changed=true;
   const routeContext=routeRerouteContextForFlight(f,t);
   const sharedConvectiveCase=Boolean(routeContext&&window.AeroNetworkEvents?.flightCoveredByActiveEvent?.(f,t,'network_convective_weather'));
   const routeActive=Boolean(routeContext&&routeContext.delayMin>=12&&!sharedConvectiveCase);
-  if(updateOpenDerivedIncident('airborne_atc_reroute',f,routeActive,routeContext,t)) changed=true;
   if(routeActive&&!f.weatherLiveChecks.routeApplied){
     const delay=Math.min(35,Math.max(8,routeContext.delayMin));
     f.enrouteDelayMin=Math.max(Number(f.enrouteDelayMin)||0,delay);
@@ -198,7 +208,7 @@ function maybeApplyLiveWeatherImpact(f,t){
 function maybeGenerateEnrouteIssue(f,t){
   if(f.enrouteChecked || !state.ops.automaticDisruptions || !flightIsAirborne(f,t)) return false;
   const progress=flightProgress(f,t);
-  if(progress<.12||progress>.88||openIncidentsForFlight(f.id).some(incident=>incident.blocking)) return false;
+  if(progress<.12||progress>.88||openProblemsForFlight(f.id).some(problem=>problem.blocking)) return false;
   f.enrouteChecked=true;
   const aircraft=state.aircraft.find(item=>item.id===f.aircraftId);
   const maintenance=aircraft?Management.maintenanceStatus(aircraft,t):null;
@@ -211,21 +221,21 @@ function maybeGenerateEnrouteIssue(f,t){
   const nearAirport=progress<.2||progress>.82;
   if(nearAirport){
     const birdRoll=OperationalIntelligence.stableUnit(`${f.id}:${Math.floor(t/(15*MIN))}:bird-strike`);
-    if(birdRoll<.018) return Boolean(createIncident('bird_strike',f,{detectedAt:t,source:'flight-deck-report',sourceKey:`bird:${f.id}`,context:{...context,phase:progress<.2?'climb':'descent',trigger:'Suspected bird strike reported by flight deck'}}));
+    if(birdRoll<.018) return Boolean(createProblem('bird_strike',f,{detectedAt:t,source:'flight-deck-report',sourceKey:`bird:${f.id}`,context:{...context,phase:progress<.2?'climb':'descent',trigger:'Suspected bird strike reported by flight deck'}}));
   }
   let cursor=.018+conditionRisk*.10;
   if(roll<cursor){
-    return Boolean(createIncident('pressurization_issue',f,{detectedAt:t,source:'condition',sourceKey:`pressurization:${f.id}`,context:{...context,trigger:'Aircraft condition / pneumatic system risk'}}));
+    return Boolean(createProblem('pressurization_issue',f,{detectedAt:t,source:'condition',sourceKey:`pressurization:${f.id}`,context:{...context,trigger:'Aircraft condition / pneumatic system risk'}}));
   }
   cursor+=.026+conditionRisk*.14;
   if(roll<cursor){
-    return Boolean(createIncident('inflight_technical_fault',f,{detectedAt:t,source:'condition',sourceKey:`technical:${f.id}`,context:{...context,trigger:'Aircraft condition / maintenance reliability risk'}}));
+    return Boolean(createProblem('inflight_technical_fault',f,{detectedAt:t,source:'condition',sourceKey:`technical:${f.id}`,context:{...context,trigger:'Aircraft condition / maintenance reliability risk'}}));
   }
   if(passengerFlight){
     cursor+=.035;
-    if(roll<cursor) return Boolean(createIncident('onboard_medical',f,{detectedAt:t,source:'passenger-report',sourceKey:`medical:${f.id}`,context:{...context,trigger:'Passenger medical report'}}));
+    if(roll<cursor) return Boolean(createProblem('onboard_medical',f,{detectedAt:t,source:'passenger-report',sourceKey:`medical:${f.id}`,context:{...context,trigger:'Passenger medical report'}}));
     cursor+=.018+Math.min(.012,(f.pax||0)/25000);
-    if(roll<cursor) return Boolean(createIncident('unruly_passenger',f,{detectedAt:t,source:'cabin-report',sourceKey:`unruly:${f.id}`,context:{...context,trigger:'Cabin crew security report'}}));
+    if(roll<cursor) return Boolean(createProblem('unruly_passenger',f,{detectedAt:t,source:'cabin-report',sourceKey:`unruly:${f.id}`,context:{...context,trigger:'Cabin crew security report'}}));
   }
   return false;
 }

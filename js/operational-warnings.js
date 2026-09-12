@@ -4,8 +4,15 @@ function warningLevelRank(level){
   return ({critical:0,warning:1,watch:2})[level]??3;
 }
 const WARNING_CLEAR_GRACE_MS=60*MIN;
-const WARNING_SUPERSEDING_INCIDENTS={
-  destination_weather:new Set(['destination_below_minima','destination_closure','destination_closure_ground'])
+const WARNING_SUPERSEDING_PROBLEMS={
+  destination_weather:new Set(['destination_below_minima','destination_closure','destination_closure_ground']),
+  destination_below_minima:new Set(['destination_below_minima','destination_closure']),
+  night_conflict:new Set(['night_curfew_conflict','arrival_curfew_coordination']),
+  deicing_required:new Set(['deicing_capacity_collapse','holdover_expired']),
+  deicing_capacity:new Set(['deicing_capacity_collapse','holdover_expired']),
+  aircraft_out_of_position:new Set(['aircraft_misposition_after_diversion']),
+  crew_misconnect:new Set(['no_legal_crew']),
+  crew_report_delayed:new Set(['no_legal_crew'])
 };
 
 function warningFlightWindow(now=simNow()){
@@ -25,8 +32,8 @@ function warningMemoryStillRelevant(warning){
   if(warning.flightId){
     const flight=state.flights.find(item=>item.id===warning.flightId);
     if(!flight||flight.cancelled||flight.settled) return false;
-    const superseders=WARNING_SUPERSEDING_INCIDENTS[warning.type];
-    if(superseders&&openIncidentsForFlight(warning.flightId).some(incident=>superseders.has(incident.type))) return false;
+    const superseders=WARNING_SUPERSEDING_PROBLEMS[warning.type];
+    if(superseders&&openProblemsForFlight(warning.flightId).some(problem=>superseders.has(problem.type))) return false;
   }
   if(warning.aircraftId){
     const aircraft=state.aircraft.find(item=>item.id===warning.aircraftId);
@@ -149,14 +156,17 @@ function connectionRowsForWidget(){
 function operationWarnings(now=simNow(),index=operationalIndex(now)){
   const {start,end}=warningFlightWindow(now);
   const warnings=[];
+  const warningKeys=new Set();
   const add=warning=>{
-    if(!warning?.id) return;
+    if(!warning?.id||warningKeys.has(warning.id)) return;
+    warningKeys.add(warning.id);
     warnings.push({level:'warning',owner:'Dispatch',sortAt:now,...warning});
   };
   const flights=state.flights
     .filter(flight=>!flight.cancelled&&!flight.settled&&flightActualArrival(flight)>start&&flightActualDeparture(flight)<end)
     .sort((a,b)=>flightActualDeparture(a)-flightActualDeparture(b)||a.id.localeCompare(b.id));
   const flightsByAircraft=new Map();
+  const crewDutyWarningFlightIds=new Set();
   for(const flight of flights) mapPush(flightsByAircraft,flight.aircraftId,flight);
   for(const [aircraftId,aircraftFlights] of flightsByAircraft.entries()){
     aircraftFlights.sort((a,b)=>a.departure-b.departure||a.id.localeCompare(b.id));
@@ -182,6 +192,7 @@ function operationWarnings(now=simNow(),index=operationalIndex(now)){
   }
   for(const flight of flights){
     const destination=flightOperationalDestination(flight);
+    const openProblemTypes=new Set(openProblemsForFlight(flight.id).map(problem=>problem.type));
     const handlingDelay=Math.max(0,Number(flight.handlingDelayMin)||0);
     const handlingCause=flight.handlingDelayCause||'Ground handling delay';
     const loadControlAffected=/baggage|load-control|loadsheet/i.test(handlingCause);
@@ -232,7 +243,9 @@ function operationWarnings(now=simNow(),index=operationalIndex(now)){
     const arrivalStatus=airportNightStatus(destination,flightActualArrival(flight));
     const affected=[{...departureStatus,phase:'departure',time:flightActualDeparture(flight)},{...arrivalStatus,phase:'arrival',time:flightActualArrival(flight)}]
       .filter(status=>status.status!=='open');
-    if(affected.some(status=>status.status==='closed')||Number(flight.nightRestrictionConflictDelayMin)>0||Number(flight.nightRestrictionDelayMin)>0){
+    const groundNightContext=!flight.departureLogged?nightCurfewConflictContextForFlight(flight,flightActualDeparture(flight)):null;
+    const nightDecisionRequired=openProblemTypes.has('night_curfew_conflict')||openProblemTypes.has('arrival_curfew_coordination')||nightCurfewProblemRequired(flight,groundNightContext,now);
+    if(!nightDecisionRequired&&(affected.some(status=>status.status==='closed')||Number(flight.nightRestrictionConflictDelayMin)>0||Number(flight.nightRestrictionDelayMin)>0)){
       const hard=affected.find(status=>status.status==='closed');
       const status=hard||affected[0]||{};
       const conflict=Number(flight.nightRestrictionConflictDelayMin)>0||Boolean(hard);
@@ -275,6 +288,21 @@ function operationWarnings(now=simNow(),index=operationalIndex(now)){
       ? destinationBelowMinimaContextForFlight(flight,now)
       : null;
     const closureActive=destinationWeather?.level==='severe'&&Number(destinationWeather.capacityFactor)<.7;
+    const minimaProblemRequired=destinationBelowMinimaProblemRequired(flight,belowMinima,now)||openProblemTypes.has('destination_below_minima');
+    if(belowMinima?.active&&!closureActive&&!minimaProblemRequired){
+      add({
+        id:`destination-minima:${flight.id}`,
+        type:'destination_below_minima',
+        group:'Destination weather',
+        level:flightActualArrival(flight)-now<=150*MIN?'critical':'warning',
+        owner:'Dispatch',
+        flightId:flight.id,
+        aircraftId:flight.aircraftId,
+        title:'Destination forecast below minima',
+        detail:`${destination} ${belowMinima.minima} · ETA ${shortClock(flightActualArrival(flight))} · monitor alternate plan`,
+        sortAt:flightActualArrival(flight)
+      });
+    }
     const weatherActive=Boolean(destinationWeather&&!belowMinima?.active&&!closureActive&&destinationWeather.level!=='normal'&&(Number(destinationWeather.delayMin)>=12||Number(destinationWeather.capacityFactor)<.86));
     if(weatherActive){
       add({
@@ -307,7 +335,7 @@ function operationWarnings(now=simNow(),index=operationalIndex(now)){
       });
     }
     const performanceContext=performanceLimitContextForFlight(flight,now);
-    if(performanceContext?.active&&!performanceLimitIncidentRequired(performanceContext)){
+    if(performanceContext?.active){
       add({
         id:`performance-margin:${flight.id}`,
         type:'performance_margin_warning',
@@ -322,7 +350,7 @@ function operationWarnings(now=simNow(),index=operationalIndex(now)){
       });
     }
     const handlingContext=destinationHandlingContextForFlight(flight,now);
-    if(handlingContext?.active&&!destinationHandlingIncidentRequired(flight,handlingContext)){
+    if(handlingContext?.active){
       add({
         id:`destination-handling:${flight.id}`,
         type:'destination_handling_warning',
@@ -336,6 +364,123 @@ function operationWarnings(now=simNow(),index=operationalIndex(now)){
         sortAt:flightActualArrival(flight)
       });
     }
+    const diversionPosition=aircraftMispositionAfterDiversionContextForFlight(flight,now);
+    const positionContext=aircraftOutOfPositionContextForFlight(flight,now);
+    if(positionContext?.active&&!diversionPosition?.active&&!openProblemTypes.has('aircraft_misposition_after_diversion')){
+      const departureInMin=Math.ceil((flightActualDeparture(flight)-now)/MIN);
+      add({
+        id:`aircraft-position:${flight.id}`,
+        type:'aircraft_out_of_position',
+        group:'Aircraft positioning',
+        level:departureInMin<=90?'critical':'warning',
+        owner:'Dispatch',
+        flightId:flight.id,
+        aircraftId:flight.aircraftId,
+        title:'Aircraft position at risk',
+        detail:`${positionContext.tail||flight.aircraftId} expected ${positionContext.expectedLocation}, required ${positionContext.requiredLocation} · departure ${shortClock(flightActualDeparture(flight))}`,
+        sortAt:flightActualDeparture(flight)
+      });
+    }
+    const crewMisconnect=crewMisconnectContextForFlight(flight,now);
+    if(crewMisconnect?.active&&!openProblemTypes.has('no_legal_crew')){
+      add({
+        id:`crew-misconnect:${flight.id}:${crewMisconnect.transferId}`,
+        type:'crew_misconnect',
+        group:'Crew readiness',
+        level:flightActualDeparture(flight)-now<=90*MIN?'critical':'warning',
+        owner:'Crew Control',
+        flightId:flight.id,
+        aircraftId:flight.aircraftId,
+        title:'Positioning crew may miss report',
+        detail:`${crewMisconnect.transferId} ready ${shortClock(crewMisconnect.readyAt)} · ${flight.id} departs ${shortClock(flightActualDeparture(flight))}`,
+        sortAt:flightActualDeparture(flight)
+      });
+    }
+    const reportDelay=flight.crewReportDelay;
+    if(reportDelay?.active&&now<Number(reportDelay.reportReadyAt)&&!openProblemTypes.has('no_legal_crew')){
+      add({
+        id:`crew-report:${flight.id}`,
+        type:'crew_report_delayed',
+        group:'Crew readiness',
+        level:flightActualDeparture(flight)-now<=60*MIN?'critical':'warning',
+        owner:'Crew Control',
+        flightId:flight.id,
+        aircraftId:flight.aircraftId,
+        title:'Crew report delayed',
+        detail:`${flight.id} ${reportDelay.reason||'crew reporting delay'} · expected ready ${shortClock(reportDelay.reportReadyAt)}`,
+        sortAt:flightActualDeparture(flight)
+      });
+    }
+    const deicing=deicingContextForFlight(flight,now);
+    const deicingCollapse=deicingCapacityCollapseContextForFlight(flight,now);
+    const deicingDecisionRequired=deicingCapacityProblemRequired(flight,deicingCollapse,now)||openProblemTypes.has('deicing_capacity_collapse')||openProblemTypes.has('holdover_expired');
+    if(deicing?.active&&!deicingDecisionRequired){
+      const collapse=Boolean(deicingCollapse?.active);
+      add({
+        id:`deicing:${collapse?`${flight.from}:${Math.floor(flight.departure/(2*HOUR))}`:flight.id}`,
+        type:collapse?'deicing_capacity':'deicing_required',
+        group:'Deicing readiness',
+        level:collapse?'critical':'warning',
+        owner:'Station',
+        flightId:flight.id,
+        aircraftId:flight.aircraftId,
+        title:collapse?'Deicing queue pressure':'Deicing required',
+        detail:collapse
+          ? `${flight.from} ${deicingCollapse.demand} departures · projected queue ${deicingCollapse.queueMin} min`
+          : `${flight.id} at ${flight.from} · ${deicing.conditions} · treatment required before departure`,
+        sortAt:flightActualDeparture(flight)
+      });
+    }
+    const dutyExtension=crewDutyExtensionContextForFlight(flight,now);
+    if(dutyExtension?.active){
+      crewDutyWarningFlightIds.add(flight.id);
+      add({
+        id:`crew-duty-extension:${flight.id}`,
+        type:'crew_duty_extension',
+        group:'Crew duty margins',
+        level:'critical',
+        owner:'Crew Control',
+        flightId:flight.id,
+        aircraftId:flight.aircraftId,
+        title:`Crew duty overrun +${dutyExtension.overrunMin} min`,
+        detail:`${flight.id} · ${dutyExtension.primaryCause||'operational delay'} · protect downstream rest and crew position`,
+        sortAt:flightActualArrival(flight)
+      });
+    }
+    const routeWeather=flightIsAirborne(flight,now)?routeRerouteContextForFlight(flight,now):null;
+    const sharedConvective=routeWeather&&window.AeroNetworkEvents?.flightCoveredByActiveEvent?.(flight,now,'network_convective_weather');
+    if(routeWeather?.delayMin>=12&&!sharedConvective){
+      add({
+        id:`airborne-route:${flight.id}`,
+        type:'airborne_atc_reroute',
+        group:'Route constraints',
+        level:routeWeather.level==='severe'?'critical':'warning',
+        owner:'Dispatch',
+        flightId:flight.id,
+        aircraftId:flight.aircraftId,
+        title:'Airborne route amendment',
+        detail:`${flight.id} ${routeWeather.cause||'weather avoidance'} · projected +${routeWeather.delayMin} min`,
+        sortAt:now
+      });
+    }
+  }
+  for(const event of window.AeroNetworkEvents?.activeNetworkEvents?.(now)||[]){
+    if(!['network_atc_sector_capacity','network_convective_weather'].includes(event.problemType)) continue;
+    const affected=window.AeroNetworkEvents.affectedFlightsForNetworkEvent(event,now);
+    if(!affected.length||window.AeroNetworkEvents.networkEventProblemRequired(event,affected,now)) continue;
+    const first=affected[0];
+    add({
+      id:`network-warning:${event.networkId||event.id}`,
+      type:event.problemType,
+      group:'Network constraints',
+      level:event.problemType==='network_convective_weather'?'critical':'warning',
+      owner:'Network',
+      flightId:first?.id||'',
+      aircraftId:first?.aircraftId||'',
+      title:`${event.label} · ${affected.length} flight${affected.length===1?'':'s'}`,
+      detail:`${event.reason} · ${event.delayMin||0} min exposure · ${shortClock(event.activeFrom)}-${shortClock(event.activeUntil)}`,
+      sortAt:event.activeFrom||now
+    });
   }
   for(const row of connectionRowsForWidget()){
     const manifest=row.manifest;
@@ -363,6 +508,7 @@ function operationWarnings(now=simNow(),index=operationalIndex(now)){
     if(duty.legal&&margin>1.5) continue;
     const dutyFlights=(duty.flightIds||[]).map(id=>index.flightsById.get(id)).filter(Boolean);
     const focusFlight=dutyFlights.find(flight=>flightActualArrival(flight)>=now)||dutyFlights[0];
+    if(dutyFlights.some(flight=>crewDutyWarningFlightIds.has(flight.id))) continue;
     add({
       id:`crew-duty:${duty.id}`,
       type:'crew_duty',

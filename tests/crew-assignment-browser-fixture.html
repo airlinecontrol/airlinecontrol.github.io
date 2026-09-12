@@ -1,0 +1,262 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Crew assignment gameplay</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:1000px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result'),frame=document.getElementById('game');
+  const assert=(condition,message)=>{if(!condition) throw new Error(message);};
+  const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  try{
+    localStorage.removeItem('aerosim_mvp_v6');
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=crew-assignment';
+    await loaded;
+    const w=frame.contentWindow,d=frame.contentDocument;
+    let s;
+    const MIN=60000,HOUR=60*MIN,base=Date.UTC(2026,8,15,10);
+    const setTime=t=>{s.clock={realBase:Date.now(),simBase:t,speed:0,paused:true,previousSpeed:1};};
+    function setup({captains=3,firstOfficers=3,cabinCrew=12,departure=base+2*HOUR,model='A320neo',to='LHR',flightType='passenger'}={}){
+      w.resetLocalSave();s=w.eval('state');setTime(base);s.ops.automaticDisruptions=false;
+      const ac=w.assignRequestedAircraft(model,w.defaultCabin(model),'FRA');
+      const family=w.AeroManagement.aircraftFamily(model);
+      s.personnel.assignments={FRA:{captains,firstOfficers,cabinCrew,groundHandling:20,operations:10,customerService:10}};
+      s.personnel.qualifications={FRA:{captains:{[family]:captains},firstOfficers:{[family]:firstOfficers}}};
+      const flight=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to,departure,fare:{economy:150,business:390,first:750},flightType});
+      flight.handlingDelayMin=0;flight.weatherDelayMin=0;
+      w.recalculateOperations();
+      return {ac,flight,family};
+    }
+    const advance=t=>{setTime(t);w.processPersonnelTransfers(t);w.processCrewRecoveries(t);w.processCrewAssignments(t);w.updateCrewAssignmentEffects(t);};
+    const request=(flight,options)=>{
+      const preview=w.crewAssignmentPreview(flight.id,options);
+      assert(!preview.blocker,`Request blocked: ${preview.blocker}`);
+      const record=w.requestCrewAssignment(flight.id,options);
+      assert(record,'Request did not create a record');
+      assert(record.cost===preview.cost,'Charged cost differs from preview');return record;
+    };
+    const choose=(selector,value)=>{const el=d.querySelector(selector);assert(el,`Missing ${selector}`);el.value=value;el.dispatchEvent(new w.Event('change',{bubbles:true}));};
+
+    // A sick captain needs a distinct qualified replacement and a real reporting period.
+    let {flight,ac,family}=setup({captains:2});
+    const problem=w.createProblem('crew_sick',flight,{training:true,detectedAt:base});
+    assert(problem,'Sick-call problem missing');
+    const role=problem.affectedRole;
+    assert(problem.affectedCrew?.[0]?.role===role&&problem.affectedCrew[0].count===1,'Sick call did not identify one affected crew position');
+    assert(s.crewUnavailability.find(item=>item.sourceId===problem.id)?.amount===1,'Sick call removed the full role complement instead of one crew member');
+    const sickPreview=w.crewAssignmentPreview(flight.id,{mode:'replace',roles:[role],source:'local'});
+    assert(w.crewPoolSnapshot('FRA').roles[role].available===sickPreview.availability[0].amount,'Pool overview and assignment disagree about available sick-call cover');
+    const otherRole=role==='captains'?'firstOfficers':'captains';
+    const oldReport=w.crewDutyForFlight(flight).roleDuties[otherRole].dutyStart;
+    const physical=w.staffAt('FRA',role);
+    const record=request(flight,{mode:'replace',roles:[role],source:'reserve'});
+    const ready=record.readyAt,accepted=record.acceptedAt,reportAt=record.reportAt;
+    assert(w.staffAt('FRA',role)===physical,'Reservation physically removed station staff');
+    assert(problem.status==='open'&&!w.crewFlightCoverageStatus(flight).ready,'Request instantly resolved sick call');
+    assert(!w.requestCrewAssignment(flight.id,{mode:'replace',roles:[role],source:'reserve'}),'Duplicate request accepted');
+    advance(accepted);
+    assert(record.status==='reporting','Accepted local reserve did not enter reporting');
+    advance(reportAt);
+    assert(record.status==='briefing','Crew did not start briefing');
+    assert(problem.status==='open','Sick call closed before briefing completed');
+    advance(ready);
+    assert(record.status==='assigned',`Assignment not completed: ${record.status} ${record.outcome}`);
+    assert(problem.status==='resolved','Sick call remained open after legal role replacement');
+    assert(w.crewDutyForFlight(flight).roleDuties[otherRole].dutyStart===oldReport,'Other role duty was reset');
+    assert(w.crewDutyForFlight(flight).roleDuties[role].dutyStart===reportAt,'Replacement reporting time was not used for duty');
+    assert(s.crewUnavailability.some(item=>item.sourceId===problem.id&&item.until>ready),'Sick person became available on replacement');
+    assert(record.readyAt===ready,'Readiness timer drifted');
+
+    // A replacement-induced delay must not restart the untouched roles' duty clocks.
+    ({flight}=setup({departure:base+20*MIN}));
+    const unchangedReport=w.crewDutyForFlight(flight).roleDuties.firstOfficers.dutyStart;
+    const delayedReplacement=request(flight,{mode:'replace',roles:['captains'],source:'reserve'});
+    assert(delayedReplacement.readyAt>flight.departure,'Fixture reserve should delay departure');
+    advance(delayedReplacement.readyAt);
+    assert(delayedReplacement.status==='assigned','Delayed replacement failed');
+    assert(w.crewDutyForFlight(flight).roleDuties.firstOfficers.dutyStart===unchangedReport,'Delay restarted first officer duty');
+    assert(w.flightActualDeparture(flight)>=delayedReplacement.readyAt,'Schedule departs before crew is ready');
+    const stable=JSON.stringify(s.crewAssignments);
+    for(let i=0;i<10;i++) w.processCrewAssignments(w.simNow());
+    assert(JSON.stringify(s.crewAssignments)===stable,'Unchanged ticks mutated assignment state');
+
+    // Long-haul relief uses the same requests and real resources, never instant provisioning.
+    ({flight}=setup({model:'A330-900',to:'JFK',captains:4,firstOfficers:4,cabinCrew:24}));
+    flight.arrival=flight.departure+13*HOUR;w.recalculateOperations();
+    const augmented=request(flight,{mode:'augment',source:'reserve'});
+    assert(!flight.crewAugmented&&augmented.roles.captains===1,'Augmentation applied before response');
+    w.ensurePlannedCrewAugmentation();
+    assert(!flight.crewAugmented,'Automatic roster planning bypassed the pending augmentation request');
+    advance(augmented.readyAt);
+    assert(augmented.status==='assigned'&&flight.crewAugmented,'Augmentation was not assigned after briefing');
+    assert(w.crewRequirementForFlight(flight).captains===2&&w.crewDutyForFlight(flight).legal,'Augmented duty is not legal');
+    flight.arrival=flight.departure+22*HOUR;w.recalculateOperations();
+    assert(w.crewAssignmentPreview(flight.id,{mode:'full',source:'reserve'}).blocker,'Impossible long-haul duty was offered as legal');
+
+    ({flight}=setup({model:'A330-900',to:'JFK',captains:4,firstOfficers:4,cabinCrew:24}));
+    const originalAssignment=request(flight,{mode:'full',source:'reserve'});
+    advance(originalAssignment.readyAt);
+    flight.arrival=flight.departure+13*HOUR;w.recalculateOperations();
+    const relief=request(flight,{mode:'augment',source:'reserve'});
+    advance(relief.readyAt);
+    assert(relief.status==='assigned','Relief crew was not assigned');
+    assert(originalAssignment.allocations.every(item=>!item.releasedAt),'Augmentation released the original crew');
+    assert(w.assignedCrewRoleCount(flight,'captains')===2,'Original and relief captain coverage was not combined');
+
+    // Stand-down immediately blocks departure and consumes availability during rest.
+    ({flight}=setup());
+    const stoodDown=w.standDownCrew(flight.id,['captains'],'fatigue');
+    assert(stoodDown?.length===1&&!w.crewFlightCoverageStatus(flight).ready,'Stand-down did not make the captain unavailable');
+    assert(w.availableStationStaffAt('FRA','captains')===2,'Stood-down captain remained available');
+    const replacement=request(flight,{mode:'replace',roles:['captains'],source:'reserve'});
+    advance(replacement.readyAt);
+    assert(replacement.status==='assigned'&&w.crewFlightCoverageStatus(flight).ready,'Stand-down flight could not be recovered');
+    const replacement2=w.standDownCrew(flight.id,['captains'],'fatigue');
+    assert(replacement2?.length===1&&!w.crewFlightCoverageStatus(flight).ready,'Assigned reserve could not be stood down');
+
+    // Assigned crew physically move with the flight and remain unavailable during post-duty rest.
+    ({flight}=setup({flightType:'ferry'}));
+    const movement=request(flight,{mode:'full',source:'reserve'});
+    advance(movement.readyAt);
+    const originBefore=w.staffAt('FRA','captains'),destBefore=w.staffAt('LHR','captains');
+    const off=w.flightActualDeparture(flight);
+    setTime(off+MIN);flight.departureLogged=true;w.processCrewAssignments(w.simNow());
+    assert(w.staffAt('FRA','captains')===originBefore-1,'Operating crew stayed physically in the origin pool');
+    assert(w.staffAt('LHR','captains')===destBefore,'Operating crew appeared at destination before arrival');
+    setTime(w.flightActualArrival(flight)+MIN);flight.settled=true;w.processCrewAssignments(w.simNow());
+    assert(w.staffAt('LHR','captains')===destBefore+1,'Arrived crew was not credited to destination');
+    assert(w.availableStationStaffAt('LHR','captains')===destBefore,'Crew was available before post-duty rest');
+    advance(movement.restUntil);
+    assert(w.availableStationStaffAt('LHR','captains')===destBefore+1,'Rested crew never became available');
+
+    // Standing down through crew must leave them at the actual outstation, not their origin.
+    ({flight,ac}=setup());
+    flight.serviceId='CREW-ROUNDTRIP';flight.serviceLeg='outbound';
+    const returnFlight=w.createFlightRecord({aircraftId:ac.id,from:'LHR',to:'FRA',departure:flight.arrival+90*MIN,
+      fare:{economy:150,business:390,first:750},serviceId:flight.serviceId,serviceLeg:'return'});
+    w.recalculateOperations();
+    const through=request(flight,{mode:'reserve',roles:['captains'],source:'reserve'});
+    assert(through.flightIds.includes(returnFlight.id),'Through crew did not cover the return leg');
+    advance(through.readyAt);
+    setTime(w.flightActualDeparture(flight)+MIN);flight.departureLogged=true;w.processCrewAssignments(w.simNow());
+    setTime(w.flightActualArrival(flight)+MIN);flight.settled=true;w.processCrewAssignments(w.simNow());
+    const atOrigin=w.staffAt('FRA','captains'),atOutstation=w.staffAt('LHR','captains');
+    const outstationAbsence=w.standDownCrew(returnFlight.id,['captains'],'sick');
+    assert(outstationAbsence?.length===1,'Through captain could not be stood down');
+    assert(w.staffAt('FRA','captains')===atOrigin&&w.staffAt('LHR','captains')===atOutstation+1,'Stood-down through crew was placed at the wrong airport');
+    advance(w.simNow()+11*HOUR);
+    assert(w.availableStationStaffAt('LHR','captains')===atOutstation,'Sick reserve returned to availability before sickness ended');
+    advance(outstationAbsence[0].until);
+    assert(w.availableStationStaffAt('LHR','captains')===atOutstation+1,'Sick reserve never returned to station availability');
+
+    // A second flight cannot claim the same reserve while the first request is pending.
+    ({flight,ac,family}=setup({captains:3}));
+    const ac2=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const second=w.createFlightRecord({aircraftId:ac2.id,from:'FRA',to:'LHR',departure:flight.departure+10*MIN,fare:{economy:150,business:390,first:750}});
+    const firstRequest=request(flight,{mode:'replace',roles:['captains'],source:'reserve'});
+    assert(w.crewAssignmentPreview(second.id,{mode:'replace',roles:['captains'],source:'reserve'}).blocker,'Reserve was double-bookable');
+    const cost=s.recoveryCostEvents.reduce((sum,item)=>sum+item.amount,0);
+    w.cancelSingleFlight(flight.id,{skipConfirm:true});
+    assert(firstRequest.status==='cancelled','Flight cancellation did not release crew reservation');
+    assert(!w.crewAssignmentPreview(second.id,{mode:'replace',roles:['captains'],source:'reserve'}).blocker,'Released reserve stayed unavailable');
+    w.processCrewAssignments(w.simNow());
+    assert(s.recoveryCostEvents.filter(item=>item.kind==='crew_assignment').length===1,'Processing duplicated assignment cost');
+    assert(cost>0,'Assignment cost missing');
+
+    // Positioning delay moves readiness; an ETA alone never makes crew ready.
+    ({flight,ac,family}=setup({captains:1}));
+    const transfer={id:'PT-TEST',from:'AMS',to:'FRA',role:'captains',amount:1,qualifications:{[family]:1},method:'external',status:'in_transit',originDebited:true,departure:base-MIN,arrival:base+30*MIN};
+    s.personnelTransfers.push(transfer);
+    const incoming=request(flight,{mode:'replace',roles:['captains'],source:'transfer:PT-TEST'});
+    transfer.arrival+=40*MIN;
+    advance(base+incoming.briefingMin*MIN+30*MIN);
+    assert(incoming.status!=='assigned','Incoming crew was assigned before physical arrival');
+    assert(incoming.readyAt===transfer.arrival+incoming.briefingMin*MIN,'Incoming delay did not move readiness');
+    advance(transfer.arrival);
+    assert(transfer.status==='completed'&&incoming.status==='briefing','Arrived crew skipped briefing');
+    advance(incoming.readyAt);
+    assert(incoming.status==='assigned',`Positioned crew not assigned: ${incoming.outcome}`);
+
+    ({flight,family}=setup());
+    s.personnelTransfers.push({id:'PT-DIV',from:'AMS',to:'FRA',role:'captains',amount:1,qualifications:{[family]:1},method:'external',status:'in_transit',originDebited:true,arrival:base+60*MIN,departure:base-MIN});
+    const diverted=request(flight,{mode:'replace',roles:['captains'],source:'transfer:PT-DIV'});
+    s.personnelTransfers[0].actualTo='LHR';
+    w.processCrewAssignments(base+10*MIN);
+    assert(diverted.status==='failed'&&diverted.outcome.includes('LHR'),'Diverted transfer silently supplied crew');
+
+    // Hotel booking confirmation is distinct from rest completion.
+    ({flight,family}=setup());
+    const resting={id:'CR-TEST',flightId:'OLD',status:'requested',requestedAt:base-10*MIN,confirmsAt:base+10*MIN,availableAt:base+50*MIN,availableAirport:'FRA',action:'hotel',roles:{captains:1},family,consumedRoles:{}};
+    s.crewRecoveries.push(resting);
+    const rested=request(flight,{mode:'replace',roles:['captains'],source:'recovery:CR-TEST'});
+    advance(resting.confirmsAt);
+    assert(resting.status==='confirmed'&&rested.status!=='assigned','Hotel confirmation made resting crew ready');
+    advance(rested.readyAt);
+    assert(rested.status==='assigned',`Rested crew not assigned: ${rested.outcome}`);
+
+    // Ferry pilots are eligible; stale lifecycle flags do not make future flights airborne.
+    ({flight}=setup({flightType:'ferry'}));
+    flight.departureLogged=true;flight.settled=true;
+    assert(!w.crewGroundActionBlocker(flight),'Stale flags blocked an unflown flight');
+    flight.departureLogged=false;flight.settled=false;
+    const ferry=request(flight,{mode:'full',source:'reserve'});
+    assert(!ferry.roles.cabinCrew,'Ferry requested cabin crew');
+    w.cancelCrewAssignment(ferry.id);
+    flight.departure=base-HOUR;flight.actualDeparture=base-HOUR;flight.arrival=base+HOUR;flight.actualArrival=base+HOUR;flight.departureLogged=true;
+    assert(w.crewGroundActionBlocker(flight).includes('before departure'),'Airborne flight could swap crew');
+
+    // Recheck changing qualification and duty at the end of the response period.
+    ({flight,family}=setup());
+    const loss=request(flight,{mode:'replace',roles:['captains'],source:'reserve'});
+    s.personnel.qualifications.FRA.captains[family]=0;
+    advance(loss.readyAt);
+    assert(loss.status==='failed','Crew with lost qualification was assigned');
+
+    ({flight,ac}=setup());
+    const typeChange=request(flight,{mode:'replace',roles:['captains'],source:'reserve'});
+    ac.model='A330-900';
+    w.changeQualification('FRA','captains',w.AeroManagement.aircraftFamily(ac.model),4);
+    advance(typeChange.readyAt);
+    assert(typeChange.status==='failed','Aircraft family change reused an incompatible reservation');
+    ({flight,ac}=setup());
+    const assignedTypeChange=request(flight,{mode:'replace',roles:['captains'],source:'reserve'});
+    advance(assignedTypeChange.readyAt);ac.model='A330-900';
+    assert(!w.crewFlightCoverageStatus(flight).ready,'Aircraft swap silently made assigned pilots qualified');
+
+    // The pool-first UI includes future departures even while their aircraft is elsewhere.
+    ({flight,ac}=setup());
+    const another=w.createFlightRecord({aircraftId:ac.id,from:'LHR',to:'FRA',departure:base+7*HOUR,fare:{economy:150,business:390,first:750}});
+    ac.location='AMS';
+    w.settleSelectedFlight(another.id);
+    w.setDeskPanel('personnel','overview',{toggle:false});w.refreshPersonnelRail(true,true);
+    const poolButton=d.querySelector('[data-assign-crew-pool="FRA"]');
+    assert(poolButton,'FRA crew pool is missing its assignment action');
+    poolButton.click();await wait(30);
+    assert([...d.querySelector('[data-crew-assignment-flight]').options].some(option=>option.value===flight.id),'Future FRA departure disappeared because its aircraft is currently elsewhere');
+    choose('[data-crew-assignment-flight]',flight.id);
+    assert(w.eval('selectedFlightId')===another.id,'Personnel selection changed Dispatch selection');
+    const nativeSelect=d.querySelector('[data-crew-assignment-flight]');nativeSelect.focus();
+    w.refreshPersonnelRail(true);
+    assert(d.querySelector('[data-crew-assignment-flight]')===nativeSelect,'Background refresh replaced focused select');
+    nativeSelect.blur();
+    await wait(30);
+    d.querySelector('[data-request-crew-assignment]').click();
+    const uiRecord=s.crewAssignments.at(-1);
+    assert(uiRecord,'UI did not submit a reserve request');
+    w.refreshPersonnelRail(true,true);
+    assert(d.querySelector('[data-crew-assignment-receipt]')?.textContent.includes('Awaiting crew response'),'Pending receipt missing');
+    assert(!d.querySelector('[data-request-crew-assignment]'),'Pending form offered duplicate request');
+    const serialized=JSON.stringify(s);
+    const restored=w.migrateState(JSON.parse(serialized));
+    assert(restored.crewAssignments.at(-1).readyAt===uiRecord.readyAt,'Reload changed assignment clock');
+    advance(uiRecord.readyAt);w.refreshPersonnelRail(true,true);
+    assert(d.querySelector('[data-crew-assignment-receipt]')?.textContent.includes('Crew assigned'),'Success receipt missing');
+    assert(!d.querySelector('[data-request-crew-assignment]'),'Successful assignment silently offered request again');
+    const section=d.querySelector('#personnelRailList');
+    assert(section.scrollWidth<=section.clientWidth+2,'Personnel form overflows sidebar');
+
+    result.textContent='PASS\ncrew assignments: roles, responses, reservations, positioning, rest, cancellation, lifecycle, persistence, stable controls';
+  }catch(error){result.textContent='FAIL\n'+(error.stack||error);}
+})();
+</script>

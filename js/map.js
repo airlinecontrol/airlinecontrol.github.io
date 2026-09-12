@@ -104,27 +104,27 @@ function simplifyBaseMapLabels(){
   }
 }
 
-function aircraftMapIncidentState(ac,p,index=operationalIndex()){
+function aircraftMapProblemState(ac,p,index=operationalIndex()){
   const open=[
-    ...(index.openIncidentsByAircraft.get(ac.id)||[]),
-    ...(p.flight?(index.openIncidentsByFlight.get(p.flight.id)||[]):[])
-  ].filter((incident,pos,items)=>items.findIndex(item=>item.id===incident.id)===pos);
-  const critical=open.find(incident=>incident.severity==='critical'||AeroIncidentModel.severityForType(incident.type)==='critical');
-  const warning=open.find(incident=>incident.severity==='warning'||AeroIncidentModel.severityForType(incident.type)==='warning');
+    ...(index.openProblemsByAircraft.get(ac.id)||[]),
+    ...(p.flight?(index.openProblemsByFlight.get(p.flight.id)||[]):[])
+  ].filter((problem,pos,items)=>items.findIndex(item=>item.id===problem.id)===pos);
+  const critical=open.find(problem=>problem.severity==='critical'||AeroProblemModel.severityForType(problem.type)==='critical');
+  const warning=open.find(problem=>problem.severity==='warning'||AeroProblemModel.severityForType(problem.type)==='warning');
   return {
     level:critical?'critical':warning?'warning':'normal',
-    label:(critical||warning)?AeroIncidentModel.titleForType((critical||warning).type):''
+    label:(critical||warning)?AeroProblemModel.titleForType((critical||warning).type):''
   };
 }
 
 function aircraftMarkerHtml(ac, p, index=operationalIndex()) {
   const selected = ac.id === selectedAircraftId;
   const label = p.flight ? `${p.flight.id}  ${ac.tail}` : ac.tail;
-  const incident=aircraftMapIncidentState(ac,p,index);
+  const problem=aircraftMapProblemState(ac,p,index);
   const rotation = Math.round((p.heading || 0) - 45);
   const movementClass=p.status==='airborne'?'airborne':p.status==='taxi_out'||p.status==='taxi_in'?'taxi':'ground';
   const statusLabel=p.status==='taxi_out'?'Taxi out':p.status==='taxi_in'?'Taxi in':p.status==='airborne'?'Airborne':'On ground';
-  return `<div class="plane-shell ${movementClass} ${incident.level} ${selected ? 'selected' : ''}" title="${esc(incident.label||statusLabel)}">
+  return `<div class="plane-shell ${movementClass} ${problem.level} ${selected ? 'selected' : ''}" title="${esc(problem.label||statusLabel)}">
     <span class="plane-glyph" style="transform:rotate(${rotation}deg)">&#9992;</span>
     <span class="plane-label-map">${esc(label)}</span>
   </div>`;
@@ -321,8 +321,8 @@ function weatherCellFeature(cell,selected=false){
 }
 
 function networkEventStyle(event){
-  if(event.incidentType==='network_airspace_closure') return {color:'#ff6b65',fillColor:'#ff6b65',fillOpacity:.16,opacity:.72,width:2};
-  if(event.incidentType==='network_convective_weather') return {color:'#d9b95f',fillColor:'#d9b95f',fillOpacity:.14,opacity:.7,width:2};
+  if(event.problemType==='network_airspace_closure') return {color:'#ff6b65',fillColor:'#ff6b65',fillOpacity:.16,opacity:.72,width:2};
+  if(event.problemType==='network_convective_weather') return {color:'#d9b95f',fillColor:'#d9b95f',fillOpacity:.14,opacity:.7,width:2};
   return {color:'#78c8ff',fillColor:'#78c8ff',fillOpacity:.10,opacity:.62,width:1.5};
 }
 
@@ -339,7 +339,7 @@ function networkEventFeature(event){
     properties:{
       id:event.id,
       type:event.eventType||'network',
-      incidentType:event.incidentType||'network',
+      problemType:event.problemType||'network',
       color:style.color,
       fillColor:style.fillColor,
       fillOpacity:style.fillOpacity,
@@ -399,7 +399,7 @@ function rebuildNetworkEventsIfNeeded(){
   const t=simNow();
   const events=window.AeroNetworkEvents.activeNetworkEvents(t);
   const signature=events.map(event=>
-    `${event.id}:${event.incidentType}:${event.status}:${event.delayMin}:${event.affectedCount||(event.affectedFlightIds||[]).length}:${Math.round(event.activeFrom/MIN)}:${Math.round(event.activeUntil/MIN)}`
+    `${event.id}:${event.problemType}:${event.status}:${event.delayMin}:${event.affectedCount||(event.affectedFlightIds||[]).length}:${Math.round(event.activeFrom/MIN)}:${Math.round(event.activeUntil/MIN)}`
   ).join('|');
   if(signature===networkEventMapSignature) return;
   networkEventMapSignature=signature;
@@ -437,12 +437,12 @@ function updateMapData() {
     const p = currentAircraftPosition(ac,t,index);
     liveIds.add(ac.id);
     let record = aircraftMarkers.get(ac.id);
-    const incident=aircraftMapIncidentState(ac,p,index);
+    const problem=aircraftMapProblemState(ac,p,index);
     const iconKey=[
       p.status,
       ac.id===selectedAircraftId?1:0,
       p.flight?p.flight.id:'ground',
-      incident.level,
+      problem.level,
       Math.round((p.heading||0)/5)*5
     ].join('|');
 
@@ -629,7 +629,7 @@ function loop(now){
       lastEventTick=now;
     }
     if(changed&&typeof refreshOperationalSurfacesSoft==='function') refreshOperationalSurfacesSoft();
-    if(typeof checkActionableIncidentDing==='function') checkActionableIncidentDing();
+    if(typeof checkActionableProblemDing==='function') checkActionableProblemDing();
     if(changed||now-lastMapTick>350){
       updateMapData();
       lastMapTick=now;
@@ -647,6 +647,7 @@ function loop(now){
       refreshPersonnelRail(false);
       refreshScheduleTimeline(false);
       refreshDepartmentWidgets(false);
+      if(typeof refreshRequiredResponseProgress==='function') refreshRequiredResponseProgress();
 
       lastUi=now;
     }

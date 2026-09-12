@@ -16,14 +16,32 @@ The current prototype source is split into:
 - `js/ground-operations.js`
 - `js/weather-engine.js`
 - `js/operational-intelligence.js`
-- `js/operational-workflows.js`
-- `js/incident-resources.js`
-- `js/incident-consequences.js`
+- `js/problem-model.js`
+- `js/problem-tasks.js`
+- `js/problem-engine.js`
+- `js/problem-runtime.js`
+- `js/problem-resources.js`
+- `js/problem-consequences.js`
 - `js/simulation.js`
 - `js/ui-next.js`
 - `js/map.js`
 
-It intentionally remains a plain HTML/CSS/JavaScript prototype without a framework or build step. The next major engineering step can be a controlled refactor to Vite + TypeScript, but do not perform that refactor incidentally while implementing an unrelated feature.
+It intentionally remains a plain HTML/CSS/JavaScript prototype without a framework or build step. The next major engineering step can be a controlled refactor to Vite + TypeScript, but do not perform that refactor as a side effect while implementing an unrelated feature.
+
+## Personnel module ownership
+
+- `js/crew-assignments.js` owns qualified reservations, response/report/briefing times, role assignments, stand-down, and physical crew return/rest. All manual crew assignment actions use this service; there is no instant-swap path.
+- `js/crew-ops.js` owns pooled roster demand, crew duties, and accommodation/positioning recovery. Explicit assignments reduce inferred roster demand, not physical staff before departure.
+- `js/ui-personnel.js` owns independent Personnel form selections and result receipts. `js/ui-next.js` composes the four tabs and protects focused controls during background refresh.
+- Problems observe crew coverage; they do not own assignment tasks. Preserve unaffected roles' duty clocks and keep hotel confirmation distinct from crew becoming rested and available.
+- `tests/crew-assignment-browser-fixture.html` covers request progression, reservations, qualification changes, role duty continuity, augmentation, outstation stand-down, rest, cancellation, persistence, and stable controls.
+
+## Station Services module ownership
+
+- `js/station-services.js` owns provider capacity reservations, quotes, timed responses, offers, mobilization, and service delivery. Manual handling and diversion handling share these records; read helpers never create or confirm bookings.
+- `js/ui-station-services.js` owns the independent station selection and Overview, Handling, and Disruption support tabs. Forms remain available without problems and submissions show request receipts.
+- `js/simulation.js` applies service readiness to projected timing and physical departure gates. Confirmation is not completion. Ground handling cannot override crew, fuel, airport restrictions, or minimum turnaround.
+- `tests/station-services-browser-fixture.html` covers provider outcomes, capacity, delivery, replacement, priority, cancellation, persistence, and stable controls.
 
 ---
 
@@ -127,13 +145,13 @@ problems are indicated by one compact, plain-language badge on the affected oper
 without turning the whole row red.
 
 Persistent department subtasks and external-response timings remain simulation state, but
-departments are ownership labels rather than separate UI destinations. Every unresolved incident
-appears once in Open Incidents with its current owner, complete case progress, current required
+departments are ownership labels rather than separate UI destinations. Every unresolved problem
+appears once in Open Problems with its current owner, complete case progress, current required
 input/decision, and next handoffs. Selecting Handle task in the left-side flight or aircraft
 information scrolls to and highlights that case control instead of opening a separate task page.
 
 The current next-UI iteration exposes three permanently expanded parent widgets in one vertically
-scrolling OCC Actions rail: Open Incidents, Planning and Resources, and Network and Weather. There
+scrolling OCC Actions rail: Open Problems, Planning and Resources, and Network and Weather. There
 are no desk-open buttons, tabs, or alternate workbench. Planning and Resources mounts the flight
 planner, crew request/relocation, aircraft request, slot request, maintenance, and contextual
 aircraft-recovery controls. It deliberately hides the embedded current-fleet, personnel-roster, and
@@ -143,9 +161,9 @@ Weather uses one row per operational airport and combines movements, slot-series
 weather, delay, and capacity in that row.
 
 The next UI no longer shows `Tasks` or `Planning & resources` launchers in its top bar. Tasks are
-handled directly in Open Incidents, and all routine planning/resource entry points live in the
+handled directly in Open Problems, and all routine planning/resource entry points live in the
 Planning and Resources widget. The legacy management DOM remains available as the shared source for
-mounted forms but is not a second top-level navigation destination in this interface. Open Incidents
+mounted forms but is not a second top-level navigation destination in this interface. Open Problems
 owns the training-scenario control. In full flight or aircraft details, a ground phase initially shows only
 its overall progress bar; individual ground tasks sit behind an explicit Show ground tasks
 disclosure and remain visible after the user expands it.
@@ -153,7 +171,7 @@ disclosure and remain visible after the user expands it.
 The hidden management shell remains only as the stable DOM home for the shared forms. During normal
 operation those pages are mounted simultaneously into Planning and Resources; do not duplicate
 their business logic. The browser fixture `tests/next-ui-browser-fixture.html` covers the new shell,
-selection context, inline incident tasks, consolidated operational objects, shared map/timeline, and shared
+selection context, inline problem tasks, consolidated operational objects, shared map/timeline, and shared
 management state.
 
 ## Why Leaflet instead of MapLibre right now
@@ -235,13 +253,13 @@ Do not replace it with a frame-counting simulation timer.
 # 5. Current game state model
 
 The active OCC state keeps the timestamp-derived clock, aircraft, flights, recurring services,
-slot coordination, personnel, maintenance, operational statistics, and incident records.
+slot coordination, personnel, maintenance, operational statistics, and problem records.
 
-Incident state is first-class and persistent. Each record stores its type, flight and aircraft,
+Problem state is first-class and persistent. Each record stores its type, flight and aircraft,
 airport, detection time, coordination deadline, blocking/severity state, training flag, workflow
 classification, resolution time, and outcome. Supported types are crew_sick, mel_defect,
-atc_restriction, gate_conflict, and destination_closure. Incident execution is persisted separately
-in `coordinationTasks`, `externalRequests`, and `resourceAssignments`. Those records are additive
+atc_restriction, gate_conflict, and destination_closure. Problem execution is persisted separately
+in `problemTasks`, `externalRequests`, and `resourceAssignments`. Those records are additive
 save migrations and use simulation timestamps, so a report, inspection, or external reply continues
 while the browser is closed.
 
@@ -440,7 +458,7 @@ information.
 Legacy fare, revenue, cost, and economics fields remain in flight records because the established
 demand estimator and old saves depend on them. They must not be surfaced as money, profit, or a
 financial win condition. Current top-level performance is operational: on-time performance,
-average delay, completion, passenger load, and open incidents.
+average delay, completion, passenger load, and open problems.
 
 # 10. Recurring schedules
 
@@ -569,16 +587,16 @@ If no spare is available, explain why instead of silently hiding the feature.
 
 ---
 
-# 12. Disruption and incident model
+# 12. Disruption and problem model
 
 Automatic operations continue in the background. Routine handling, weather, staffing,
 maintenance, positioning, fuel, and en-route effects still feed the delay-propagation engine.
-Technical pre-departure findings enter the MEL incident lifecycle instead of immediately applying
+Technical pre-departure findings enter the MEL problem lifecycle instead of immediately applying
 an opaque repair result.
 
-## Decision incidents
+## Decision problems
 
-The five supported lifecycle incidents are:
+The five supported lifecycle problems are:
 
 - crew sick call
 - MEL technical defect
@@ -586,12 +604,12 @@ The five supported lifecycle incidents are:
 - gate conflict
 - destination closure
 
-An incident is detected against an eligible future flight, persisted, shown as a dedicated labeled
-incident tile under Attention required (for example, `Crew sick call`), and treated as a blocking
+An problem is detected against an eligible future flight, persisted, shown as a dedicated labeled
+problem tile under Attention required (for example, `Crew sick call`), and treated as a blocking
 departure-readiness gate until resolved. Selecting the affected
 flight opens Flight details; selecting its aircraft opens Aircraft details. Both detail panes show
 the open case and its departmental task chain. Attention itself remains a compact selection and
-acknowledgment queue and never embeds incident decisions. Passing a simulation-time deadline marks
+acknowledgment queue and never embeds problem decisions. Passing a simulation-time deadline marks
 the case overdue and continues holding the affected flight; it never chooses an automatic fallback.
 
 The player acts as the integrated OCC duty manager. Work is executed through four separate
@@ -607,7 +625,7 @@ Case steps start blocked or available, then move through in-progress, waiting-ex
 states. Active work always exposes a timestamp-derived progress bar. ATC, the captain/flight deck,
 airport stand control, and alternate handlers are modeled as external counterparties with persisted
 request and reply times. The case closes only after every required task is complete; there is no
-one-click generic incident resolution API or UI.
+one-click generic problem resolution API or UI.
 
 The supported chains are deliberately different: sick calls require real qualified pool allocation,
 reporting, then an amended release; MEL findings require inspection, disposition, then technical
@@ -617,10 +635,10 @@ captain acceptance, ATC clearance, alternate handling, and an amended operationa
 change only the operational destination/duration; the planned destination and timetable remain intact.
 Map routes, aircraft position, timeline details, and later positioning checks use the operational destination.
 
-Only open incidents are rendered. Resolved incident history remains persisted for simulation
+Only open problems are rendered. Resolved problem history remains persisted for simulation
 accounting but is not shown in Attention or either detail pane. Attention includes a training button
 that cycles through all five scenario types using the next eligible future flight. Do not add a
-separate incident overview; operational issues and incidents intentionally share one queue.
+separate problem overview; operational issues and problems intentionally share one queue.
 
 ## Personnel resources
 
@@ -889,15 +907,15 @@ progress. Upcoming contains the remaining 24-hour queue. Both flight queues and 
 compact reason badges whenever a problem exists. Rows remain visually neutral rather than receiving
 red backgrounds, side rails, or red problem dots; cyan is reserved for selection and semantic color
 is concentrated in the compact badges. Attention includes staffing, delay, slot, defect,
-maintenance, positioning, weather, and unresolved incidents. Every attention item owns its
-acknowledgment button. Selecting an affected flight or aircraft opens its detail pane; incident task
+maintenance, positioning, weather, and unresolved problems. Every attention item owns its
+acknowledgment button. Selecting an affected flight or aircraft opens its detail pane; problem task
 links live at the top of the detail pane, their actual controls live in the owning department widget,
 and neither decisions nor generic flight controls ever expand inside Attention.
 The three-pane resizable layout, compact fleet list, unified context workbench, and Leaflet
 invalidation rules remain in force.
 
 Outer sidebar widgets are the primary visual containers. Do not create repeated rounded, outlined
-cards inside them. Internal groups, queue entries, metrics, readiness gates, incident context, and
+cards inside them. Internal groups, queue entries, metrics, readiness gates, problem context, and
 detail sections use flat shaded bands, one-pixel separators, or a narrow semantic accent rail.
 Borders and rounded shapes are reserved mainly for parent widgets and interactive controls.
 
@@ -1017,14 +1035,14 @@ open operational cases with their task chains, pre-departure controls, then one 
 overview containing scheduled/expected times, primary delay cause, and readiness. When a flight has
 operational problems, a compact
 `Problems` navigation strip appears below the heading. Its anchor links scroll directly to each
-owning detail section. Open incidents affecting either a flight or aircraft are shown with their
+owning detail section. Open problems affecting either a flight or aircraft are shown with their
 description, deadline, operational context, workflow progress, and departmental task links in the
 relevant details pane. Actual task controls appear only in the matching department widget. Resolved
-incidents are not rendered anywhere.
+problems are not rendered anywhere.
 There is no standalone Operational response or Recovery decision section. A resolution appears
 directly beside the problem it owns: crew decisions under Dispatch, expediting under Ground
 operations, connection protection under Passenger connections, aircraft recovery under Aircraft or
-Recurring schedule, and incident execution in its department widget. Unaffected flights do not show
+Recurring schedule, and problem execution in its department widget. Unaffected flights do not show
 generic hold or continue-plan choices. Fueling and cancellation remain separate flight controls.
 Readiness states and list badges use explicit outcomes or causes (for example,
 `Aircraft at LHR`, `Fuel top-up pending`, or `Potential delay`) rather than internal category names.
@@ -1073,7 +1091,7 @@ A better future alternative could be contextual notifications/events rather than
 
 # 25. Top KPI bar
 
-The header is OCC-only. It shows fleet count, airborne count, open incidents, simulation time,
+The header is OCC-only. It shows fleet count, airborne count, open problems, simulation time,
 and speed. The former Performance widget was removed; its six 30-day operational KPIs now live in
 the top bar: on-time performance, completion, load factor, average delay, utilization, and completed
 flights/cancellations. Do not reintroduce cash, fuel price, forecast, margin, or profit KPIs.
@@ -1472,7 +1490,7 @@ Verify at minimum:
 13. substitute-aircraft flow works when a suitable spare exists
 14. split-pane resize keeps map valid
 16. reload preserves state
-17. all five incident types expose valid decisions and persist their outcomes
+17. all five problem types expose valid decisions and persist their outcomes
 18. aircraft and personnel requests are assigned immediately
 19. all three consolidated OCC Actions panels are visible and initially expanded
 
@@ -1524,7 +1542,7 @@ Likely high-value next work:
 10. airport/handling coordination
 11. weather integration
 12. demand/competition model
-13. richer incident chains and recovery consequences
+13. richer problem chains and recovery consequences
 14. IndexedDB persistence
 15. TypeScript/Vite refactor
 16. MapLibre GPU map layer for large fleet sizes
@@ -1577,18 +1595,18 @@ When making changes, preserve local-save compatibility and the stable-controls r
 
 ---
 
-# 40. Unified OCC and incident lifecycle (v11)
+# 40. Unified OCC and problem lifecycle (v11)
 
 The current prototype adds:
 
 - one OCC workspace with all panels open by default
-- persistent incident records, deadlines, departmental tasks, external requests, resource assignments, and history
+- persistent problem records, deadlines, departmental tasks, external requests, resource assignments, and history
 - multi-step coordination paths for sick calls, MEL findings, ATC restrictions, gate conflicts, and closures
-- incident-aware flight readiness and attention queues
+- problem-aware flight readiness and attention queues
 - diversion-aware maps, aircraft positions, details, and positioning constraints
 - capacity-limited aircraft, personnel, and slot-series requests with persistent allocation lead times
 - removal of all finance, money, pricing, payroll, purchase, lease, and sale surfaces
-- an end-to-end browser fixture covering all five incident types and resource requests
+- an end-to-end browser fixture covering all five problem types and resource requests
 
 Legacy economic fields and management helpers are retained only where removing them would break
 old saves or the current demand model. They are not part of current gameplay.
@@ -1603,7 +1621,7 @@ The current prototype is a browser-first airline operations-control simulation w
 - timestamp-derived pre-flight, turnaround, and post-flight task models with dependency progress
 - strategic slot coordination and temporary recovery slots
 - staffing, maintenance, weather, fuel, and positioning constraints
-- a persistent, actionable five-type incident lifecycle with no automatic deadline fallback
+- a persistent, actionable five-type problem lifecycle with no automatic deadline fallback
 - separate Dispatch, Crew Control, Maintenance Control, and Station Operations task widgets
 - timestamp-derived departmental work and simulated external captain, ATC, airport, and handler responses
 - aircraft substitution, diversions, cancellations, and recovery flights

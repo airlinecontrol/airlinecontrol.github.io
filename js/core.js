@@ -363,7 +363,7 @@ function calculateFlightEconomics({from,to,model,distanceKm,duration,pax,fare,ti
 }
 
 function flightEconomicsTotal(economics){
-  return ['fuel','landingFees','passengerFees','groundHandling','navigation','emissions','maintenanceReserve','unscheduledMaintenance','weatherOps','recoveryOps','insurance','parking','legacyOperating']
+  return ['fuel','landingFees','passengerFees','groundHandling','navigation','emissions','maintenanceReserve','unscheduledMaintenance','weatherOps','recoveryOps','insurance','parking','importedOperating']
     .reduce((total,key)=>total+(Number(economics[key])||0),0);
 }
 
@@ -472,7 +472,7 @@ function reservedOutboundPersonnelAt(airport,role){
 }
 
 function availableStationStaffAt(airport,role){
-  return Math.max(0,staffAt(airport,role)-reservedOutboundPersonnelAt(airport,role));
+  return Math.max(0,staffAt(airport,role)-reservedOutboundPersonnelAt(airport,role)-crewReservationAt(airport,role))+(role==='groundHandling'?stationAdditionalTeams(airport):0);
 }
 
 function reservedOutboundQualificationAt(airport,role,family){
@@ -484,7 +484,7 @@ function reservedOutboundQualificationAt(airport,role,family){
 }
 
 function availableQualificationAt(airport,role,family){
-  return Math.max(0,qualificationAt(airport,role,family)-reservedOutboundQualificationAt(airport,role,family));
+  return Math.max(0,qualificationAt(airport,role,family)-reservedOutboundQualificationAt(airport,role,family)-crewReservationAt(airport,role,family));
 }
 
 function availableQualifiedStationStaffAt(airport,role,family){
@@ -571,8 +571,8 @@ function processPersonnelTransfers(t=simNow()){
       logEvent(`${transfer.id}: ${transfer.amount} ${PERSONNEL[transfer.role].label.toLowerCase()} arrived at ${arrivalAirport}.`);
     }
   }
-  if(changed&&typeof reconcileCrewResourceIncidents==='function'){
-    changed=Boolean(reconcileCrewResourceIncidents(t))||changed;
+  if(changed&&typeof reconcileCrewResourceProblems==='function'){
+    changed=Boolean(reconcileCrewResourceProblems(t))||changed;
   }
   return changed;
 }
@@ -602,7 +602,6 @@ function newState(){
     nextTransaction:2,
     nextPersonnelTransfer:1,
     nextProblem:1,
-    nextProblemTask:1,
     nextResourceRequest:1,
     nextExternalRequest:1,
     nextResourceAssignment:1,
@@ -611,7 +610,7 @@ function newState(){
     nextCrewRecovery:1,
     nextNetworkEvent:1,
     rng:{seed:`aoc-${sim}`,counter:0,log:[]},
-    incidentExerciseIndex:0,
+    problemExerciseIndex:0,
     slotRights:[],
     aircraft:[],
     flights:[],
@@ -619,7 +618,6 @@ function newState(){
     problems:[],
     problemTransitions:[],
     flightHistory:[],
-    problemTasks:[],
     externalRequests:[],
     resourceAssignments:[],
     crewDuties:[],
@@ -630,6 +628,12 @@ function newState(){
     recoveryCostEvents:[],
     passengerRecoveries:[],
     crewRecoveries:[],
+    crewAssignments:[],
+    stationServiceRequests:[],
+    nextStationServiceRequest:1,
+    crewUnavailability:[],
+    nextCrewAssignment:1,
+    nextCrewUnavailability:1,
     networkEvents:[],
     fuelMarket:{pricePerGallon:FUEL_MARKET_BASE_EUR_GAL,updatedAt:sim},
     personnel:{assignments:{},lastPayrollAt:sim},
@@ -637,21 +641,26 @@ function newState(){
     management:{cycleStart:sim,reviews:[]},
     stats:{revenue:0,costs:0,staffCosts:0,leaseCosts:0,transferCosts:0,recoveryCosts:0,cancellationCosts:0,passengerRecoveryCosts:0,crewRecoveryCosts:0,scheduledMaintenanceCosts:0,cancelled:0,pax:0,completed:0},
   };
-  return window.AeroProblems?.installStateAliases?.(s)||s;
+  return window.AeroProblems?.installProblemState?.(s)||s;
 }
 
 function migrateState(parsed){
   if(!parsed || parsed.version!==VERSION) return newState();
-  if(window.AeroProblems?.installStateAliases) window.AeroProblems.installStateAliases(parsed);
+  if(window.AeroProblems?.installProblemState) window.AeroProblems.installProblemState(parsed);
   if(!Array.isArray(parsed.services)) parsed.services=[];
   if(!Array.isArray(parsed.flights)) parsed.flights=[];
   if(!Array.isArray(parsed.aircraft)) parsed.aircraft=[];
+  parsed.crewAssignments??=[];
+  parsed.stationServiceRequests??=[];
+  parsed.nextStationServiceRequest??=1;
+  parsed.crewUnavailability??=[];
+  parsed.nextCrewAssignment??=1;
+  parsed.nextCrewUnavailability??=1;
   if(!Array.isArray(parsed.slotRights)) parsed.slotRights=[];
   if(!Array.isArray(parsed.problems)) parsed.problems=[];
   if(!Array.isArray(parsed.problemTransitions)) parsed.problemTransitions=[];
   if(!Array.isArray(parsed.flightHistory)) parsed.flightHistory=[];
   parsed.flightHistory=parsed.flightHistory.filter(item=>item&&item.id);
-  if(!Array.isArray(parsed.problemTasks)) parsed.problemTasks=[];
   if(!parsed.clock || typeof parsed.clock!=='object') parsed.clock={realBase:Date.now(),simBase:Date.now(),speed:1};
   if(!Number.isFinite(parsed.clock.realBase)) parsed.clock.realBase=Date.now();
   if(!Number.isFinite(parsed.clock.simBase)) parsed.clock.simBase=Date.now();
@@ -660,13 +669,12 @@ function migrateState(parsed){
   parsed.clock.previousSpeed=normalizedClockSpeed(parsed.clock.previousSpeed,parsed.clock.speed>0?parsed.clock.speed:1);
   parsed.clock.speed=wasPaused?0:normalizedClockSpeed(parsed.clock.speed,parsed.clock.previousSpeed);
   parsed.clock.paused=wasPaused;
-  const removedIncidentIds=new Set(parsed.incidents.filter(incident=>incident.type==='connection_risk').map(incident=>incident.id));
-  if(removedIncidentIds.size){
-    parsed.incidents=parsed.incidents.filter(incident=>!removedIncidentIds.has(incident.id));
-    parsed.coordinationTasks=parsed.coordinationTasks.filter(task=>!removedIncidentIds.has(task.incidentId));
+  const removedProblemIds=new Set(parsed.problems.filter(problem=>problem.type==='connection_risk').map(problem=>problem.id));
+  if(removedProblemIds.size){
+    parsed.problems=parsed.problems.filter(problem=>!removedProblemIds.has(problem.id));
   }
-  for(const incident of parsed.incidents){
-    if(Array.isArray(incident.impacts)) incident.impacts=incident.impacts.filter(impact=>impact.type!=='connection_risk');
+  for(const problem of parsed.problems){
+    if(Array.isArray(problem.impacts)) problem.impacts=problem.impacts.filter(impact=>impact.type!=='connection_risk');
   }
   if(!Array.isArray(parsed.externalRequests)) parsed.externalRequests=[];
   if(!Array.isArray(parsed.resourceAssignments)) parsed.resourceAssignments=[];
@@ -690,43 +698,29 @@ function migrateState(parsed){
   if(!Array.isArray(parsed.rng.log)) parsed.rng.log=[];
   if(parsed.rng.log.length>80) parsed.rng.log=parsed.rng.log.slice(-80);
   if(!Number.isFinite(parsed.nextProblem)) parsed.nextProblem=parsed.problems.length+1;
-  if(!Number.isFinite(parsed.nextProblemTask)) parsed.nextProblemTask=parsed.problemTasks.length+1;
-  if(!Number.isFinite(parsed.incidentExerciseIndex)) parsed.incidentExerciseIndex=0;
-  for(const incident of parsed.incidents){
-    if(!incident.status) incident.status=incident.resolvedAt?'resolved':'open';
-    if(!Number.isFinite(incident.detectedAt)) incident.detectedAt=parsed.clock?.simBase||Date.now();
-    if(!Number.isFinite(incident.deadline)) incident.deadline=incident.detectedAt+30*MIN;
-    if(incident.blocking===undefined) incident.blocking=incident.status==='open';
-    if(incident.training===undefined) incident.training=false;
-    if(incident.selectedAction===undefined) incident.selectedAction='';
-    if(incident.outcome===undefined) incident.outcome='';
-    if(incident.technicalContext===undefined) incident.technicalContext=null;
-    if(incident.classification===undefined) incident.classification='incident';
-    if(incident.workflowCreatedAt===undefined) incident.workflowCreatedAt=0;
-    if(incident.overdue===undefined) incident.overdue=false;
-    if(incident.defaultApplied===undefined) incident.defaultApplied=false;
-    if(!Number.isFinite(incident.defaultAppliedAt)) incident.defaultAppliedAt=0;
-    if(incident.defaultPolicy===undefined) incident.defaultPolicy='';
-    if(incident.defaultOutcome===undefined) incident.defaultOutcome='';
-    if(incident.affectedRole===undefined) incident.affectedRole=incident.type==='crew_sick'?'captains':'';
-    if(incident.recoveryPlan===undefined) incident.recoveryPlan='';
-    if(!Number.isFinite(incident.recoveryPlanAt)) incident.recoveryPlanAt=0;
-    if(incident.source===undefined) incident.source=incident.training?'training':'legacy';
-    if(incident.sourceKey===undefined) incident.sourceKey='';
-    if(incident.context===undefined) incident.context=null;
-    if(!Number.isFinite(incident.lastDetectedAt)) incident.lastDetectedAt=incident.detectedAt;
-    if(!Array.isArray(incident.impacts)) incident.impacts=[];
-    if(!incident.caseId) incident.caseId=incident.id;
-    if(!incident.rootIncidentId) incident.rootIncidentId=incident.id;
-    if(incident.triggeredByIncidentId===undefined) incident.triggeredByIncidentId='';
-    if(incident.chainReason===undefined) incident.chainReason='';
-  }
-  for(const task of parsed.coordinationTasks){
-    if(task.branch===undefined) task.branch='';
-    if(task.strategies===undefined) task.strategies=null;
-    if(task.required===undefined) task.required=true;
-    if(task.action===undefined) task.action='';
-    if(task.strategyOptions===undefined) task.strategyOptions=null;
+  if(!Number.isFinite(parsed.problemExerciseIndex)) parsed.problemExerciseIndex=0;
+  for(const problem of parsed.problems){
+    if(!problem.status) problem.status=problem.resolvedAt?'resolved':'open';
+    if(!Number.isFinite(problem.detectedAt)) problem.detectedAt=parsed.clock?.simBase||Date.now();
+    if(!Number.isFinite(problem.deadline)) problem.deadline=problem.detectedAt+30*MIN;
+    if(problem.blocking===undefined) problem.blocking=problem.status==='open';
+    if(problem.training===undefined) problem.training=false;
+    if(problem.outcome===undefined) problem.outcome='';
+    if(problem.technicalContext===undefined) problem.technicalContext=null;
+    if(problem.classification===undefined) problem.classification='problem';
+    if(problem.overdue===undefined) problem.overdue=false;
+    if(problem.affectedRole===undefined) problem.affectedRole=problem.type==='crew_sick'?'captains':'';
+    if(problem.recoveryPlan===undefined) problem.recoveryPlan='';
+    if(!Number.isFinite(problem.recoveryPlanAt)) problem.recoveryPlanAt=0;
+    if(problem.source===undefined) problem.source=problem.training?'training':'loaded';
+    if(problem.sourceKey===undefined) problem.sourceKey='';
+    if(problem.context===undefined) problem.context=null;
+    if(!Number.isFinite(problem.lastDetectedAt)) problem.lastDetectedAt=problem.detectedAt;
+    if(!Array.isArray(problem.impacts)) problem.impacts=[];
+    if(!problem.caseId) problem.caseId=problem.id;
+    if(!problem.rootProblemId) problem.rootProblemId=problem.id;
+    if(problem.triggeredByProblemId===undefined) problem.triggeredByProblemId='';
+    if(problem.chainReason===undefined) problem.chainReason='';
   }
   if(!Array.isArray(parsed.transactions)){
     parsed.transactions=[{id:'TX1',timestamp:parsed.clock?.simBase||Date.now(),amount:parsed.cash||0,category:'Opening',description:'Balance brought forward from existing save',balanceAfter:parsed.cash||0}];
@@ -808,7 +802,7 @@ function migrateState(parsed){
   for(const ac of parsed.aircraft){
     if(!ac.acquisitionType) ac.acquisitionType='requested';
     if(ac.acquisitionType!=='requested'){
-      ac.resourceSource=ac.resourceSource||'legacy save';
+      ac.resourceSource=ac.resourceSource||'imported save';
       ac.acquisitionType='requested';
     }
     if(!Number.isFinite(ac.acquiredAt)) ac.acquiredAt=parsed.clock?.simBase||Date.now();
@@ -824,7 +818,7 @@ function migrateState(parsed){
     if(!ac.cabin) ac.cabin=defaultCabin(ac.model);
   }
   for(const f of parsed.flights){
-    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','incidentDelayMin','enrouteDelayMin','enrouteRecoveryMin','enrouteRecoveryCost','enrouteRecoveryFuelPenaltyGal','liveWeatherDelayMin','propagatedDelayMin','slotDelayMin','turnaroundRecoveryMin','slotPriorityMin','nightRestrictionDelayMin','nightRestrictionConflictDelayMin','taxiOutDelayMin','taxiInDelayMin','deicingCompletedAt','deicingHoldoverUntil','nightRecoveryApprovedAt','incidentHoldStartedAt','incidentHoldReleasedAt','positioningHoldStartedAt','positioningHoldReleasedAt','staffingHoldStartedAt','staffingHoldReleasedAt','maintenanceHoldStartedAt','maintenanceHoldReleasedAt'])
+    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','problemDelayMin','enrouteDelayMin','enrouteRecoveryMin','enrouteRecoveryCost','enrouteRecoveryFuelPenaltyGal','liveWeatherDelayMin','propagatedDelayMin','slotDelayMin','turnaroundRecoveryMin','slotPriorityMin','nightRestrictionDelayMin','nightRestrictionConflictDelayMin','taxiOutDelayMin','taxiInDelayMin','deicingCompletedAt','deicingHoldoverUntil','nightRecoveryApprovedAt','problemHoldStartedAt','problemHoldReleasedAt','positioningHoldStartedAt','positioningHoldReleasedAt','staffingHoldStartedAt','staffingHoldReleasedAt','maintenanceHoldStartedAt','maintenanceHoldReleasedAt'])
       if(f[k]===undefined) f[k]=0;
     if(f.enrouteRecoveryPlan===undefined) f.enrouteRecoveryPlan='';
     if(f.enrouteRecoveryCause===undefined) f.enrouteRecoveryCause='';
@@ -835,7 +829,7 @@ function migrateState(parsed){
     if(f.nightRestrictionConflictLabel===undefined) f.nightRestrictionConflictLabel='';
     if(f.nightRecoveryDecision===undefined) f.nightRecoveryDecision='';
     if(f.nightRecoverySourceKey===undefined) f.nightRecoverySourceKey='';
-    for(const k of ['incidentHoldReason','positioningHoldReason','staffingHoldReason','maintenanceHoldReason']) if(f[k]===undefined) f[k]='';
+    for(const k of ['problemHoldReason','positioningHoldReason','staffingHoldReason','maintenanceHoldReason']) if(f[k]===undefined) f[k]='';
     if(f.arrivalCurfewCoordinatedKey===undefined) f.arrivalCurfewCoordinatedKey='';
     if(f.arrivalCurfewCoordinatedAt===undefined) f.arrivalCurfewCoordinatedAt=0;
     if(f.constraintChecked===undefined) f.constraintChecked=Boolean(f.departureLogged);
@@ -863,7 +857,7 @@ function migrateState(parsed){
     if(f.crewDutySplit===undefined) f.crewDutySplit=false;
     if(!Number.isFinite(f.crewSwappedAt)) f.crewSwappedAt=0;
     if(!f.crewRoleSwaps || typeof f.crewRoleSwaps!=='object') f.crewRoleSwaps={};
-    if(!f.incidentChecks || typeof f.incidentChecks!=='object') f.incidentChecks={};
+    if(!f.problemChecks || typeof f.problemChecks!=='object') f.problemChecks={};
     if(f.staffingBlocked===undefined) f.staffingBlocked=false;
     if(f.staffingShortage===undefined) f.staffingShortage='';
     if(f.handlingDelayCause===undefined) f.handlingDelayCause='';
@@ -874,7 +868,6 @@ function migrateState(parsed){
     if(f.weatherRouteHazard===undefined) f.weatherRouteHazard='';
     if(f.weatherCause===undefined) f.weatherCause=null;
     if(!f.routePlan || typeof f.routePlan!=='object') f.routePlan=null;
-    if(!f.diversionHandlingPlan || typeof f.diversionHandlingPlan!=='object') f.diversionHandlingPlan=null;
     if(f.slotLogged===undefined) f.slotLogged=false;
     if(f.baseCosts===undefined) f.baseCosts=f.costs||0;
     if(f.fueled===undefined) f.fueled=Boolean(f.settled||f.departureLogged);
@@ -891,7 +884,7 @@ function migrateState(parsed){
     if(!f.classPax) f.classPax={economy:f.pax||0,business:0,first:0};
     if(!f.classLoads) f.classLoads={economy:f.load||0,business:0,first:0};
     if(!f.economics){
-      f.economics={ticketRevenue:f.revenue||0,fuel:f.fuelCost||0,legacyOperating:f.baseCosts||0,unscheduledMaintenance:f.maintenanceCost||0};
+      f.economics={ticketRevenue:f.revenue||0,fuel:f.fuelCost||0,importedOperating:f.baseCosts||0,unscheduledMaintenance:f.maintenanceCost||0};
       refreshEconomicsTotals(f);
     }
   }
@@ -922,7 +915,7 @@ function migrateState(parsed){
       svc.destinationSlotRightId=right.id;
     }
   }
-  return window.AeroProblems?.installStateAliases?.(parsed)||parsed;
+  return window.AeroProblems?.installProblemState?.(parsed)||parsed;
 }
 function loadState(){
   try{
@@ -932,6 +925,7 @@ function loadState(){
   }catch(e){ return newState(); }
 }
 let state=loadState();
+Object.defineProperty(window,'state',{get:()=>state,configurable:true});
 let selectedAircraftId=null;
 let selectedFlightId=null;
 
@@ -961,8 +955,7 @@ function loadWorkspaceUi(){
       collapsed:parsed.collapsed||{occ:{}},
       scheduleRanges:{occ:Number(parsed.scheduleRanges?.occ)||24},
       nextDeskPanels:parsed.nextDeskPanels||{},
-      dismissedWarnings:parsed.dismissedWarnings||{},
-      incidentFilter:parsed.incidentFilter||'actionable'
+      dismissedWarnings:parsed.dismissedWarnings||{}
     };
   }catch(_){
     return {
@@ -970,8 +963,7 @@ function loadWorkspaceUi(){
       collapsed:{occ:{}},
       scheduleRanges:{occ:24},
       nextDeskPanels:{},
-      dismissedWarnings:{},
-      incidentFilter:'actionable'
+      dismissedWarnings:{}
     };
   }
 }
@@ -1026,15 +1018,15 @@ function toggleSimulationPause(){
 function simulationIsPaused(){
   return Boolean(state.clock?.paused||state.clock?.speed===0);
 }
-function traceIncidentTransition(incident,event,details={}){
-  if(!incident) return null;
+function traceProblemTransition(problem,event,details={}){
+  if(!problem) return null;
   state.problemTransitions??=[];
   const now=simNow();
   const entry={
     at:now,realAt:Date.now(),event,
-    problemId:incident.id,type:incident.type,flightId:incident.flightId||'',
-    source:incident.source||'',sourceKey:incident.sourceKey||'',
-    status:incident.status||'',selectedAction:incident.selectedAction||'',
+    problemId:problem.id,type:problem.type,flightId:problem.flightId||'',
+    source:problem.source||'',sourceKey:problem.sourceKey||'',
+    status:problem.status||'',
     details
   };
   const transition=window.AeroProblems?.normalizeTransition
@@ -1044,7 +1036,7 @@ function traceIncidentTransition(incident,event,details={}){
   if(state.problemTransitions.length>80) state.problemTransitions.splice(0,state.problemTransitions.length-80);
   return transition;
 }
-function recentIncidentTransitions(limit=10){
+function recentProblemTransitions(limit=10){
   return (state.problemTransitions||[]).slice(-Math.max(1,limit));
 }
 function save(){
@@ -1087,6 +1079,8 @@ function resetLocalSave(){
   try{
     selectedAircraftId=null;
     selectedFlightId=null;
+    Object.assign(personnelAssignmentUi,{airport:'',flightId:'',mode:'replace',roles:[],source:'local',requestId:'',newRequest:false});
+    Object.assign(stationServiceUi,{airport:'',flightId:'',handling:'arrival',service:'capacity',provider:'contract',units:4,durationMin:120,startAt:0,requestId:'',newRequest:false,showAll:false});
     scheduleWindowOffsetHours=-2;
     lastScheduleSignature='';
     lastScheduleRenderAt=0;

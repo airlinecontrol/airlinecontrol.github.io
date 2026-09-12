@@ -50,6 +50,7 @@ function ensurePlannedCrewAugmentation(){
   const processed=new Set();
   for(const flight of state.flights){
     if(flight.cancelled||flight.departureLogged||flight.flightType==='ferry'||processed.has(flight.id)) continue;
+    if(crewAssignments().some(item=>item.flightIds.includes(flight.id)&&crewAssignmentPending(item)&&item.mode==='augment')) continue;
     const normal=plannedCrewDutyAssessmentForFlight(flight,{augmented:false});
     if(!normal?.target) continue;
     normal.flights.forEach(item=>processed.add(item.id));
@@ -103,15 +104,14 @@ function crewAccommodationExposures(t=simNow()){
         flightId:flight.id,flight,releaseAirport,plannedReleaseAirport,crew,
         cost:typeof crewRecoveryCost==='function'?crewRecoveryCost(flight,{hotel:true,position:diverted||releaseAirportChanged}):crew*140,
         releaseDelayMin,diverted,releaseAirportChanged,diversionFlightId:diversionFlight?.id||flight.id,
-        crewIncident:false,reason,sortAt
+        crewProblem:false,reason,sortAt
       };
       exposure.records=crewRecoveryRecordsForFlight(flight.id);
       exposure.actions=crewRecoveryActionsForExposure(exposure);
       const readyRecord=exposure.records.find(record=>crewRecoveryRecordIsAvailable(record,t));
       const activeRecord=exposure.records.find(record=>record.status!=='confirmed'||!crewRecoveryRecordIsAvailable(record,t));
       if(activeRecord) exposure.actions=exposure.actions.filter(action=>action.id===activeRecord.action);
-      const legacyHandled=!exposure.records.length&&Boolean(flight.crewAccommodationArrangedAt);
-      exposure.arranged=Boolean(readyRecord)||legacyHandled;
+      exposure.arranged=Boolean(readyRecord||exposure.records.some(record=>record.status==='confirmed'));
       exposure.activeRecord=activeRecord||null;
       return exposure;
     })
@@ -192,11 +192,15 @@ function crewRecoveryAvailabilityPlan(exposure,action,requestedAt=simNow()){
     };
   }
   if(action==='transport'){
+    const from=exposure.releaseAirport,to=exposure.plannedReleaseAirport||from;
+    const startsAt=Math.max(confirmsAt,releaseAt);
+    const km=distanceKm(AIRPORTS[from],AIRPORTS[to]);
+    const arrivalAt=from===to?startsAt:km<250?startsAt+(30+km/70*60)*MIN:externalTransferPlan(from,to,exposure.crew,startsAt).arrival;
     return {
       confirmsAt,
-      availableAt:confirmsAt,
-      availableAirport:exposure.plannedReleaseAirport||exposure.releaseAirport,
-      detail:'positioning transport confirmed'
+      availableAt:Math.max(arrivalAt,plannedRestUntil)+45*MIN,
+      availableAirport:to,
+      detail:'positioning travel, minimum rest, and report time'
     };
   }
   if(action==='stand_down'){
@@ -228,7 +232,7 @@ function crewRecoveryAvailableStaffAt(airport,role,family='',t=simNow(),excludeF
   return (state.crewRecoveries||[]).reduce((sum,record)=>{
     if(record.flightId===excludeFlightId) return sum;
     if(record.availableAirport!==airport||!crewRecoveryRecordIsAvailable(record,t)) return sum;
-    return sum+crewRecoveryRoleCount(record,role,family);
+    return sum+Math.max(0,crewRecoveryRoleCount(record,role,family)-(record.consumedRoles?.[role]||0)-crewRecoveryReservedCount(record.id,role));
   },0);
 }
 
@@ -404,9 +408,10 @@ function buildCrewDutyRecord(id,flights){
   const first=ordered[0],last=ordered[ordered.length-1];
   const aircraft=state.aircraft.find(item=>item.id===first.aircraftId);
   const augmented=ordered.some(item=>item.crewAugmented);
-  const assessment=OperationalIntelligence.crewDutyAssessment({
+  const baseAssessment=OperationalIntelligence.crewDutyAssessment({
     departure:flightActualDeparture(first),arrival:flightActualArrival(last),sectors:ordered.length,augmented
   });
+  const assessment=crewAssignedDutyAssessment(ordered,{...baseAssessment,augmented});
   const crew=ordered.reduce((max,flight)=>{
     const requirement=crewRequirementForFlight(flight,state.aircraft.find(item=>item.id===flight.aircraftId)||aircraft);
     for(const role of Object.keys(requirement)) max[role]=Math.max(max[role]||0,requirement[role]||0);
@@ -420,7 +425,7 @@ function buildCrewDutyRecord(id,flights){
     releaseAt:assessment.dutyEnd,restUntil:assessment.dutyEnd+assessment.restHours*HOUR,
     sectors:ordered.length,augmented,legal:assessment.legal,dutyHours:assessment.dutyHours,
     maxHours:assessment.maxHours,remainingHours:assessment.remainingHours,night:assessment.night,
-    crew,roleSwaps,status:crewDutyStatus(assessment),label:assessment.label
+    crew,roleSwaps,roleDuties:assessment.roleDuties,status:crewDutyStatus(assessment),label:assessment.label
   };
 }
 
@@ -452,23 +457,23 @@ function rebuildCrewDuties(){
   return duties;
 }
 
-function staffingRequirementSnapshot(ac,departure,duration,airport=ac.location,candidateId=null,localFlightCrew=true,flightType='passenger'){
+function staffingRequirementSnapshot(ac,departure,duration,airport=ac.location,candidateId=null,localFlightCrew=true,flightType='passenger',{allCommitments=false}={}){
   const arrival=departure+duration;
   const ferry=flightType==='ferry';
   const family=Management.aircraftFamily(ac.model);
   const candidateFlight=candidateId?state.flights.find(item=>item.id===candidateId):null;
-  const operatingCrewCount=localFlightCrew?(candidateFlight?.crewAugmented?2:1):0;
-  const qualifiedNeeded={captains:operatingCrewCount,firstOfficers:operatingCrewCount};
+  const roleNeed=role=>!localFlightCrew?0:candidateFlight?crewRosterRoleCount(candidateFlight,role):role==='cabinCrew'?(ferry?0:Math.max(1,Math.ceil(cabinSeatCount(ac)/50))):1;
+  const qualifiedNeeded={captains:roleNeed('captains'),firstOfficers:roleNeed('firstOfficers')};
   const needed={
-    captains:operatingCrewCount,
-    firstOfficers:operatingCrewCount,
-    cabinCrew:localFlightCrew&&!ferry?Math.max(1,Math.ceil(cabinSeatCount(ac)/50))*(candidateFlight?.crewAugmented?2:1):0,
-    groundHandling:ferry?2:4,operations:1,customerService:ferry?0:1
+    captains:roleNeed('captains'),
+    firstOfficers:roleNeed('firstOfficers'),
+    cabinCrew:roleNeed('cabinCrew'),
+    groundHandling:Math.max(0,(ferry?2:4)-(candidateFlight?stationHandlingCoverage(candidateFlight):0)),operations:1,customerService:ferry?0:1
   };
   for(const f of state.flights){
     const releaseAirport=flightCrewReleaseAirport(f);
     if(f.cancelled || (f.from!==airport && releaseAirport!==airport) || f.id===candidateId) continue;
-    if(candidateId && (f.departure>departure || (f.departure===departure && f.id>candidateId))) continue;
+    if(!allCommitments&&candidateId && (f.departure>departure || (f.departure===departure && f.id>candidateId))) continue;
     const otherDep=flightActualDeparture(f);
     // Pooled flight crews remain committed through the rotation and then need
     // ten hours of rest. This avoids named-employee micromanagement while making
@@ -479,13 +484,13 @@ function staffingRequirementSnapshot(ac,departure,duration,airport=ac.location,c
     const canContinueSameDuty=crewRelease<=departure&&releaseAirport===airport&&
       OperationalIntelligence.crewDutyAssessment({departure:continuationDeparture,arrival,sectors:2,augmented:Boolean(f.crewAugmented)}).legal;
     if(flightUsesLocalCrew(f) && !canContinueSameDuty && crewAvailableAfter>departure && otherDep<arrival){
-      const otherCrewCount=f.crewAugmented?2:1;
-      needed.captains+=otherCrewCount; needed.firstOfficers+=otherCrewCount;
+      const counts=Object.fromEntries(CREW_ROLES.map(role=>[role,crewRosterRoleCount(f,role,{excludeUnavailable:true})]));
+      needed.captains+=counts.captains; needed.firstOfficers+=counts.firstOfficers;
       const other=state.aircraft.find(a=>a.id===f.aircraftId);
-      if(other&&Management.aircraftFamily(other.model)===family){ qualifiedNeeded.captains+=otherCrewCount; qualifiedNeeded.firstOfficers+=otherCrewCount; }
-      if(f.flightType!=='ferry') needed.cabinCrew+=Math.max(1,Math.ceil(((other?cabinSeatCount(other):f.pax)||1)/50))*otherCrewCount;
+      if(other&&Management.aircraftFamily(other.model)===family){ qualifiedNeeded.captains+=counts.captains; qualifiedNeeded.firstOfficers+=counts.firstOfficers; }
+      needed.cabinCrew+=counts.cabinCrew;
     }
-    if(Math.abs(otherDep-departure)<90*MIN) needed.groundHandling+=f.flightType==='ferry'?2:4;
+    if(Math.abs(otherDep-departure)<90*MIN) needed.groundHandling+=Math.max(0,(f.flightType==='ferry'?2:4)-stationHandlingCoverage(f));
     if(Math.abs(otherDep-departure)<60*MIN){ needed.operations++; if(f.flightType!=='ferry') needed.customerService++; }
   }
   return {airport,family,needed,qualifiedNeeded};
@@ -530,40 +535,4 @@ function personnelRequestToastSuffix(requests){
   const roleCopy=roles.slice(0,3).join(', ')+(roles.length>3?', ...':'');
   const airportCopy=airports.slice(0,2).join(', ')+(airports.length>2?', ...':'');
   return ` Personnel provisioned: ${roleCopy} at ${airportCopy}.`;
-}
-
-function crewSwapBlocker(flight){
-  if(!flight||flight.cancelled) return 'Select an active flight first.';
-  if(flight.departureLogged) return 'Crew swap is only available before departure.';
-  const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
-  if(!aircraft) return 'No aircraft is assigned to this flight.';
-  const deficits=personnelDeficitsForFlight(
-    aircraft,flightActualDeparture(flight),flight.arrival-flight.departure,flight.from,flight.id,true,flight.flightType
-  ).filter(item=>['captains','firstOfficers','cabinCrew'].includes(item.role));
-  const shortages=deficits.map(item=>`${PERSONNEL[item.role].label}${item.qualification?` rated ${item.qualification}`:''} at ${item.airport}: ${item.available}/${item.required}`);
-  return shortages.length?`No local reserve crew is available: ${shortages.join(' · ')}`:'';
-}
-
-function swapCrewForFlight(flightId){
-  const flight=state.flights.find(item=>item.id===flightId&&!item.cancelled);
-  const blocker=crewSwapBlocker(flight);
-  if(blocker) return toast(blocker);
-  const previousDuty=flight.crewDutyId||'';
-  flight.crewDutySplit=true;
-  flight.crewAugmented=false;
-  flight.crewSwappedAt=simNow();
-  if(typeof recordRecoveryCostEvent==='function'&&typeof crewRecoveryCost==='function'){
-    recordRecoveryCostEvent({
-      flight,category:'crew',kind:'manual_crew_swap',amount:crewRecoveryCost(flight,{replace:true}),
-      crew:typeof crewComplementForFlight==='function'?crewComplementForFlight(flight):0,airport:flight.from,
-      description:`${flight.id}: local reserve crew swap`
-    });
-  }
-  flight.issueAcknowledgedAt=0; flight.issueAcknowledgedKey='';
-  recalculateOperations();
-  processDerivedOperationalIncidents(simNow());
-  AeroServices.commit();
-  const duty=crewDutyForFlight(flight);
-  toast(`${flight.id}: local reserve crew assigned${previousDuty&&previousDuty!==duty.id?` from ${duty.airport}`:''}.`);
-  return duty;
 }

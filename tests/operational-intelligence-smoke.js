@@ -43,7 +43,7 @@ const ownNetworkConnection=AeroOperationalIntelligence.connectionManifest({
 assert.ok(ownNetworkConnection.total>0);
 assert.equal(ownNetworkConnection.connections[0].ownNetwork,true);
 
-const mel=AeroOperationalIntelligence.melFinding('INC42',now);
+const mel=AeroOperationalIntelligence.melFinding('PR42',now);
 assert.match(mel.code,/\d{2}-\d{2}/);
 assert.ok(mel.expiresAt>now);
 
@@ -64,13 +64,13 @@ assert.deepEqual(AeroOperationalIntelligence.recoveryOptions({
 
 const dispatch=AeroOperationalIntelligence.dispatchBriefing({
   flight:{departure:now},crew:illegal,departureWeather:{level:'normal'},arrivalWeather:{level:'normal'},
-  airport:{delayMin:0},airspace:{delayMin:0},melItems:[],incidents:[],fuelReady:true,alternate:'CDG'
+  airport:{delayMin:0},airspace:{delayMin:0},melItems:[],problems:[],fuelReady:true,alternate:'CDG'
 });
 assert.equal(dispatch.status,'hold');
 assert.ok(dispatch.blocks.includes('Crew duty limit'));
 
 const score=AeroOperationalIntelligence.scenarioScore({
-  completed:[{arrival:now,actualArrival:now+10*MIN}],cancelled:[],openIncidents:[],missedConnections:0,expiredMel:0
+  completed:[{arrival:now,actualArrival:now+10*MIN}],cancelled:[],openProblems:[],missedConnections:0,expiredMel:0
 });
 assert.ok(score.score>=95);
 assert.ok(score.objectives.every(item=>item.met));

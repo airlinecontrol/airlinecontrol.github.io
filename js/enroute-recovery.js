@@ -1,5 +1,20 @@
 /* Dispatch en-route recovery option model and response processing. */
 (function(global){
+function enrouteResponseEstimate(flight,option){
+  const id=option?.id||'recovery';
+  const base=id==='priority'?9:id==='direct'?7:6;
+  const spread=id==='priority'?10:id==='direct'?8:6;
+  const unit=typeof stableFraction==='function'
+    ? stableFraction(`${flight?.id||'flight'}:${id}:enroute-response`)
+    : Math.random();
+  const responseMin=Math.max(3,Math.round(base+unit*spread));
+  return {
+    responseMin,
+    responseLowMin:Math.max(3,base-2),
+    responseHighMin:base+spread
+  };
+}
+
 function enrouteRecoveryContextForFlight(flight,t=simNow()){
   const aircraft=state.aircraft.find(item=>item.id===flight?.aircraftId);
   const status=flight?statusOfFlight(flight,t):'';
@@ -35,7 +50,7 @@ function enrouteRecoveryContextForFlight(flight,t=simNow()){
       : extraFuelGal&&marginPct<105
         ? `Fuel margin would fall to ${marginPct}% of reserve.`
         : '';
-    const response=global.AeroIncidentDelay?.enrouteResponseEstimate?.(flight,{id})||{responseLowMin:3,responseHighMin:10,responseMin:6};
+    const response=enrouteResponseEstimate(flight,{id});
     return {
       id,label,detail,
       recoverMin:Math.max(0,recoverMin),
@@ -102,7 +117,7 @@ function requestEnrouteRecovery(flightId,optionId){
   const option=context.options.find(item=>item.id===optionId);
   if(context.unavailableReason) return toast(context.unavailableReason);
   if(!option||option.disabled) return toast(option?.disabledReason||'This en-route recovery option is not available.');
-  const timing=global.AeroIncidentDelay?.lockEnrouteResponse?.(flight,option)||{responseMin:6};
+  const timing=enrouteResponseEstimate(flight,option);
   const waitMin=Math.max(3,Number(timing.responseMin)||6);
   flight.enrouteRecoveryRequest={
     id:`ERR-${flight.id}-${Math.round(simNow())}`,

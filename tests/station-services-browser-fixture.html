@@ -1,0 +1,202 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Station Operations gameplay</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:1000px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result'),frame=document.getElementById('game');
+  const assert=(condition,message)=>{if(!condition) throw new Error(message);};
+  try{
+    localStorage.removeItem('aerosim_mvp_v6');
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=station-services';await loaded;
+    const w=frame.contentWindow,d=frame.contentDocument,MIN=60000,HOUR=60*MIN,base=Date.UTC(2026,8,15,10);
+    let s;
+    const setTime=t=>{s.clock={realBase:Date.now(),simBase:t,speed:0,paused:true,previousSpeed:1};};
+    w.AeroManagement.weatherAt=()=>({conditions:'Normal operations',level:'normal',capacityFactor:1,delayMin:0});
+    function setup({departure=base+HOUR,from='FRA',to='LHR',ground=0}={}){
+      w.resetLocalSave();s=w.state;setTime(base);s.ops.automaticDisruptions=false;
+      const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),from);
+      s.personnel.assignments={[from]:{captains:10,firstOfficers:10,cabinCrew:40,groundHandling:ground,operations:10,customerService:10}};
+      s.personnel.qualifications={[from]:{captains:{'Airbus A320 family':10},firstOfficers:{'Airbus A320 family':10}}};
+      const flight=w.createFlightRecord({aircraftId:ac.id,from,to,departure,fare:{economy:150,business:390,first:750}});
+      w.recalculateOperations();return {ac,flight};
+    }
+    const advance=t=>{setTime(t);w.processStationServices(t);w.recalculateOperations();w.processProblems(t);};
+    const request=options=>{
+      const preview=w.stationServicePreview(options);assert(!preview.blocker,preview.blocker);
+      const record=w.requestStationService(options);assert(record,'Request not created');
+      assert(record.cost===preview.cost,'Request price differs from quote');return record;
+    };
+    const choose=(selector,value)=>{const input=d.querySelector(selector);assert(input,`Missing ${selector}`);input.value=value;input.dispatchEvent(new w.Event('change',{bubbles:true}));};
+
+    // External departure support replaces only the handling deficit, after real service delivery.
+    let {ac,flight}=setup({departure:base+15*MIN});
+    const originalDeparture=flight.departure;
+    const handling=request({airport:'FRA',flightId:flight.id,service:'departure',provider:'contract'});
+    assert(handling.status==='requested'&&!handling.costEventId,'Request charged or confirmed instantly');
+    assert(w.stationDepartureBlocked(flight),'Flight could depart while requested handling is unfinished');
+    assert(!w.requestStationService({airport:'FRA',flightId:flight.id,service:'departure',provider:'contract'}),'Duplicate request was accepted');
+    advance(handling.respondsAt);
+    assert(handling.status==='confirmed'&&handling.costEventId,'Provider reply did not confirm and book once');
+    assert(w.stationHandlingCoverage(flight)===4,'Contract service did not cover handling resources');
+    assert(w.staffAt('FRA','groundHandling')===0,'External service created permanent own staff');
+    assert(flight.departure===originalDeparture&&w.flightActualDeparture(flight)>=handling.endsAt,'Service delay did not respect planned/actual separation');
+    advance(handling.readyAt);
+    assert(['ready','in_progress'].includes(handling.status),'Provider did not become ready after mobilization');
+    const reservedWindow=[handling.startAt,handling.endsAt,w.flightActualDeparture(flight)].join(':');
+    for(let i=0;i<12;i++) advance(w.simNow());
+    assert([handling.startAt,handling.endsAt,w.flightActualDeparture(flight)].join(':')===reservedWindow,'Service and departure projections keep chasing each other');
+    advance(handling.startAt);
+    assert(handling.status==='in_progress',`Handler did not start at its allocated window: ${JSON.stringify(handling)}; departure=${w.flightActualDeparture(flight)}; location=${ac.location}`);
+    assert(w.stationDepartureBlocked(flight),'Confirmation/readiness was treated as completed work');
+    advance(handling.endsAt);
+    assert(handling.status==='completed'&&!w.stationDepartureBlocked(flight),'Handling did not finish');
+    w.processStationServices(w.simNow());
+    assert(s.recoveryCostEvents.filter(item=>item.kind==='station_service').length===1,'Repeated ticks charged twice');
+    const missing=w.personnelDeficitsForFlight(ac,w.simNow(),HOUR,'FRA',flight.id);
+    assert(!missing.some(item=>item.role==='groundHandling'),'Completed external handler did not remove the handling shortage');
+    s.personnel.assignments.FRA.captains=0;
+    assert(w.personnelDeficitsForFlight(ac,w.simNow(),HOUR,'FRA',flight.id).some(item=>item.role==='captains'),'Handling bypassed a crew shortage');
+
+    // Arrival acceptance does not teleport the aircraft or complete unloading before landing.
+    ({ac,flight}=setup({from:'ATL',to:'JFK'}));
+    const arrival=request({airport:'JFK',flightId:flight.id,service:'arrival',provider:'contract'});
+    advance(arrival.respondsAt);advance(arrival.readyAt);
+    assert(arrival.status==='ready','Arrival handler should wait for the aircraft');
+    assert(!arrival.completedAt&&!arrival.startedAt,'Arrival work started before actual arrival');
+    const actual=w.flightActualArrival(flight);
+    setTime(actual+MIN);flight.departureLogged=true;flight.settled=true;ac.location='JFK';w.processStationServices(w.simNow());
+    assert(arrival.status==='in_progress','Arrival handling did not start after actual arrival');
+    advance(arrival.endsAt);
+    assert(arrival.status==='completed','Arrival handling did not complete');
+
+    // Late handler readiness delays on-block arrival, not touchdown or the airborne route.
+    ({ac,flight}=setup({from:'ATL',to:'JFK'}));
+    const landing=w.flightMovementTimes(flight).landingAt;
+    setTime(w.flightActualArrival(flight)-8*MIN);flight.departureLogged=true;
+    const lateHandler=request({airport:'JFK',flightId:flight.id,service:'arrival',provider:'contract'});
+    advance(lateHandler.respondsAt);
+    assert(flight.stationArrivalDelayMin>0,'Late handler did not delay arrival on stand');
+    assert(w.flightMovementTimes(flight).landingAt===landing,'Ground handler delay changed the airborne flight time');
+
+    // A departure team cannot work on an absent aircraft or backdate a late arrival's work.
+    ({ac,flight}=setup({ground:8,departure:base+2*HOUR}));
+    ac.location='LHR';
+    const inbound=w.createFlightRecord({aircraftId:ac.id,from:'LHR',to:'FRA',departure:base,fare:{economy:100,business:200,first:300}});
+    w.recalculateOperations();
+    const waiting=request({airport:'FRA',flightId:flight.id,service:'departure',provider:'contract'});
+    advance(waiting.respondsAt);advance(waiting.startAt+30*MIN);
+    assert(waiting.status==='ready'&&!waiting.startedAt,'Handling completed for an aircraft still at another station');
+    const onStand=w.simNow();inbound.departureLogged=true;inbound.settled=true;inbound.actualArrival=onStand;ac.location='FRA';
+    w.processStationServices(onStand);
+    assert(waiting.status==='in_progress'&&waiting.startedAt===onStand&&waiting.endsAt>onStand,'Late inbound handling was retrospectively completed');
+
+    // Ordinary flights reserve own handling too, without needing manual request records.
+    ({flight}=setup({ground:4}));
+    const occupiedUntil=w.flightActualDeparture(flight);
+    const spare=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const sameTime=w.createFlightRecord({aircraftId:spare.id,from:'FRA',to:'LHR',departure:flight.departure,fare:{economy:100,business:200,first:300}});
+    const queued=w.stationServicePreview({airport:'FRA',flightId:sameTime.id,service:'departure',provider:'station'});
+    assert(!queued.blocker&&queued.startAt>=occupiedUntil,'Manual service ignored normal rostered handling commitments');
+
+    // Completed own-station work also satisfies handling; it must not require the same job twice.
+    ({flight}=setup({ground:4}));
+    const own=request({airport:'FRA',flightId:flight.id,service:'departure',provider:'station'});
+    advance(own.respondsAt);advance(own.startAt);advance(own.endsAt);
+    assert(own.status==='completed'&&w.stationHandlingCoverage(flight)===4,'Delivered own handling was not recognized');
+
+    // A provider can refuse; no cost or resource is applied on refusal.
+    ({flight}=setup({ground:4}));
+    const refused=request({airport:'FRA',flightId:flight.id,service:'departure',provider:'station'});
+    s.personnel.assignments.FRA.groundHandling=0;
+    advance(refused.respondsAt);
+    assert(refused.status==='unavailable'&&!refused.costEventId,'Unavailable own handler was magically supplied');
+
+    // Changing capacity can yield a later offer. The user must explicitly accept it.
+    ({flight}=setup({ground:8}));
+    const first=request({airport:'FRA',flightId:flight.id,service:'departure',provider:'station'});
+    const ac2=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const secondFlight=w.createFlightRecord({aircraftId:ac2.id,from:'FRA',to:'LHR',departure:flight.departure,fare:{economy:150,business:390,first:750}});
+    const second=request({airport:'FRA',flightId:secondFlight.id,service:'departure',provider:'station'});
+    assert(first.startAt===second.startAt,'Fixture should initially fit both own handling requests');
+    s.personnel.assignments.FRA.groundHandling=4;
+    advance(first.respondsAt);
+    const offer=[first,second].find(item=>item.status==='offered');
+    assert(offer,'Lost capacity did not create an alternative offer');
+    assert(!offer.costEventId&&!w.stationServiceConfirmed(offer),'Offer was accepted without user action');
+    const other=offer===first?second:first;
+    w.cancelStationService(other.id);
+    assert(w.acceptStationServiceOffer(offer.id),'User could not accept a feasible later offer');
+    assert(w.stationServiceConfirmed(offer),'Accepted offer did not confirm');
+
+    // Extra teams are time-limited station capacity, not permanent personnel.
+    setup();
+    const before=w.availableStationStaffAt('FRA','groundHandling');
+    const extra=request({airport:'FRA',flightId:'',service:'capacity',provider:'contract',units:4,durationMin:60,startAt:base+30*MIN});
+    advance(extra.respondsAt);assert(w.stationAdditionalTeams('FRA')===0,'Capacity appeared on booking confirmation');
+    advance(extra.startAt);assert(w.availableStationStaffAt('FRA','groundHandling')===before+4,'Active capacity did not help the station');
+    assert(w.availableStationStaffAt('LHR','groundHandling')===0,'Additional capacity affected a different station');
+    advance(extra.endsAt);assert(w.availableStationStaffAt('FRA','groundHandling')===before,'Temporary teams never left');
+
+    // Priority recovers handling delay only; it cannot remove manual holds or minimum turns.
+    ({ac,flight}=setup({ground:8,departure:base+2*HOUR}));
+    flight.handlingDelayMin=40;flight.manualDelayMin=30;w.recalculateOperations();
+    const priorTime=w.flightActualDeparture(flight),minimum=w.minimumTurnMinutes(ac,'FRA');
+    const priority=request({airport:'FRA',flightId:flight.id,service:'priority',provider:'station'});
+    advance(priority.respondsAt);advance(priority.readyAt);advance(priority.endsAt);
+    assert(priority.status==='completed'&&priority.recoveredMin>0,'Priority recovered no handling time');
+    assert(w.flightActualDeparture(flight)<priorTime&&flight.manualDelayMin===30,'Priority failed to update schedule or removed an unrelated hold');
+    assert(w.minimumTurnMinutes(ac,'FRA')===minimum,'Priority changed minimum turnaround rules');
+
+    // Replacement preserves the existing arrangement until the new provider actually confirms.
+    ({flight}=setup());
+    const original=request({airport:'LHR',flightId:flight.id,service:'arrival',provider:'contract'});advance(original.respondsAt);
+    const replacement=request({airport:'LHR',flightId:flight.id,service:'replacement',handling:'arrival',provider:'backup'});
+    assert(original.status==='confirmed','Replacement request cancelled existing handling before response');
+    advance(replacement.respondsAt);
+    assert(replacement.status==='confirmed'&&original.status==='cancelled','Replacement did not hand over the service');
+
+    // Flight cancellation, rerouting, and deletion release reservations without recreating them.
+    ({flight}=setup());
+    const cancelled=request({airport:'FRA',flightId:flight.id,service:'departure',provider:'contract'});
+    w.cancelSingleFlight(flight.id,{skipConfirm:true});
+    assert(cancelled.status==='cancelled','Cancelled flight retained its service reservation');
+    ({flight}=setup());
+    const diverted=request({airport:'LHR',flightId:flight.id,service:'arrival',provider:'contract'});
+    flight.diversionAirport='AMS';w.processStationServices(base+MIN);
+    assert(diverted.status==='cancelled','Rerouted flight kept handling at the wrong airport');
+    const count=s.stationServiceRequests.length;
+    w.destinationHandlingContextForFlight(flight);w.stationServicesDeskMarkup();
+    assert(s.stationServiceRequests.length===count,'Rendering/read-only context created a booking');
+
+    // The UI offers arrival handling only for exceptional diverted flights.
+    ({flight}=setup());
+    w.settleSelectedFlight(flight.id);w.setDeskPanel('station','diversion',{toggle:false});w.renderDeskStack(true,true);
+    choose('[data-station-airport]','LHR');
+    assert(d.querySelector('[data-station-flight]')?.disabled,'ordinary scheduled arrival was exposed as manual station work');
+    flight.diversionAirport='AMS';w.recalculateOperations();w.renderDeskStack(true,true);
+    choose('[data-station-airport]','AMS');
+    assert(w.eval('selectedFlightId')===flight.id,'Station selection changed Dispatch');
+    choose('[data-station-flight]',flight.id);
+    const select=d.querySelector('[data-station-provider]');select.focus();w.renderDeskStack(true);
+    assert(d.querySelector('[data-station-provider]')===select,'Refresh replaced a focused native select');select.blur();
+    d.querySelector('[data-station-request]').click();
+    const uiRecord=s.stationServiceRequests.at(-1);assert(uiRecord,'UI failed to submit request');
+    assert(d.querySelector('[data-station-receipt]')?.textContent.includes('Awaiting provider response'),'Pending receipt missing');
+    assert(!d.querySelector('[data-station-request]'),'Pending request was offered again');
+    const saved=w.migrateState(JSON.parse(JSON.stringify(s)));
+    assert(saved.stationServiceRequests.at(-1).respondsAt===uiRecord.respondsAt,'Save/reload changed response deadline');
+    advance(uiRecord.respondsAt);w.renderDeskStack(true,true);
+    assert(d.querySelector('[data-station-receipt]')?.textContent.includes('Confirmed'),'Confirmation receipt missing');
+    const stable=JSON.stringify(s.stationServiceRequests);for(let i=0;i<20;i++) w.processStationServices(w.simNow());
+    assert(JSON.stringify(s.stationServiceRequests)===stable,'Unchanged ticks mutated service state');
+    assert(d.querySelector('[data-station-widget]').scrollWidth<=d.querySelector('[data-station-widget]').clientWidth+2,'Station form overflowed its widget');
+    w.setDeskPanel('station','recovery',{toggle:false});w.renderDeskStack(true,true);
+    choose('[data-station-start]','');
+    assert(d.querySelector('[data-station-request]').disabled,'Invalid coverage time was accepted');
+    result.textContent='PASS\nStation Operations: exceptional handling, capacity, responses, replacement, priority, cancellation, persistence, and stable controls';
+  }catch(error){result.textContent='FAIL\n'+(error.stack||error);}
+})();
+</script>

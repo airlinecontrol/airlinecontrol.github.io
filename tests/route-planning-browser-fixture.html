@@ -21,8 +21,7 @@
       state.ops.automaticDisruptions=false;
       state.aircraft=[];
       state.flights=[];
-      state.incidents=[];
-      state.coordinationTasks=[];
+      state.problems=[];
       state.externalRequests=[];
     `);
     await wait(150);
@@ -131,14 +130,14 @@
     diversionFlight.actualArrival=now+4*60*60_000;
     diversionFlight.operationalDurationMs=diversionFlight.actualArrival-diversionFlight.actualDeparture;
     const beforeDiversion=w.AeroRoutePlanning.activeRevision(w.AeroRoutePlanning.ensureFlightRoutePlan(diversionFlight));
-    const incident=w.createIncident('destination_closure',diversionFlight,{training:true,detectedAt:now,context:{airport:'FRA'}});
-    const revision=w.applyOperationalDiversionDestination(diversionFlight,incident,diversionAircraft,'DUB');
+    const problem=w.createProblem('destination_closure',diversionFlight,{training:true,detectedAt:now,context:{airport:'FRA'}});
+    const revision=w.applyOperationalDiversionDestination(diversionFlight,problem,diversionAircraft,'DUB');
     assert(revision&&revision.id!==beforeDiversion.id,'diversion did not create a new route revision');
-    assert(diversionFlight.diversionHandlingPlan?.available,`diversion did not create an arrival handling plan: ${JSON.stringify(diversionFlight.diversionHandlingPlan)}`);
+    assert(w.stationFlightHandlingRequest(diversionFlight)?.status==='requested','diversion did not create a timed arrival-handling request');
     assert(diversionFlight.routePlan.revisions.length>=2,'diversion overwrote the filed route instead of revising it');
     assert(w.AeroRoutePlanning.activeRevision(diversionFlight.routePlan).to==='DUB','active route target did not change to the alternate');
     assert(revision.startedAirborne&&revision.waypoints[0].kind==='current_position','airborne diversion route did not start from current aircraft position');
-    assert(incident.routeRevisionId===revision.id,'incident did not retain the applied route revision id');
+    assert(problem.routeRevisionId===revision.id,'problem did not retain the applied route revision id');
     const comparison=w.AeroRoutePlanning.flightRouteComparison(diversionFlight,now);
     assert(comparison?.revised&&comparison.filed?.to==='FRA'&&comparison.active?.to==='DUB','route comparison does not expose filed vs active diversion routes');
     w.settleSelectedFlight(diversionFlight.id);
@@ -148,7 +147,7 @@
     assert(dispatchComparison,'dispatch widget does not switch to route comparison after a diversion revision');
     assert(dispatchComparison.querySelector('.dispatch-route-path.filed'),'dispatch route comparison does not draw the original filed route');
     assert(dispatchComparison.querySelector('.dispatch-route-path.active'),'dispatch route comparison does not draw the active revised route');
-    assert(d.querySelector(`[data-dispatch-flight-status="${diversionFlight.id}"]`)?.textContent.includes('Arrival handling'),'dispatch status does not show diversion arrival handling');
+    assert(!d.querySelector(`[data-dispatch-flight-status="${diversionFlight.id}"]`)?.textContent.includes('Arrival handling'),'shared flight context should not duplicate Station Operations handling detail');
 
     const previousRevisionCount=diversionFlight.routePlan.revisions.length;
     w.AeroRoutePlanning.noteRecoveryRouteRevision(diversionFlight,{id:'direct',label:'Ask direct routing'},{accepted:true,t:now+10*60_000});

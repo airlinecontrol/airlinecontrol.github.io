@@ -1,0 +1,87 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AOC problem scope browser fixture</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result');
+  const frame=document.getElementById('game');
+  const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const assert=(condition,message)=>{ if(!condition) throw new Error(message); };
+  try{
+    localStorage.removeItem('aerosim_mvp_v6');
+    localStorage.removeItem('aerosim_occ_ui_v1');
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=problem-scopes&cache='+Date.now();
+    await loaded;
+    const w=frame.contentWindow,d=frame.contentDocument;
+    w.resetLocalSave?.();
+    w.eval('state.ops.automaticDisruptions=false; state.problems=[]; state.flights=[]; state.aircraft=[];');
+    assert(w.eval('Array.isArray(state.problems)'),'state should expose problems as the canonical problem collection');
+    assert(!w.eval('"problemTasks" in state'),'state should not expose the retired hidden task collection');
+
+    const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const now=w.simNow();
+    const first=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'LHR',departure:now+90*60_000,fare:{economy:140,business:360,first:700}});
+    const second=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'AMS',departure:first.arrival+75*60_000,fare:{economy:120,business:300,first:600}});
+    const otherAircraft=w.assignRequestedAircraft('E190',w.defaultCabin('E190'),'FRA');
+    const third=w.createFlightRecord({aircraftId:otherAircraft.id,from:'FRA',to:'CDG',departure:now+120*60_000,fare:{economy:110,business:260,first:500}});
+
+    const mel=w.createProblem('mel_defect',first,{training:true,detectedAt:now,source:'fixture'});
+    const duplicateMel=w.createProblem('mel_defect',second,{training:true,detectedAt:now+60_000,source:'fixture'});
+    assert(/^PR\d+$/.test(mel.id),'newly created operational problems should use PR ids');
+    assert(mel&&duplicateMel&&mel.id===duplicateMel.id,'aircraft-scoped technical cases should dedupe by aircraft');
+    assert(mel.entity==='problem'&&mel.problemId===mel.id,'created case did not use the problem model identity');
+    assert(mel.scope?.kind==='aircraft'&&mel.scope.subjectId===ac.id,'MEL case did not store aircraft scope');
+    assert(w.problemAffectedFlightIds(mel).includes(first.id),'MEL case missing primary affected flight');
+
+    const stationA=w.createProblem('deicing_capacity_collapse',first,{training:true,detectedAt:now,source:'fixture',context:{airport:'FRA',reason:'fixture deicing shortage',active:true,delayMin:40}});
+    const stationB=w.createProblem('deicing_capacity_collapse',third,{training:true,detectedAt:now+2*60_000,source:'fixture',context:{airport:'FRA',reason:'fixture deicing shortage',active:true,delayMin:45}});
+    assert(stationA&&stationB&&stationA.id===stationB.id,'airport-scoped station cases should dedupe by airport condition');
+    assert(stationA.scope?.kind==='airport'&&stationA.scope.subjectId==='FRA','station case did not store airport scope');
+    assert(w.openProblemsForFlight(third.id).some(problem=>problem.id===stationA.id),'affected flights should see airport-scoped problems through the operational index');
+
+    const crewA=w.createProblem('crew_sick',first,{training:true,detectedAt:now,source:'fixture'});
+    const crewB=w.createProblem('crew_sick',third,{training:true,detectedAt:now+60_000,source:'fixture'});
+    assert(crewA&&crewB&&crewA.id!==crewB.id,'flight-scoped crew cases should remain separate per flight');
+    assert(crewA.scope?.kind==='flight'&&crewA.scope.subjectId===first.id,'crew case did not store flight scope');
+
+    const melCard=w.incidentAttentionCards([{id:mel.id,root:mel,problems:[mel]}],now)[0];
+    const stationCard=w.incidentAttentionCards([{id:stationA.id,root:stationA,problems:[stationA]}],now)[0];
+    const crewCard=w.incidentAttentionCards([{id:crewA.id,root:crewA,problems:[crewA]}],now)[0];
+    assert(melCard.scope.includes('Aircraft ·'),'aircraft incident card does not show the problem scope');
+    assert(melCard.flights.some(item=>item.id===first.id),'aircraft incident card does not show its affected flight');
+    assert(stationCard.scope.includes('Airport ·'),'airport incident card does not show the problem scope');
+    assert(stationCard.flights.some(item=>item.id===third.id),'airport incident card does not show all affected flights');
+    assert(crewCard.scope.includes('Flight ·'),'flight incident card does not show the problem scope');
+    assert(crewCard.flights.some(item=>item.id===first.id),'flight incident card does not show its affected flight');
+
+    const duplicateOne={...crewA,id:'PR-FIX-1',status:'open',scope:null,dedupeKey:'',flightId:first.id,type:'no_legal_crew',detectedAt:now,context:{sourceId:first.id,role:'captains'}};
+    const duplicateTwo={...duplicateOne,id:'PR-FIX-2',lastDetectedAt:now+5*60_000};
+    w.eval(`state.problems.push(${JSON.stringify(duplicateOne)},${JSON.stringify(duplicateTwo)})`);
+    assert(w.repairDuplicateOpenProblems(now+6*60_000),'duplicate repair did not report a change');
+    const openDuplicateCount=w.eval(`state.problems.filter(problem=>problem.status==='open'&&problem.type==='no_legal_crew'&&problem.flightId===${JSON.stringify(first.id)}).length`);
+    assert(openDuplicateCount===1,'duplicate repair did not merge open duplicates');
+
+    w.save();
+    const saved=JSON.parse(w.localStorage.getItem('aerosim_mvp_v6'));
+    assert(Array.isArray(saved.problems),'saved state should persist problems');
+    assert(!Object.prototype.hasOwnProperty.call(saved,'problemTasks'),'saved state should not persist retired hidden problem tasks');
+    const retiredProblemKey='in'+'cidents';
+    const retiredTaskKey='coordination'+'Tasks';
+    const retiredTransitionKey='in'+'cidentTransitions';
+    assert(!Object.prototype.hasOwnProperty.call(saved,retiredProblemKey),'saved state should not persist retired problem collection names');
+    assert(!Object.prototype.hasOwnProperty.call(saved,retiredTaskKey),'saved state should not persist retired task collection names');
+    assert(!Object.prototype.hasOwnProperty.call(saved,retiredTransitionKey),'saved state should not persist retired transition names');
+    assert(saved.problems.every(problem=>problem.problemId===problem.id),'saved problems should persist explicit problemId fields');
+    assert(saved.problems.every(problem=>problem.rootProblemId),'saved problems should persist explicit rootProblemId fields');
+    assert(saved.problems.every(problem=>Object.prototype.hasOwnProperty.call(problem,'triggeredByProblemId')),'saved problems should persist explicit triggeredByProblemId fields');
+
+    result.textContent=`PASS\nmel=${mel.scope.kind}:${mel.scope.subjectId}\nstation=${stationA.scope.kind}:${stationA.scope.subjectId}\nduplicateOpen=${openDuplicateCount}`;
+    await wait(10);
+  }catch(error){
+    result.textContent='FAIL\n'+(error.stack||error);
+  }
+})();
+</script>

@@ -26,8 +26,7 @@ function passengerRecoveryExposures(t=simNow()){
       const confirmedRecord=exposure.records.find(record=>record.status==='confirmed');
       const activeRecord=exposure.records.find(record=>record.status!=='confirmed');
       if(activeRecord) exposure.actions=exposure.actions.filter(action=>action.id===activeRecord.action);
-      const legacyHandled=!exposure.records.length&&Boolean(flight.passengerRecoveryArrangedAt||flight.passengerAccommodationArrangedAt||flight.passengerReleasedAt);
-      exposure.arranged=Boolean(confirmedRecord)||legacyHandled;
+      exposure.arranged=Boolean(confirmedRecord);
       exposure.activeRecord=activeRecord||null;
       return exposure;
     })

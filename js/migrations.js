@@ -1,65 +1,54 @@
 /* Runtime save repairs and cleanup for retired simulation concepts. */
 
-function retireTrackedIncidents(t=simNow()){
+function retireTrackedProblems(t=simNow()){
   let changed=false;
-  for(const incident of state.incidents.filter(item=>AeroIncidentModel.isRetiredType(item.type)&&item.status==='open')){
-    incident.status='resolved';
-    incident.blocking=false;
-    incident.resolvedAt=t;
-    incident.automaticResolution=true;
-    incident.selectedAction='tracked_on_schedule';
-    incident.outcome=AeroIncidentModel.retiredOutcomeForType(incident.type);
-    for(const task of incidentTasks(incident.id)){
-      if(!['completed','cancelled'].includes(task.status)) task.status='cancelled';
-    }
-    if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'auto_closed',{reason:'retired_incident'});
+  for(const problem of state.problems.filter(item=>AeroProblemModel.isRetiredType(item.type)&&item.status==='open')){
+    problem.status='resolved';
+    problem.blocking=false;
+    problem.resolvedAt=t;
+    problem.automaticResolution=true;
+    problem.outcome=AeroProblemModel.retiredOutcomeForType(problem.type);
+    if(typeof traceProblemTransition==='function') traceProblemTransition(problem,'auto_closed',{reason:'retired_problem'});
     changed=true;
   }
   return changed;
 }
 
-function duplicateIncidentProgressScore(incident){
-  const tasks=incidentTasks(incident.id);
-  const hasActive=tasks.some(task=>['in_progress','waiting_external'].includes(task.status));
-  const completed=tasks.filter(task=>task.status==='completed').length;
-  return (hasActive?100:0)+completed*12+(incident.selectedStrategy?20:0)-(incident.detectedAt||0)/1e13;
+function duplicateProblemProgressScore(problem){
+  return (problem.firstVisibleAt?20:0)+(problem.lastDetectedAt||problem.detectedAt||0)/1e13;
 }
 
-function repairDuplicateOpenIncidents(t=simNow()){
+function repairDuplicateOpenProblems(t=simNow()){
   const groups=new Map();
-  for(const incident of state.incidents||[]){
-    if(incident.status!=='open'||!incident.type) continue;
-    if(typeof ensureIncidentIdentityFields==='function') ensureIncidentIdentityFields(incident,null,incident.context,t);
-    const scope=incident.scope||null;
+  for(const problem of state.problems||[]){
+    if(problem.status!=='open'||!problem.type) continue;
+    if(typeof ensureProblemIdentityFields==='function') ensureProblemIdentityFields(problem,null,problem.context,t);
+    const scope=problem.scope||null;
     const key=scope?.kind&&scope.subjectId
-      ? `${scope.kind}:${incident.type}:${scope.subjectId}`
-      : incident.dedupeKey||`${incident.flightId||incident.aircraftId||incident.airport||incident.id}:${incident.type}`;
+      ? `${scope.kind}:${problem.type}:${scope.subjectId}`
+      : problem.dedupeKey||`${problem.flightId||problem.aircraftId||problem.airport||problem.id}:${problem.type}`;
     if(!groups.has(key)) groups.set(key,[]);
-    groups.get(key).push(incident);
+    groups.get(key).push(problem);
   }
   let changed=false;
-  for(const incidents of groups.values()){
-    if(incidents.length<2) continue;
-    const keeper=incidents.slice().sort((a,b)=>duplicateIncidentProgressScore(b)-duplicateIncidentProgressScore(a))[0];
-    for(const duplicate of incidents){
+  for(const problems of groups.values()){
+    if(problems.length<2) continue;
+    const keeper=problems.slice().sort((a,b)=>duplicateProblemProgressScore(b)-duplicateProblemProgressScore(a))[0];
+    for(const duplicate of problems){
       if(duplicate.id===keeper.id) continue;
       if((duplicate.lastDetectedAt||duplicate.detectedAt||0)>(keeper.lastDetectedAt||keeper.detectedAt||0)){
         keeper.lastDetectedAt=duplicate.lastDetectedAt||duplicate.detectedAt;
         if(duplicate.context) keeper.context=duplicate.context;
       }
-      if(typeof incidentAffectedFlightIds==='function'){
-        keeper.affectedFlightIds=[...new Set([...incidentAffectedFlightIds(keeper),...incidentAffectedFlightIds(duplicate)])];
+      if(typeof problemAffectedFlightIds==='function'){
+        keeper.affectedFlightIds=[...new Set([...problemAffectedFlightIds(keeper),...problemAffectedFlightIds(duplicate)])];
       }
       duplicate.status='resolved';
       duplicate.blocking=false;
       duplicate.resolvedAt=t;
       duplicate.automaticResolution=true;
-      duplicate.selectedAction='duplicate_case_merged';
-      duplicate.outcome=`Merged into existing ${keeper.id} ${AeroIncidentModel.titleForType(keeper.type)} case for the same operational subject.`;
-      for(const task of incidentTasks(duplicate.id)){
-        if(!['completed','cancelled'].includes(task.status)) task.status='cancelled';
-      }
-      if(typeof traceIncidentTransition==='function') traceIncidentTransition(duplicate,'auto_closed',{reason:'duplicate_case_merged',mergedInto:keeper.id});
+      duplicate.outcome=`Merged into existing ${keeper.id} ${AeroProblemModel.titleForType(keeper.type)} case for the same operational subject.`;
+      if(typeof traceProblemTransition==='function') traceProblemTransition(duplicate,'auto_closed',{reason:'duplicate_case_merged',mergedInto:keeper.id});
       changed=true;
     }
   }

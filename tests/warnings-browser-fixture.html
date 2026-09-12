@@ -20,7 +20,7 @@
     frame.src='../index.html?fixture=warnings&cache='+Date.now();
     await cleanLoaded;
     const w=frame.contentWindow,d=frame.contentDocument;
-    w.eval('state.ops.automaticDisruptions=false; state.flights=[]; state.aircraft=[]; state.incidents=[]; state.crewDuties=[]; state.services=[]; workspaceUi.dismissedWarnings={}; save(); saveWorkspaceUi();');
+    w.eval('state.ops.automaticDisruptions=false; state.flights=[]; state.aircraft=[]; state.problems=[]; state.crewDuties=[]; state.services=[]; workspaceUi.dismissedWarnings={}; save(); saveWorkspaceUi();');
 
     const now=w.simNow();
     const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
@@ -39,7 +39,7 @@
     w.recalculateOperations();
     w.createFlightRecord({aircraftId:shortAc.id,from:'AMS',to:'CDG',departure:w.flightActualArrival(shortFirst)+10*60_000,fare:{economy:120,business:300,first:600}});
 
-    let fraClosed=now+30*60_000;
+    let fraClosed=now+2*60*60_000;
     for(let i=0;i<144&&w.airportNightStatus('FRA',fraClosed).status!=='closed';i++) fraClosed+=20*60_000;
     assert(w.airportNightStatus('FRA',fraClosed).status==='closed','fixture could not find a future FRA curfew');
     const nightAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
@@ -134,14 +134,21 @@
     assert(warnings.some(item=>item.type==='mel_restriction'&&item.aircraftId===melAc.id&&item.detail.includes('MEL 32-41')),'open MEL without scheduled maintenance did not create a restriction warning');
     assert(warnings.some(item=>item.type==='connection_risk'&&item.detail.includes(connectionOnward.id)),'connection-risk warning was not derived');
     assert(warnings.some(item=>item.type==='alternate_coverage'&&item.flightId===alternateFlight.id),'alternate suitability should be a warning');
-    assert(!w.createIncident('alternate_unsuitable',alternateFlight,{training:true,detectedAt:now,source:'test'}),'alternate suitability should not be creatable as an incident');
-    for(const retiredType of ['airport_capacity_reduction','gate_conflict','fueling_issue','baggage_loading_issue']){
-      assert(!w.createIncident(retiredType,first,{training:true,detectedAt:now,source:'test'}),`${retiredType} should not be creatable as an incident`);
+    assert(!w.createProblem('alternate_unsuitable',alternateFlight,{training:true,detectedAt:now,source:'test'}),'alternate suitability should not be creatable as an problem');
+    for(const retiredType of [
+      'airport_capacity_reduction','gate_conflict','fueling_issue','baggage_loading_issue',
+      'crew_duty_risk','crew_fatigue_mid_rotation','crew_misconnect','crew_report_delayed',
+      'aircraft_out_of_position','crew_duty_extension','deicing_required','airborne_atc_reroute',
+      'network_atc_sector_capacity','maintenance_resource_unavailable','destination_handling_unavailable','performance_limited'
+    ]){
+      assert(!w.createProblem(retiredType,first,{training:true,detectedAt:now,source:'test'}),`${retiredType} should not be creatable as an problem`);
     }
-    w.processDerivedOperationalIncidents(now);
-    assert(!w.openIncidentsForFlight(alternateFlight.id).some(item=>item.type==='alternate_unsuitable'),'alternate suitability warning created an incident');
+    w.processDerivedOperationalProblems(now);
+    assert(!w.openProblemsForFlight(alternateFlight.id).some(item=>item.type==='alternate_unsuitable'),'alternate suitability warning created an problem');
     w.renderDeskStack(true);
-    assert(d.querySelector('[data-desk-widget="warnings"]'),'warning widget was not rendered');
+    assert(d.querySelector('[data-desk-widget="warnings"]'),'incidents and warnings widget was not rendered');
+    assert(d.querySelector('[data-desk-widget="warnings"] .widget-title')?.textContent.includes('Incidents & warnings'),'combined attention widget has the wrong title');
+    assert(!d.querySelector('[data-desk-widget="problems"]'),'standalone incident widget should not be rendered');
     assert(!d.querySelector('[data-desk-widget="connections"]'),'connections widget should not be rendered');
     assert(d.querySelector('[data-desk-widget="warnings"]')?.textContent.includes(connectionOnward.id),'warnings widget does not show the affected onward connection');
     assert(!d.querySelector('[data-desk-widget="warnings"] .warning-summary-section'),'warning widget still renders the old duplicated summary section');
@@ -209,8 +216,8 @@
       staleFlight.actualDeparture=staleFlight.departure;
       staleFlight.actualArrival=now+75*60_000;
       staleFlight.operationalDurationMs=staleFlight.actualArrival-staleFlight.actualDeparture;
-      const staleIncident={
-        id:'INC_STALE_WX',
+      const staleProblem={
+        id:'PR_STALE_WX',
         type:'destination_weather_deterioration',
         flightId:staleFlight.id,
         aircraftId:staleAc.id,
@@ -221,12 +228,10 @@
         severity:'warning',
         blocking:true,
         training:false,
-        selectedAction:'',
         resolvedAt:0,
         outcome:'',
         automaticResolution:false,
         classification:'derived',
-        workflowCreatedAt:now-10*60_000,
         overdue:false,
         recoveryPlan:'',
         recoveryPlanAt:0,
@@ -237,16 +242,15 @@
         impacts:[]
       };
       w.eval(`{
-        const staleIncident=${JSON.stringify(staleIncident)};
-        state.incidents.push(staleIncident);
-        state.coordinationTasks.push(...AeroOperationalWorkflows.tasksForIncident(staleIncident));
+        const staleProblem=${JSON.stringify(staleProblem)};
+        state.problems.push(staleProblem);
       }`);
-      assert(w.processEvents(),'stale retired destination-weather incident was not repaired');
-      assert(!w.openOperationalIncidents().some(item=>item.id==='INC_STALE_WX'),'retired destination-weather incident stayed open');
+      assert(w.processEvents(),'stale retired destination-weather problem was not repaired');
+      assert(!w.openOperationalProblems().some(item=>item.id==='PR_STALE_WX'),'retired destination-weather problem stayed open');
       w.renderDeskStack(true);
-      assert(d.querySelector('[data-desk-widget="warnings"]'),'warning widget failed to render after stale retired incident cleanup');
+      assert(d.querySelector('[data-desk-widget="warnings"]'),'warning widget failed to render after stale retired problem cleanup');
       d.querySelector('[data-desk-widget="warnings"] [data-toggle-desk]')?.click();
-      assert(true,'warning widget remains clickable after stale retired incident cleanup');
+      assert(true,'warning widget remains clickable after stale retired problem cleanup');
     }
     result.textContent='PASS warning widget validated';
   }catch(error){

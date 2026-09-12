@@ -357,6 +357,8 @@
   }
   function routeProgressForFlight(flight,t){
     if(!flight) return 0;
+    if(typeof flightHasDeparted==='function' && !flightHasDeparted(flight,t)) return 0;
+    if(typeof flightHasCompleted==='function' && flightHasCompleted(flight,t)) return 1;
     if(typeof flightMovementTimes==='function'){
       const movement=flightMovementTimes(flight);
       return clampRoute((t-movement.takeoffAt)/(movement.landingAt-movement.takeoffAt||1),0,1);
@@ -594,12 +596,12 @@
       metadata:{
         source:'network_event',
         networkEventId:event.id||event.networkId||'',
-        networkIncidentType:event.incidentType||'',
+        networkProblemType:event.problemType||'',
         avoidPolygon:event.polygon||[]
       }
     });
   }
-  function applyDiversionRouteRevision(flight,airport,{incident=null,mode='',reason=''}={}){
+  function applyDiversionRouteRevision(flight,airport,{problem=null,mode='',reason=''}={}){
     if(!flight||!airport) return null;
     const selectedMode=mode || (airport===flight.from?'return_origin':'diversion');
     return createRouteRevision(flight,{
@@ -607,7 +609,7 @@
       toAirport:airport,
       reason:reason || (selectedMode==='return_origin'?`Return to ${airport}`:`Diversion to ${airport}`),
       createdAt:typeof simNow==='function'?simNow():Date.now(),
-      metadata:{incidentId:incident?.id||'',incidentType:incident?.type||''}
+      metadata:{problemId:problem?.id||'',problemType:problem?.type||''}
     });
   }
   function noteRecoveryRouteRevision(flight,option,{accepted=true,t=null,hazards=[]}={}){

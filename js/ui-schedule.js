@@ -54,7 +54,7 @@ function scheduleCrewDutyMarkup(duty,start,end,pxPerHour,lane=0,focusIds=new Set
   return `<div class="crew-duty-bar ${stateClass} ${duty.augmented?'augmented':''} ${focused?'focus':''} ${selected?'selected':''} ${swaps.length?'has-role-swap':''}" data-crew-duty="${esc(duty.id)}" title="${esc(title)}" style="left:${left}px;width:${width}px;--crew-duty-top:${68+nightOffset+lane*17}px"><span style="width:${formatPct(elapsed)}"></span><b>${esc(label)}</b>${swaps.length?`<em>${esc(swaps.length===1?swaps[0]:'roles')}</em>`:''}</div>`;
 }
 function scheduleNightMarkerInfo(flight){
-  const openNightConflict=openIncidentsForFlight(flight.id).find(incident=>['night_curfew_conflict','arrival_curfew_coordination'].includes(incident.type));
+  const openNightConflict=openProblemsForFlight(flight.id).find(problem=>['night_curfew_conflict','arrival_curfew_coordination'].includes(problem.type));
   const conflict=Number(flight.nightRestrictionConflictDelayMin)||Number(openNightConflict?.context?.delayMin)||0;
   if(conflict>0||openNightConflict){
     const reason=flight.nightRestrictionConflictLabel||openNightConflict?.title||'Night curfew decision required';
@@ -360,12 +360,12 @@ function renderScheduleConnectionOverlay(board,pairs){
 }
 function scheduleAircraftRowBadges(aircraft,flights,lateInboundById,now=simNow()){
   if(!flights.length) return '';
-  let delayed=0,incidents=0,lateInbound=0,night=0,cancelled=0,shortTurns=0;
+  let delayed=0,problems=0,lateInbound=0,night=0,cancelled=0,shortTurns=0;
   for(let i=0;i<flights.length;i++){
     const flight=flights[i];
     if(flight.cancelled){ cancelled++; continue; }
     if(flightTotalDepartureDelayMin(flight)>0||flightArrivalDelayMin(flight)>0) delayed++;
-    if(openIncidentsForFlight(flight.id).length) incidents++;
+    if(openProblemsForFlight(flight.id).length) problems++;
     if(lateInboundById.get(flight.id)) lateInbound++;
     if(scheduleNightMarkerInfo(flight)) night++;
   }
@@ -375,7 +375,7 @@ function scheduleAircraftRowBadges(aircraft,flights,lateInboundById,now=simNow()
   }
   const badges=[
     delayed?{className:'delayed',label:`${delayed} delayed`}:null,
-    incidents?{className:'incident',label:`${incidents} incident${incidents===1?'':'s'}`}:null,
+    problems?{className:'problem',label:`${problems} problem${problems===1?'':'s'}`}:null,
     lateInbound?{className:'late',label:`${lateInbound} late inbound${lateInbound===1?'':'s'}`}:null,
     shortTurns?{className:'short-turn',label:`${shortTurns} min turn`}:null,
     night?{className:'night',label:`${night} night`}:null,
@@ -422,7 +422,7 @@ function refreshScheduleTimeline(force=false){
   const visibleAircraft=operationFilterActive()
     ? state.aircraft.filter(ac=>relevantByAircraft.has(ac.id))
     : state.aircraft;
-  const signature=[Math.floor(start/MIN),scheduleRangeHours,operationFilterSummary(),selectedFlightId||'',selectedAircraftId||'',Array.from(focusIds).sort().join(','),relevant.map(f=>`${f.id}:${flightActualDeparture(f)}:${flightActualArrival(f)}:${f.aircraftId}:${flightSlotImpactState(f,now).state}:${f.assignedSlot||0}:${f.cancelled?1:0}:${f.crewDutyId||''}:${f.crewDutySplit?1:0}:${f.nightRestrictionDelayMin||0}:${f.nightRestrictionLabel||''}:${f.nightRestrictionConflictDelayMin||0}:${f.nightRestrictionConflictLabel||''}:${scheduleFlightHasTimingShift(f)?1:0}:${lateInboundById.get(f.id)?.delayMin||0}:${lateInboundById.get(f.id)?.inboundReadyAt||0}:${openIncidentsForFlight(f.id).length}`).join(','),(state.crewDuties||[]).map(d=>`${d.id}:${d.dutyStart}:${d.dutyEnd}:${d.legal?1:0}:${d.status}`).join(','),visibleAircraft.map(a=>`${a.id}:${a.maintenance?.scheduled?.start||0}:${a.maintenance?.scheduled?.end||0}:${a.maintenance?.scheduled?.status||''}`).join(',')].join('|');
+  const signature=[Math.floor(start/MIN),scheduleRangeHours,operationFilterSummary(),selectedFlightId||'',selectedAircraftId||'',Array.from(focusIds).sort().join(','),relevant.map(f=>`${f.id}:${flightActualDeparture(f)}:${flightActualArrival(f)}:${f.aircraftId}:${flightSlotImpactState(f,now).state}:${f.assignedSlot||0}:${f.cancelled?1:0}:${f.crewDutyId||''}:${f.crewDutySplit?1:0}:${f.nightRestrictionDelayMin||0}:${f.nightRestrictionLabel||''}:${f.nightRestrictionConflictDelayMin||0}:${f.nightRestrictionConflictLabel||''}:${scheduleFlightHasTimingShift(f)?1:0}:${lateInboundById.get(f.id)?.delayMin||0}:${lateInboundById.get(f.id)?.inboundReadyAt||0}:${openProblemsForFlight(f.id).length}`).join(','),(state.crewDuties||[]).map(d=>`${d.id}:${d.dutyStart}:${d.dutyEnd}:${d.legal?1:0}:${d.status}`).join(','),visibleAircraft.map(a=>`${a.id}:${a.maintenance?.scheduled?.start||0}:${a.maintenance?.scheduled?.end||0}:${a.maintenance?.scheduled?.status||''}`).join(',')].join('|');
   if(force||signature!==lastScheduleSignature){
     lastScheduleSignature=signature;
     if(typeof noteRenderSurface==='function') noteRenderSurface('schedule','rendered');
@@ -459,7 +459,7 @@ function refreshScheduleTimeline(force=false){
         const night=f.cancelled?null:scheduleNightMarkerInfo(f);
         const lateInbound=f.cancelled?null:lateInboundById.get(f.id);
         const positionContext=f.positioningBlocked?aircraftOutOfPositionContextForFlight(f):null;
-        const openIncidents=openIncidentsForFlight(f.id);
+        const openProblems=openProblemsForFlight(f.id);
         if(!f.cancelled&&f.departure>=start&&f.departure<=end){
           const markerLeft=(f.departure-start)/HOUR*pxPerHour;
           const slot=flightSlotImpactState(f,now);
@@ -475,12 +475,12 @@ function refreshScheduleTimeline(force=false){
         const flightTitle=[
           ...(delayAnalysis.active?delayAnalysis.tooltipLines:[`${f.id} · ${f.from} → ${destination}`,shifted?`Planned ${shortClock(f.departure)}–${shortClock(f.arrival)} · Actual ${shortClock(actualDep)}–${shortClock(actualArr)}`:null]),
           f.cancelled&&f.cancellationReason?`Cancelled: ${f.cancellationReason}`:null,
-          openIncidents.length?`Open incident${openIncidents.length===1?'':'s'}: ${openIncidents.map(incident=>incident.title||incident.type).join(' · ')}`:null,
+          openProblems.length?`Open problem${openProblems.length===1?'':'s'}: ${openProblems.map(problem=>problem.title||problem.type).join(' · ')}`:null,
           positionContext?`Aircraft positioning: expected ${positionContext.expectedLocation}, required ${positionContext.requiredLocation}`:null,
           lateInbound?.title,
           night?.title
         ].filter(Boolean).join('\n');
-        if(clippedEnd>clippedStart) html+=`<div class="flight-block ${st} ${shifted?'shifted':''} ${openIncidents.length?'has-incident':''} ${lateInbound?'late-inbound-risk':''} ${positionContext?'positioning-conflict':''} ${night?'has-night-marker':''} ${focusClass} ${selected?'selected':''}" data-flight-id="${esc(f.id)}" title="${esc(flightTitle)}" style="left:${left}px;width:${width}px"><div class="flight-code">${esc(f.id)}${delay?` <span class="delay-text">+${delay}</span>`:''}</div>${lateInbound?`<span class="flight-late-inbound" title="${esc(lateInbound.title)}">IN</span>`:''}${night?`<span class="flight-night-marker ${esc(night.className||'')}" title="${esc(night.title)}">${esc(night.label)}</span>`:''}<div class="flight-route">${esc(f.from)} → ${esc(destination)}</div><div class="flight-times">${shifted?`<span class="sched">S ${shortClock(f.departure)}</span> · <span class="actual">A ${shortClock(actualDep)}</span>`:`${shortClock(actualDep)}–${shortClock(actualArr)}`}</div></div>`;
+        if(clippedEnd>clippedStart) html+=`<div class="flight-block ${st} ${shifted?'shifted':''} ${openProblems.length?'has-problem':''} ${lateInbound?'late-inbound-risk':''} ${positionContext?'positioning-conflict':''} ${night?'has-night-marker':''} ${focusClass} ${selected?'selected':''}" data-flight-id="${esc(f.id)}" title="${esc(flightTitle)}" style="left:${left}px;width:${width}px"><div class="flight-code">${esc(f.id)}${delay?` <span class="delay-text">+${delay}</span>`:''}</div>${lateInbound?`<span class="flight-late-inbound" title="${esc(lateInbound.title)}">IN</span>`:''}${night?`<span class="flight-night-marker ${esc(night.className||'')}" title="${esc(night.title)}">${esc(night.label)}</span>`:''}<div class="flight-route">${esc(f.from)} → ${esc(destination)}</div><div class="flight-times">${shifted?`<span class="sched">S ${shortClock(f.departure)}</span> · <span class="actual">A ${shortClock(actualDep)}</span>`:`${shortClock(actualDep)}–${shortClock(actualArr)}`}</div></div>`;
         const next=flights[i+1];
         if(next&&!f.cancelled&&!next.cancelled){
           const nextDep=flightActualDeparture(next),gapMs=nextDep-actualArr,turn=turnaroundGapInfo(f,next,ac);

@@ -160,10 +160,10 @@ window.AeroOperationalIntelligence = (() => {
     return plans.sort((a,b)=>a.risk-b.risk);
   }
 
-  function dispatchBriefing({flight,crew,departureWeather,arrivalWeather,airport,airspace,melItems=[],incidents=[],fuelReady=false,alternate=''}){
+  function dispatchBriefing({flight,crew,departureWeather,arrivalWeather,airport,airspace,melItems=[],problems=[],fuelReady=false,alternate=''}){
     const blocks=[];
     if(!crew?.legal) blocks.push('Crew duty limit');
-    if(incidents.some(item=>item.blocking)) blocks.push('Open incident');
+    if(problems.some(item=>item.blocking)) blocks.push('Open problem');
     if(melItems.some(item=>item.status==='open'&&(item.expiresAt<=flight.departure||item.remainingCycles<=0))) blocks.push('Expired MEL');
     if(departureWeather?.level==='severe'||arrivalWeather?.level==='severe') blocks.push('Severe weather');
     const cautions=[];
@@ -177,20 +177,20 @@ window.AeroOperationalIntelligence = (() => {
     };
   }
 
-  function scenarioScore({completed=[],cancelled=[],openIncidents=[],missedConnections=0,expiredMel=0}){
+  function scenarioScore({completed=[],cancelled=[],openProblems=[],missedConnections=0,expiredMel=0}){
     const operated=completed.length,total=operated+cancelled.length;
     const onTime=completed.filter(flight=>((flight.actualArrival??flight.arrival)-flight.arrival)<=15*MINUTE).length;
     const completion=total?operated/total:1;
     const otp=operated?onTime/operated:1;
     const averageDelay=operated?completed.reduce((sum,flight)=>sum+Math.max(0,((flight.actualArrival??flight.arrival)-flight.arrival)/MINUTE),0)/operated:0;
-    const score=Math.round(clamp(100-(1-otp)*35-(1-completion)*45-Math.min(20,averageDelay*.35)-Math.min(15,missedConnections*.15)-openIncidents.length*2-expiredMel*8,0,100));
+    const score=Math.round(clamp(100-(1-otp)*35-(1-completion)*45-Math.min(20,averageDelay*.35)-Math.min(15,missedConnections*.15)-openProblems.length*2-expiredMel*8,0,100));
     return {
       score,otp,completion,averageDelay,
       objectives:[
         {id:'completion',label:'Complete at least 96% of flights',met:completion>=.96,value:`${Math.round(completion*100)}%`},
         {id:'punctuality',label:'Maintain at least 80% on-time performance',met:otp>=.8,value:`${Math.round(otp*100)}%`},
         {id:'connections',label:'Keep missed connections below 10 passengers',met:missedConnections<10,value:String(missedConnections)},
-        {id:'incidents',label:'Clear decision incidents',met:openIncidents.length===0,value:String(openIncidents.length)},
+        {id:'problems',label:'Clear decision problems',met:openProblems.length===0,value:String(openProblems.length)},
         {id:'mel',label:'Operate with no expired MEL items',met:expiredMel===0,value:String(expiredMel)}
       ]
     };

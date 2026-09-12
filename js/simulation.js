@@ -1,7 +1,6 @@
 /* AeroSim scheduling, demand, flight economics, staffing, and operations simulation. */
 
 const OperationalIntelligence=window.AeroOperationalIntelligence;
-const OperationalWorkflows=window.AeroOperationalWorkflows;
 
 function flightActualDeparture(f){ return f.actualDeparture ?? f.departure; }
 function flightActualArrival(f){ return f.actualArrival ?? f.arrival; }
@@ -38,7 +37,7 @@ function flightMovementTimes(f){
   const offBlockAt=flightActualDeparture(f),onBlockAt=flightActualArrival(f);
   const taxi=flightTaxiTimes(f);
   let takeoffAt=offBlockAt+taxi.taxiOutMin*MIN;
-  let landingAt=onBlockAt-taxi.taxiInMin*MIN;
+  let landingAt=onBlockAt-(taxi.taxiInMin+(Number(f.stationArrivalDelayMin)||0))*MIN;
   if(landingAt<takeoffAt){
     const mid=offBlockAt+(onBlockAt-offBlockAt)/2;
     takeoffAt=Math.min(mid,offBlockAt+2*MIN);
@@ -89,9 +88,9 @@ function mapPush(map,key,value){
 }
 
 function operationalIndex(t=simNow()){
-  const incidentSignature=(state.incidents||[])
+  const problemSignature=(state.problems||[])
     .map(item=>{
-      const affectedIds=typeof incidentAffectedFlightIds==='function'?incidentAffectedFlightIds(item):(item.flightId?[item.flightId]:[]);
+      const affectedIds=typeof problemAffectedFlightIds==='function'?problemAffectedFlightIds(item):(item.flightId?[item.flightId]:[]);
       return `${item.id}:${item.status}:${item.type}:${item.flightId}:${item.aircraftId}:${item.scope?.kind||''}:${item.scope?.subjectId||''}:${affectedIds.join(',')}:${item.blocking?1:0}`;
     })
     .join('|');
@@ -102,7 +101,7 @@ function operationalIndex(t=simNow()){
     state.flights.length,
     state.crewDuties?.length||0,
     state.resourceRequests?.length||0,
-    incidentSignature
+    problemSignature
   ].join('::');
   if(operationalIndexCache.key===key&&operationalIndexCache.value) return operationalIndexCache.value;
   const aircraftById=new Map(state.aircraft.map(aircraft=>[aircraft.id,aircraft]));
@@ -112,9 +111,9 @@ function operationalIndex(t=simNow()){
   const activeFlights=[];
   const activeFlightByAircraft=new Map();
   const upcomingFlightByAircraft=new Map();
-  const openIncidentsByFlight=new Map();
-  const openIncidentsByAircraft=new Map();
-  const openIncidents=[];
+  const openProblemsByFlight=new Map();
+  const openProblemsByAircraft=new Map();
+  const openProblems=[];
   for(const flight of state.flights){
     flightsById.set(flight.id,flight);
     if(!flight.cancelled) mapPush(flightsByAircraft,flight.aircraftId,flight);
@@ -135,12 +134,12 @@ function operationalIndex(t=simNow()){
     }
   }
   activeFlights.sort((a,b)=>flightActualArrival(a)-flightActualArrival(b));
-  for(const incident of state.incidents||[]){
-    if(incident.status!=='open') continue;
-    openIncidents.push(incident);
-    const affectedIds=typeof incidentAffectedFlightIds==='function'?incidentAffectedFlightIds(incident):(incident.flightId?[incident.flightId]:[]);
-    affectedIds.forEach(flightId=>mapPush(openIncidentsByFlight,flightId,incident));
-    if(incident.aircraftId) mapPush(openIncidentsByAircraft,incident.aircraftId,incident);
+  for(const problem of state.problems||[]){
+    if(problem.status!=='open') continue;
+    openProblems.push(problem);
+    const affectedIds=typeof problemAffectedFlightIds==='function'?problemAffectedFlightIds(problem):(problem.flightId?[problem.flightId]:[]);
+    affectedIds.forEach(flightId=>mapPush(openProblemsByFlight,flightId,problem));
+    if(problem.aircraftId) mapPush(openProblemsByAircraft,problem.aircraftId,problem);
   }
   const value={
     t,
@@ -151,9 +150,9 @@ function operationalIndex(t=simNow()){
     activeFlights,
     activeFlightByAircraft,
     upcomingFlightByAircraft,
-    openIncidents,
-    openIncidentsByFlight,
-    openIncidentsByAircraft
+    openProblems,
+    openProblemsByFlight,
+    openProblemsByAircraft
   };
   operationalIndexCache={key,value};
   return value;
@@ -249,6 +248,8 @@ function statusOfFlight(f,t=simNow()){
   return 'delayed';
 }
 function flightProgress(f,t=simNow()){
+  if(!flightHasDeparted(f,t)) return 0;
+  if(flightHasCompleted(f,t)) return 1;
   const movement=flightMovementTimes(f),dep=movement.takeoffAt,arr=movement.landingAt;
   return clamp((t-dep)/(arr-dep),0,1);
 }
@@ -559,8 +560,18 @@ function nightCurfewConflictContextForFlight(flight,proposedDeparture=flightActu
   };
 }
 
-function nightDepartureChangePlanState(incident){
-  const flight=incident&&state.flights.find(item=>item.id===incident.flightId&&!item.cancelled);
+function nightCurfewProblemRequired(flight,context,t=simNow()){
+  if(!flight||!context?.active||flight.departureLogged) return false;
+  const decisionAt=Math.min(
+    flightActualDeparture(flight),
+    ...((context.curfewPhases||[]).map(item=>Number(item.nextOpenAt)||Infinity))
+  );
+  const timeToDeparture=flightActualDeparture(flight)-t;
+  return timeToDeparture<=90*MIN&&decisionAt>t;
+}
+
+function nightDepartureChangePlanState(problem){
+  const flight=problem&&state.flights.find(item=>item.id===problem.flightId&&!item.cancelled);
   if(!flight) return {ready:false,flight:null,reason:'Affected flight is no longer available.'};
   if(flight.departureLogged) return {ready:false,flight,reason:'The flight has already departed. Use airborne curfew coordination instead.'};
   const current=nightCurfewConflictContextForFlight(flight,flightActualDeparture(flight));
@@ -615,7 +626,7 @@ function dispatchBriefingForFlight(flight){
     departureWeather:Management.weatherAt(flight.from,flightActualDeparture(flight)),
     arrivalWeather:Management.weatherAt(destination,flightActualArrival(flight)),
     airport:constraints.airport,airspace:constraints.airspace,
-    melItems:aircraft.melItems||[],incidents:openIncidentsForFlight(flight.id),
+    melItems:aircraft.melItems||[],problems:openProblemsForFlight(flight.id),
     fuelReady:Boolean(flight.fueled||simNow()<flight.departure-60*MIN),alternate
   });
 }
@@ -628,7 +639,7 @@ function currentScenarioScore(t=simNow()){
   const expiredMel=state.aircraft.reduce((sum,aircraft)=>sum+(aircraft.melItems||[]).filter(item=>item.status==='expired'||(item.status==='open'&&(item.expiresAt<=t||item.remainingCycles<=0))).length,0);
   return OperationalIntelligence.scenarioScore({
     completed,cancelled,missedConnections,expiredMel,
-    openIncidents:state.incidents.filter(incident=>incident.status==='open')
+    openProblems:state.problems.filter(problem=>problem.status==='open')
   });
 }
 
@@ -651,12 +662,13 @@ function recalculateOperations(){
     f.manualDelayMin=Number(f.manualDelayMin)||0;
     f.weatherDelayMin=Number(f.weatherDelayMin)||0;
     f.liveWeatherDelayMin=Number(f.liveWeatherDelayMin)||0;
-    f.incidentDelayMin=Number(f.incidentDelayMin)||0;
+    f.problemDelayMin=Number(f.problemDelayMin)||0;
     f.maintenanceDelayMin=Number(f.maintenanceDelayMin)||0;
     f.positioningDelayMin=Number(f.positioningDelayMin)||0;
     f.airportDelayMin=Number(f.airportDelayMin)||0;
     f.airspaceDelayMin=Number(f.airspaceDelayMin)||0;
     f.taxiOutDelayMin=0; f.taxiInDelayMin=0; f.taxiDelayCauses=[];
+    f.stationServiceDelayMin=0; f.stationArrivalDelayMin=0;
     f.nightRestrictionDelayMin=0; f.nightRestrictionLabel='';
     f.nightRestrictionConflictDelayMin=0; f.nightRestrictionConflictLabel='';
     f.propagatedDelayMin=0; f.slotDelayMin=0; f.slotMissed=false;
@@ -671,7 +683,7 @@ function recalculateOperations(){
     for(const f of flights){
       const baseReady=f.departure+(
         f.handlingDelayMin+f.technicalDelayMin+f.staffingDelayMin+f.manualDelayMin+
-        f.weatherDelayMin+f.incidentDelayMin+f.maintenanceDelayMin+f.positioningDelayMin+
+        f.weatherDelayMin+f.problemDelayMin+f.maintenanceDelayMin+f.positioningDelayMin+
         f.airportDelayMin+f.airspaceDelayMin
       )*MIN;
       const connectedPrevious=prev?{...prev,operationalDestination:flightOperationalDestination(prev)}:null;
@@ -684,6 +696,10 @@ function recalculateOperations(){
       f.groundReadyAt=groundPhase.readyAt;
       f.groundPhaseKind=groundPhase.kind;
       let ready=Math.max(baseReady,groundPhase.readyAt);
+      ready=Math.max(ready,crewFlightCoverageStatus(f,now).readyAt,Number(f.crewAssignmentReadyAt)||0);
+      const stationReady=Math.max(stationDepartureReadyAt(f),prev&&flightOperationalDestination(prev)===f.from?stationPostflightReadyAt(prev):0);
+      f.stationServiceDelayMin=Math.max(0,Math.ceil((stationReady-ready)/MIN));
+      ready=Math.max(ready,stationReady);
       if(groundPhase.readyAt>baseReady){
         f.propagatedDelayMin=Math.ceil((groundPhase.readyAt-baseReady)/MIN);
       }
@@ -725,6 +741,8 @@ function recalculateOperations(){
       f.taxiInDelayMin=taxiProfile.taxiInDelayMin;
       f.taxiDelayCauses=taxiProfile.causes;
       f.actualArrival=preliminaryArrival+(f.taxiOutDelayMin+f.taxiInDelayMin)*MIN;
+      f.stationArrivalDelayMin=Math.max(0,Math.ceil((stationArrivalReadyAt(f)-f.actualArrival)/MIN));
+      f.actualArrival+=f.stationArrivalDelayMin*MIN;
       const arrivalCurfew=arrivalCurfewContextForFlight(f,now);
       if(arrivalCurfew){
         f.nightRestrictionConflictDelayMin=arrivalCurfew.delayMin;
@@ -743,24 +761,26 @@ function getNextGroundFlightForAircraft(acId,t=simNow()){
 
 function logEvent(){ /* operations log intentionally disabled */ }
 
-function openIncidentsForFlight(flightId){
-  return operationalIndex().openIncidentsByFlight.get(flightId)||[];
+function openProblemsForFlight(flightId){
+  return operationalIndex().openProblemsByFlight.get(flightId)||[];
 }
 
-function departureBlockingIncidentsForFlight(flight){
+function departureBlockingProblemsForFlight(flight){
   if(!flight) return [];
-  return openIncidentsForFlight(flight.id).filter(incident=>{
-    if(incident.status!=='open'||!incident.blocking) return false;
-    return AeroIncidentModel.phaseForType(incident.type)!=='airborne';
+  return openProblemsForFlight(flight.id).filter(problem=>{
+    if(problem.status!=='open'||!problem.blocking) return false;
+    return AeroProblemModel.phaseForType(problem.type)!=='airborne';
   });
 }
 
 function departureGroundBlockersForFlight(flight){
   if(!flight) return [];
-  const blockers=[...departureBlockingIncidentsForFlight(flight)];
+  const blockers=[...departureBlockingProblemsForFlight(flight)];
   if(flight.positioningBlocked) blockers.push({type:'aircraft_positioning'});
   if(flight.staffingBlocked) blockers.push({type:'staffing'});
   if(flight.maintenanceBlocked) blockers.push({type:'maintenance'});
+  if(!crewFlightCoverageStatus(flight).ready) blockers.push({type:'crew_assignment'});
+  if(stationDepartureBlocked(flight)) blockers.push({type:'station_service'});
   return blockers;
 }
 
@@ -820,7 +840,7 @@ function crewSickRoleForFlight(flight){
   return 'cabinCrew';
 }
 
-function technicalContextForIncident(type,id,detectedAt,context=null){
+function technicalContextForProblem(type,id,detectedAt,context=null){
   const finding=OperationalIntelligence.melFinding(id,detectedAt);
   const forced=context&&(
     context.technicalDisposition||
@@ -838,49 +858,6 @@ function technicalContextForIncident(type,id,detectedAt,context=null){
     disposition:maintenanceRequired?'maintenance_required':'mel_allowed',
     label:maintenanceRequired?`${finding.title} · immediate technical repair required`:finding.title
   };
-}
-
-function impactContextSignature(context){
-  return JSON.stringify(context||null);
-}
-
-function derivedImpactStatus(type,context){
-  if(type==='slot_miss_risk'&&(context?.slotDelayMin||0)<=10) return 'auto';
-  return 'open';
-}
-
-function upsertIncidentImpact(parent,type,context,t){
-  if(!parent) return false;
-  parent.impacts??=[];
-  const key=`${type}:${context?.sourceId||parent.flightId}`;
-  const status=derivedImpactStatus(type,context);
-  const existing=parent.impacts.find(item=>item.key===key);
-  if(existing){
-    const changed=existing.status!==status||impactContextSignature(existing.context)!==impactContextSignature(context);
-    if(changed){
-      existing.type=type; existing.context=context; existing.status=status; existing.updatedAt=t;
-      existing.title=AeroIncidentModel.titleForType(type);
-      existing.summary=impactSummary(type,context,status);
-    }
-    return changed;
-  }
-  parent.impacts.push({
-    key,type,status,context,createdAt:t,updatedAt:t,
-    title:AeroIncidentModel.titleForType(type),
-    summary:impactSummary(type,context,status)
-  });
-  return true;
-}
-
-function impactSummary(type,context,status='open'){
-  const prefix=status==='auto'?'Default policy recorded: ':'';
-  if(type==='slot_miss_risk'){
-    const cause=context?.primaryCause&&context.primaryCause!=='Unknown readiness delay'?` Cause: ${context.primaryCause}.`:'';
-    return `${prefix}${context?.slotDelayMin||0} minutes of slot delay projected.${cause}`;
-  }
-  if(type==='crew_duty_risk') return `${prefix}${context?.label||'Crew duty limit risk projected.'}`;
-  if(type==='crew_duty_extension') return `${prefix}+${context?.overrunMin||0} minutes beyond duty limit projected${context?.primaryCause?` · ${context.primaryCause}`:''}.`;
-  return AeroIncidentModel.summaryForType(type);
 }
 
 function addSlotCause(causes,label,minutes,detail=''){
@@ -968,13 +945,15 @@ function slotMissContextForFlight(flight,previous=null){
     addSlotCause(causes,'Turn readiness',flight.propagatedDelayMin,'Aircraft or ground phase ready after planned departure');
   }
   addSlotCause(causes,'Handling delay',flight.handlingDelayMin,flight.handlingDelayCause||'Ground handling not complete');
+  addSlotCause(causes,'Station service delivery',flight.stationServiceDelayMin,'Confirmed handling service must finish before departure');
+  addSlotCause(causes,'Arrival handler readiness',flight.stationArrivalDelayMin,'Aircraft waits on the ground for the confirmed arrival handler');
   addSlotCause(causes,'Technical delay',flight.technicalDelayMin,'Aircraft technical work before departure readiness');
   addSlotCause(causes,'Personnel shortfall',flight.staffingDelayMin,flight.staffingShortage||'Required crew or station personnel not ready');
   addSlotCause(causes,'Manual OCC hold',flight.manualDelayMin,'Dispatcher-entered departure hold');
   addSlotCause(causes,'Weather delay',(flight.weatherDelayMin||0)+(flight.liveWeatherDelayMin||0),weatherCauseText(flight.weatherCause)||flight.weatherCode||flight.weatherRouteHazard||'Weather impact on departure, arrival, or route');
   addSlotCause(causes,'Taxi-out delay',flight.taxiOutDelayMin,taxiCauseText(flight,'out')||'Taxi-out sequencing or surface movement delay');
   addSlotCause(causes,'Taxi-in delay',flight.taxiInDelayMin,taxiCauseText(flight,'in')||'Taxi-in sequencing or stand arrival delay');
-  addSlotCause(causes,'Incident response',flight.incidentDelayMin,'Open incident coordination added delay');
+  addSlotCause(causes,'Problem response',flight.problemDelayMin,'Open problem coordination added delay');
   addSlotCause(causes,'Maintenance hold',flight.maintenanceDelayMin,'Maintenance availability or inspection hold');
   addSlotCause(causes,'Aircraft positioning',flight.positioningDelayMin,'Aircraft not available at the planned origin');
   addSlotCause(causes,'Airport flow restriction',flight.airportDelayMin,flight.airportConstraintLabel||'Departure airport flow restriction');
@@ -1106,12 +1085,17 @@ function destinationBelowMinimaContextForFlight(flight,t=simNow()){
   };
 }
 
+function destinationBelowMinimaProblemRequired(flight,context,t=simNow()){
+  if(!flight||!context?.active||!flightIsAirborne(flight,t)) return false;
+  return flightActualArrival(flight)-t<=90*MIN;
+}
+
 function alternateSuitabilityContextForFlight(flight,t=simNow()){
   const destination=flightOperationalDestination(flight);
   const destinationWeather=Management.weatherAt(destination,t+45*MIN);
-  const fakeIncident={flightId:flight.id,aircraftId:flight.aircraftId,selectedAlternate:''};
-  const alternates=typeof diversionOptionsForIncident==='function'
-    ? diversionOptionsForIncident(fakeIncident,{includeReturnOrigin:false})
+  const fakeProblem={flightId:flight.id,aircraftId:flight.aircraftId,selectedAlternate:''};
+  const alternates=typeof diversionOptionsForProblem==='function'
+    ? diversionOptionsForProblem(fakeProblem,{includeReturnOrigin:false})
     : [];
   const degradedDestination=destinationWeather.level!=='normal'&&(destinationWeather.delayMin>=15||destinationWeather.capacityFactor<.82);
   return {
@@ -1174,11 +1158,11 @@ function aircraftMispositionAfterDiversionContextForFlight(flight,t=simNow()){
   };
 }
 
-function positioningFerryPlanState(incident,t=simNow()){
-  const flight=incident&&state.flights.find(item=>item.id===incident.flightId&&!item.cancelled);
+function positioningFerryPlanState(problem,t=simNow()){
+  const flight=problem&&state.flights.find(item=>item.id===problem.flightId&&!item.cancelled);
   const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
   if(!flight||!aircraft) return {ready:false,flight:null,aircraft:null,ferry:null,from:'',to:'',reason:'Affected flight or aircraft is no longer available.'};
-  const context=aircraftOutOfPositionContextForFlight(flight,t)||incident.context||{};
+  const context=aircraftOutOfPositionContextForFlight(flight,t)||problem.context||{};
   const departure=flightActualDeparture(flight);
   const projection=aircraftProjectedLocation(aircraft,departure);
   const from=context.expectedLocation||projection.location||aircraft.location;
@@ -1216,11 +1200,11 @@ function crewMispositionAfterDiversionContextForFlight(flight,t=simNow()){
   };
 }
 
-function crewRelocationPlanState(incident,t=simNow()){
-  const flight=incident&&state.flights.find(item=>item.id===incident.flightId&&!item.cancelled);
+function crewRelocationPlanState(problem,t=simNow()){
+  const flight=problem&&state.flights.find(item=>item.id===problem.flightId&&!item.cancelled);
   if(!flight) return {ready:false,flight:null,from:'',to:'',role:'',transfer:null,reason:'Affected flight is no longer available.'};
-  const role=incident.affectedRole||incident.context?.role||'captains';
-  const from=incident.context?.from||incident.context?.crewAirport||'';
+  const role=problem.affectedRole||problem.context?.role||'captains';
+  const from=problem.context?.from||problem.context?.crewAirport||'';
   const to=flight.from;
   const reportBy=flight.departure-20*MIN;
   const transfer=(state.personnelTransfers||[])
@@ -1280,7 +1264,7 @@ function crewDutyExtensionDelayCauses(duty){
     if(!flight||flight.cancelled) continue;
     const prefix=flight.id;
     addCrewDutyDelayCause(causes,'Manual OCC hold',flight.manualDelayMin,`${prefix}: dispatcher-entered hold`);
-    addCrewDutyDelayCause(causes,'Incident response',flight.incidentDelayMin,`${prefix}: incident coordination delay`);
+    addCrewDutyDelayCause(causes,'Problem response',flight.problemDelayMin,`${prefix}: problem coordination delay`);
     addCrewDutyDelayCause(causes,'Weather delay',(flight.weatherDelayMin||0)+(flight.liveWeatherDelayMin||0),`${prefix}: ${weatherCauseText(flight.weatherCause)||flight.weatherCode||flight.weatherRouteHazard||'weather impact'}`);
     addCrewDutyDelayCause(causes,'Enroute delay',flight.enrouteDelayMin,`${prefix}: airborne routing, holding, or flight-watch impact`);
     addCrewDutyDelayCause(causes,'Airport flow restriction',flight.airportDelayMin,`${prefix}: ${flight.airportConstraintLabel||'airport flow restriction'}`);
@@ -1420,6 +1404,12 @@ function deicingCapacityCollapseContextForFlight(flight,t=simNow()){
     sourceKey:`deice-collapse:${airport}:${Math.floor(flight.departure/(2*HOUR))}`,
     active:true
   };
+}
+
+function deicingCapacityProblemRequired(flight,context,t=simNow()){
+  if(!flight||!context?.active||flight.departureLogged) return false;
+  const timeToDeparture=flightActualDeparture(flight)-t;
+  return timeToDeparture<=75*MIN&&Number(context.queueMin||context.delayMin)>=45;
 }
 
 function holdoverExpiredContextForFlight(flight,t=simNow()){
@@ -1570,50 +1560,25 @@ function performanceLimitContextForFlight(flight,t=simNow()){
   };
 }
 
-function performanceLimitIncidentRequired(context){
-  if(!context?.active) return false;
-  return Number(context.rangeMarginKm)<0||Number(context.fuelMarginGal)<0||Number(context.payloadReductionPct)>=18;
-}
-
 function destinationHandlingContextForFlight(flight,t=simNow()){
-  if(flight.flightType==='ferry'||t<flight.departure-6*HOUR||flight.settled) return null;
+  if(flight.cancelled||t<flightActualDeparture(flight)-6*HOUR||flightHasCompleted(flight,t)) return null;
   const destination=flightOperationalDestination(flight);
-  if(flight.diversionAirport){
-    const plan=typeof destinationHandlingPlanForFlight==='function'
-      ? destinationHandlingPlanForFlight(flight,{airport:destination,t,reason:'Diversion arrival handling',ensure:true})
-      : null;
-    const available=Boolean(plan?.available);
-    if(available) return null;
-    return {
-      sourceId:flight.id,
-      airport:destination,
-      handling:0,
-      handlingPlan:plan,
-      contractedStation:plan?.source==='contract',
-      reason:plan?.label||'No own-station or contract handler is available',
-      delayMin:flight.departureLogged?25:35,
-      active:true
-    };
-  }
+  const plan=stationFlightHandlingRequest(flight,'arrival');
+  if(stationServiceConfirmed(plan)) return null;
   const trackedStation=Boolean(state.personnel.assignments?.[destination]);
   const handling=staffAt(destination,'groundHandling');
-  const relevant=trackedStation||Boolean(flight.diversionAirport);
-  if(!relevant||handling>0) return null;
+  const relevant=trackedStation||Boolean(flight.diversionAirport)||Boolean(plan);
+  if(!relevant||(!plan&&handling>0&&!flight.diversionAirport)) return null;
   return {
     sourceId:flight.id,
     airport:destination,
     handling,
-    handlingPlan:null,
-    contractedStation:!trackedStation,
-    reason:'No destination handling team is assigned',
+    handlingPlan:plan,
+    contractedStation:plan?.provider!=='station',
+    reason:plan?.outcome|| (plan?.status==='requested'?'Awaiting handler acceptance.':'Arrival handling needs station coordination.'),
     delayMin:flight.departureLogged?25:35,
     active:true
   };
-}
-
-function destinationHandlingIncidentRequired(flight,context){
-  if(!context?.active||!flight) return false;
-  return Boolean((flight.departureLogged||flight.diversionAirport)&&!context.handlingPlan?.available);
 }
 
 function diversionAirportUnavailableContextForFlight(flight,t=simNow()){
@@ -1652,7 +1617,7 @@ function diversionAirportUnavailableContextForFlight(flight,t=simNow()){
 
 function maybeDetectLightningStrike(flight,t=simNow()){
   if(!flightIsAirborne(flight,t)||flight.flightType==='ferry') return false;
-  if(state.incidents.some(item=>item.flightId===flight.id&&item.type==='lightning_strike')) return false;
+  if(state.problems.some(item=>item.flightId===flight.id&&item.type==='lightning_strike')) return false;
   flight.weatherLiveChecks??={};
   flight.weatherLiveChecks.lightningCheckedCells??=[];
   const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
@@ -1665,19 +1630,19 @@ function maybeDetectLightningStrike(flight,t=simNow()){
     const risk=cell.severity==='severe' ? .42 : .16;
     const roll=window.AeroWeatherEngine?.stableUnit?.(`${flight.id}:${key}:lightning`)??1;
     if(roll>=risk) continue;
-    const incident=createIncident('lightning_strike',flight,{detectedAt:t,source:'weather',sourceKey:`lightning:${flight.id}:${cell.id}`,context:{
+    const problem=createProblem('lightning_strike',flight,{detectedAt:t,source:'weather',sourceKey:`lightning:${flight.id}:${cell.id}`,context:{
       ...airborneContextForFlight(flight,t),
       cellId:cell.id,conditions:cell.label,severity:cell.severity,delayMin:cell.delayMin,
       position:position?{lat:Math.round(position.lat*1000)/1000,lon:Math.round(position.lon*1000)/1000}:null
     }});
-    return Boolean(incident);
+    return Boolean(problem);
   }
   return false;
 }
 
-function resolveIncidentImpacts(incident,t=simNow(),status='handled'){
-  if(!incident?.impacts?.length) return;
-  for(const impact of incident.impacts){
+function resolveProblemImpacts(problem,t=simNow(),status='handled'){
+  if(!problem?.impacts?.length) return;
+  for(const impact of problem.impacts){
     if(['handled','accepted','cleared'].includes(impact.status)) continue;
     impact.status=status;
     impact.resolvedAt=t;
@@ -1692,7 +1657,7 @@ function nearestDiversionAirport(f,ac){
     .sort((a,b)=>a.fromDestination-b.fromDestination)[0]?.code||null;
 }
 
-function incidentReplacementCandidates(f){
+function problemReplacementCandidates(f){
   if(f.serviceId) return rotationReplacementCandidates(f);
   const duration=Number.isFinite(f.operationalDurationMs)?f.operationalDurationMs:f.arrival-f.departure;
   const destination=flightOperationalDestination(f);
@@ -1760,8 +1725,8 @@ function plannedReplacementFerryOptions(ac,target,serviceId=''){
     .sort((a,b)=>a.delayMin-b.delayMin||a.ferryArrival-b.ferryArrival||a.tail.localeCompare(b.tail));
 }
 
-function incidentAircraftReplacementOptions(incident){
-  const flight=state.flights.find(item=>item.id===incident?.flightId&&!item.cancelled);
+function problemAircraftReplacementOptions(problem){
+  const flight=state.flights.find(item=>item.id===problem?.flightId&&!item.cancelled);
   if(!flight||flight.departureLogged||flight.fueled) return [];
   const {service,outbound}=rotationForFlight(flight);
   const target=service&&outbound?outbound:flight;
@@ -1802,22 +1767,17 @@ function incidentAircraftReplacementOptions(incident){
   }).filter(Boolean).sort((a,b)=>a.delayMin-b.delayMin||a.tail.localeCompare(b.tail)).slice(0,8);
 }
 
-function incidentAircraftReplacementOptionsForTask(incident,task=null){
-  if(incident?.type!=='fuel_supplier_outage') return incidentAircraftReplacementOptions(incident);
-  return fuelSupplierReplacementOptions(incident);
-}
-
-function fuelSupplierTargetFlight(incident){
-  const flight=state.flights.find(item=>item.id===incident?.flightId&&!item.cancelled);
+function fuelSupplierTargetFlight(problem){
+  const flight=state.flights.find(item=>item.id===problem?.flightId&&!item.cancelled);
   if(!flight) return null;
   const {service,outbound}=rotationForFlight(flight);
   return service&&outbound?outbound:flight;
 }
 
-function fuelSupplierReplacementOptions(incident){
-  const target=fuelSupplierTargetFlight(incident);
+function fuelSupplierReplacementOptions(problem){
+  const target=fuelSupplierTargetFlight(problem);
   if(!target||target.departureLogged||target.fueled) return [];
-  return incidentAircraftReplacementOptions(incident).filter(option=>{
+  return problemAircraftReplacementOptions(problem).filter(option=>{
     if(option.mode!=='local') return false;
     const aircraft=state.aircraft.find(item=>item.id===option.aircraftId);
     if(!aircraft) return false;
@@ -1829,8 +1789,8 @@ function fuelSupplierReplacementOptions(incident){
   }));
 }
 
-function fuelOutageTankerPlan(incident){
-  const target=fuelSupplierTargetFlight(incident);
+function fuelOutageTankerPlan(problem){
+  const target=fuelSupplierTargetFlight(problem);
   const aircraft=target&&state.aircraft.find(item=>item.id===target.aircraftId);
   if(!target||!aircraft) return {available:false,reason:'The affected flight or aircraft is no longer available.'};
   if(target.cancelled||target.departureLogged) return {available:false,reason:'Tanker fuel is only useful before the affected flight departs.'};
@@ -1866,8 +1826,8 @@ function fuelOutageTankerPlan(incident){
   };
 }
 
-function applyFuelOutageTankerPlan(incident){
-  const plan=fuelOutageTankerPlan(incident);
+function applyFuelOutageTankerPlan(problem){
+  const plan=fuelOutageTankerPlan(problem);
   if(!plan.available) return toast(plan.reason);
   const flight=plan.targetFlight, aircraft=plan.aircraft;
   if(plan.mode==='previous_leg'&&plan.previousFlight){
@@ -2178,11 +2138,12 @@ function compactFlightHistoryRecord(f){
 
 function flightHasOpenOperationalWork(flightId){
   if(!flightId) return false;
-  if((state.incidents||[]).some(item=>item.flightId===flightId&&item.status==='open')) return true;
-  if((state.coordinationTasks||[]).some(item=>item.flightId===flightId&&!['completed','cancelled'].includes(item.status))) return true;
+  if((state.problems||[]).some(item=>item.flightId===flightId&&item.status==='open')) return true;
   if((state.personnelTransfers||[]).some(item=>item.flightId===flightId&&!['completed','cancelled'].includes(item.status))) return true;
   if((state.passengerRecoveries||[]).some(item=>item.flightId===flightId&&!['confirmed','cancelled'].includes(item.status))) return true;
   if((state.crewRecoveries||[]).some(item=>item.flightId===flightId&&!['confirmed','cancelled'].includes(item.status))) return true;
+  if(crewAssignments().some(item=>item.flightIds.includes(flightId)&&crewAssignmentActive(item))) return true;
+  if(stationServiceRequests().some(item=>item.flightId===flightId&&stationServiceReserved(item))) return true;
   return false;
 }
 
@@ -2234,16 +2195,18 @@ function pruneOperationalFlightRetention(t=simNow()){
     const service=state.services.find(item=>item.id===serviceId&&item.active);
     if(service&&departure<service.nextDeparture) service.nextDeparture=departure;
   }
-  const removedIncidentIds=new Set(
-    (state.incidents||[])
-      .filter(incident=>removedIds.has(incident.flightId)&&incident.status!=='open')
-      .map(incident=>incident.id)
+  const removedProblemIds=new Set(
+    (state.problems||[])
+      .filter(problem=>removedIds.has(problem.flightId)&&problem.status!=='open')
+      .map(problem=>problem.id)
   );
-  state.incidents=(state.incidents||[]).filter(incident=>!removedIncidentIds.has(incident.id)&&!removedIds.has(incident.flightId));
-  state.coordinationTasks=(state.coordinationTasks||[]).filter(task=>!removedIncidentIds.has(task.incidentId)&&!removedIds.has(task.flightId));
+  state.problems=(state.problems||[]).filter(problem=>!removedProblemIds.has(problem.id)&&!removedIds.has(problem.flightId));
   state.personnelTransfers=(state.personnelTransfers||[]).filter(item=>!removedIds.has(item.flightId)||!['completed','cancelled'].includes(item.status));
   state.passengerRecoveries=(state.passengerRecoveries||[]).filter(item=>!removedIds.has(item.flightId)||!['confirmed','cancelled'].includes(item.status));
   state.crewRecoveries=(state.crewRecoveries||[]).filter(item=>!removedIds.has(item.flightId)||!['confirmed','cancelled'].includes(item.status));
+  state.crewAssignments=crewAssignments().filter(item=>!removedIds.has(item.flightId)||crewAssignmentActive(item));
+  state.stationServiceRequests=stationServiceRequests().filter(item=>stationServiceReserved(item)||(!removedIds.has(item.flightId)&&item.updatedAt>=pastCutoff));
+  state.crewUnavailability=(state.crewUnavailability||[]).filter(item=>item.until>t||item.flightIds.some(id=>!removedIds.has(id)));
   state.crewDuties=(state.crewDuties||[]).map(duty=>({
     ...duty,
     flightIds:(duty.flightIds||[]).filter(id=>!removedIds.has(id))
@@ -2281,22 +2244,14 @@ function eventProcessingContext(t){
 
 function processStateRepairEvents(ctx){
   const t=ctx.t;
-  if(retireTrackedIncidents(t)) ctx.markChanged('retireTrackedIncidents');
-  if(repairDuplicateOpenIncidents(t)) ctx.markChanged('repairDuplicateOpenIncidents');
-  if(typeof reopenSilentDefaultFlightdeckFollowups==='function'&&reopenSilentDefaultFlightdeckFollowups(t)) ctx.markChanged('reopenSilentDefaultFlightdeckFollowups');
+  if(retireTrackedProblems(t)) ctx.markChanged('retireTrackedProblems');
+  if(repairDuplicateOpenProblems(t)) ctx.markChanged('repairDuplicateOpenProblems');
   if(!state.ops?.caseLinksRepaired){
-    if(repairIncidentCaseLinks()) ctx.markChanged('repairIncidentCaseLinks');
+    if(repairProblemCaseLinks()) ctx.markChanged('repairProblemCaseLinks');
     state.ops??={automaticDisruptions:true};
     state.ops.caseLinksRepaired=true;
     ctx.markChanged('caseLinksRepairedFlag');
   }
-  if(!state.ops?.phaseRealismRepaired){
-    if(repairIncidentPhaseRealism(t)) ctx.markChanged('repairIncidentPhaseRealismInitial');
-    state.ops??={automaticDisruptions:true};
-    state.ops.phaseRealismRepaired=true;
-    ctx.markChanged('phaseRealismRepairedFlag');
-  }
-  if(repairIncidentPhaseRealism(t)) ctx.markChanged('repairIncidentPhaseRealism');
   if(pruneOperationalFlightRetention(t)) ctx.markChanged('pruneOperationalFlightRetention',true);
 }
 
@@ -2304,39 +2259,40 @@ function processOperationalTimerEvents(ctx){
   const t=ctx.t;
   if(ensureRecurringFlights()) ctx.markChanged('ensureRecurringFlights',true);
   if(ensurePlannedCrewAugmentation()) ctx.markChanged('ensurePlannedCrewAugmentation',true);
-  if(processOperationalWorkflows(t)) ctx.markChanged('processOperationalWorkflows',true);
+  if(processProblems(t)) ctx.markChanged('processProblems',true);
   if(Management.processMaintenance(state,t,postTransaction)) ctx.markChanged('processMaintenance',true);
   if(Management.processWeeklyReviews(state,t)) ctx.markChanged('processWeeklyReviews');
   if(repairFirstFlightFuelAttribution()) ctx.markChanged('repairFirstFlightFuelAttribution');
   if(processPersonnelTransfers(t)) ctx.markChanged('processPersonnelTransfers',true);
   if(processResourceRequests(t)) ctx.markChanged('processResourceRequests',true);
   if(processEnrouteRecoveryRequests(t)) ctx.markChanged('processEnrouteRecoveryRequests',true);
+  if(processDispatchRouteCoordinationRequests(t)) ctx.markChanged('processDispatchRouteCoordinationRequests',true);
   if(processPassengerRecoveries(t)) ctx.markChanged('processPassengerRecoveries');
   if(processCrewRecoveries(t)) ctx.markChanged('processCrewRecoveries');
+  if(processCrewAssignments(t)) ctx.markChanged('processCrewAssignments',true);
+  if(processStationServices(t)) ctx.markChanged('processStationServices',true);
   if(processMelConstraints(t)) ctx.markChanged('processMelConstraints',true);
 }
 
 function processFlightGenerationEvents(ctx){
   const t=ctx.t;
-  if(typeof processNetworkOperationalIncidents==='function'&&processNetworkOperationalIncidents(t)) ctx.markChanged('processNetworkOperationalIncidents',true);
+  if(typeof processNetworkOperationalProblems==='function'&&processNetworkOperationalProblems(t)) ctx.markChanged('processNetworkOperationalProblems',true);
   for(const f of state.flights){
     if(maybeApplyWeatherDelay(f,t)) ctx.markChanged(`maybeApplyWeatherDelay:${f.id}`,true);
     if(maybeApplyLiveWeatherImpact(f,t)) ctx.markChanged(`maybeApplyLiveWeatherImpact:${f.id}`,true);
     if(maybeGenerateEnrouteIssue(f,t)) ctx.markChanged(`maybeGenerateEnrouteIssue:${f.id}`,true);
     if(maybeGeneratePreDepartureIssue(f,t)) ctx.markChanged(`maybeGeneratePreDepartureIssue:${f.id}`,true);
-    if(maybeGenerateOperationalIncident(f,t)) ctx.markChanged(`maybeGenerateOperationalIncident:${f.id}`,true);
+    if(maybeGenerateOperationalEvent(f,t)) ctx.markChanged(`maybeGenerateOperationalEvent:${f.id}`,true);
     if(maybeApplyNetworkConstraints(f,t)) ctx.markChanged(`maybeApplyNetworkConstraints:${f.id}`,true);
   }
 }
 
 function processLifecycleAndConstraintEvents(ctx){
   const t=ctx.t;
-  if(processIncidentDeadlines(t)) ctx.markChanged('processIncidentDeadlines',true);
   ctx.flushRecalc();
   if(updateStaffingConstraints(t)) ctx.markChanged('updateStaffingConstraints',true);
   if(updateMaintenanceConstraints(t)) ctx.markChanged('updateMaintenanceConstraints',true);
   if(updatePositioningConstraints(t)) ctx.markChanged('updatePositioningConstraints',true);
-  if(updateIncidentConstraints(t)) ctx.markChanged('updateIncidentConstraints',true);
   ctx.flushRecalc();
   const lifecycle=processFlightLifecycleTransitions(t);
   if(lifecycle.changed){
@@ -2348,10 +2304,9 @@ function processLifecycleAndConstraintEvents(ctx){
   if(updateStaffingConstraints(t)) ctx.markChanged('updateStaffingConstraintsAfterLifecycle',true);
   if(updateMaintenanceConstraints(t)) ctx.markChanged('updateMaintenanceConstraintsAfterLifecycle',true);
   if(updatePositioningConstraints(t)) ctx.markChanged('updatePositioningConstraintsAfterLifecycle',true);
-  if(updateIncidentConstraints(t)) ctx.markChanged('updateIncidentConstraintsAfterLifecycle',true);
   ctx.flushRecalc();
   if(updatePassengerConnections()) ctx.markChanged('updatePassengerConnections');
-  if(processDerivedOperationalIncidents(t)) ctx.markChanged('processDerivedOperationalIncidents',true);
+  if(processDerivedOperationalProblems(t)) ctx.markChanged('processDerivedOperationalProblems',true);
 }
 
 function processEvents(){
@@ -2449,11 +2404,12 @@ function updatePositioningConstraints(t=simNow()){
 function updateStaffingConstraints(t=simNow()){
   let changed=false;
   for(const f of state.flights){
-    if(f.cancelled || f.settled || f.departureLogged || t<f.departure-60*MIN) continue;
+    if(f.cancelled || flightHasDeparted(f,t) || t<f.departure-60*MIN) continue;
     const ac=state.aircraft.find(a=>a.id===f.aircraftId);
     if(!ac) continue;
     const evaluationDeparture=Math.max(f.departure,t);
     const shortages=staffingShortagesForFlight(ac,evaluationDeparture,f.arrival-f.departure,f.from,f.id,flightUsesLocalCrew(f),f.flightType);
+    shortages.push(...crewFlightCoverageStatus(f,t).reasons);
     if(shortages.length){
       const shortageText=shortages.join(' · ');
       if(!f.staffingBlocked||f.staffingShortage!==shortageText){ changed=true; }
@@ -2552,8 +2508,8 @@ function substituteSelectedRotation(flightId,newAcId){
     });
   }
   for(const flight of [outbound,returnFlight].filter(Boolean)){
-    for(const incident of state.incidents.filter(item=>item.flightId===flight.id&&item.status==='open')){
-      incident.aircraftId=newAcId;
+    for(const problem of state.problems.filter(item=>item.flightId===flight.id&&item.status==='open')){
+      problem.aircraftId=newAcId;
     }
   }
 
@@ -2567,7 +2523,7 @@ function substituteSelectedRotation(flightId,newAcId){
 function manualSwapCandidatesForFlight(flight){
   if(!flight||flight.cancelled||flightHasDeparted(flight)||flight.fueled) return [];
   if(flight.serviceId) return rotationReplacementCandidates(flight);
-  return incidentReplacementCandidates(flight);
+  return problemReplacementCandidates(flight);
 }
 
 function swapSelectedFlightAircraft(flightId,newAcId){
@@ -2588,8 +2544,8 @@ function swapSelectedFlightAircraft(flightId,newAcId){
       description:`${flight.id}: manual aircraft swap to ${aircraft.tail}`
     });
   }
-  for(const incident of state.incidents.filter(item=>item.flightId===flight.id&&item.status==='open')){
-    incident.aircraftId=newAcId;
+  for(const problem of state.problems.filter(item=>item.flightId===flight.id&&item.status==='open')){
+    problem.aircraftId=newAcId;
   }
   clearAircraftSpecificDelay(flight);
   selectedAircraftId=newAcId;
@@ -2688,7 +2644,7 @@ function delayFlight(flightId,minutes=15){
   }
   f.issueAcknowledgedAt=0; f.issueAcknowledgedKey='';
   recalculateOperations();
-  processDerivedOperationalIncidents(simNow());
+  processDerivedOperationalProblems(simNow());
   updatePassengerConnections();
   AeroServices.persist();
   requestUiRefresh('left','desk','context','schedule','filter','map','weather');
@@ -2703,6 +2659,194 @@ function delayFlightUntil(flightId,targetTime){
   if(targetTime<=current+30_000) return toast(`${f.id} is already projected at or after that time.`);
   const minutes=Math.ceil((targetTime-current)/MIN);
   delayFlight(flightId,minutes);
+}
+
+function dispatchRouteCoordinationRequiresResponse(flight,t=simNow()){
+  if(!flight||flight.cancelled) return false;
+  const status=statusOfFlight(flight,t);
+  return flightHasDeparted(flight,t)||['taxi_out','airborne','taxi_in'].includes(status);
+}
+
+function dispatchRouteCoordinationPending(flight){
+  return flight?.dispatchRouteRequest?.status==='pending' ? flight.dispatchRouteRequest : null;
+}
+
+function dispatchRouteResponseEstimate(flight,{action='',mode=''}={}){
+  const seed=`${flight?.id||'flight'}:${action}:${mode}:dispatch-route-response`;
+  const unit=stableFraction(seed);
+  const base=action==='destination' ? (mode==='return_origin'?7:9) : (mode==='weather_detour'?8:6);
+  const spread=action==='destination' ? 7 : 6;
+  return {
+    responseMin:Math.max(3,Math.round(base+unit*spread)),
+    responseLowMin:Math.max(3,base-2),
+    responseHighMin:base+spread
+  };
+}
+
+function dispatchRouteRequestLabel({action='',mode='',airport=''}={}){
+  if(action==='destination'){
+    if(mode==='return_origin') return `Return-to-origin plan ${airport}`;
+    return `Alternate destination plan ${airport}`;
+  }
+  if(mode==='weather_detour') return 'Weather avoidance refile';
+  if(mode==='direct') return 'Direct route refile';
+  return 'Route coordination';
+}
+
+function requestDispatchRouteCoordination(flight,payload){
+  if(!flight) return toast('Select an active flight first.');
+  const pending=dispatchRouteCoordinationPending(flight);
+  if(pending) return toast(`${flight.id}: ${pending.label||'route coordination'} is already waiting for a response.`);
+  const timing=dispatchRouteResponseEstimate(flight,payload);
+  const waitMin=Math.max(3,Number(timing.responseMin)||6);
+  flight.dispatchRouteRequest={
+    id:`DRC-${flight.id}-${Math.round(simNow())}`,
+    action:payload.action||'route_revision',
+    mode:payload.mode||'direct',
+    airport:payload.airport||'',
+    reason:payload.reason||'Dispatch route coordination',
+    label:dispatchRouteRequestLabel(payload),
+    requestedAt:simNow(),
+    respondsAt:simNow()+waitMin*MIN,
+    status:'pending',
+    responseMin:waitMin,
+    responseLowMin:timing.responseLowMin||waitMin,
+    responseHighMin:timing.responseHighMin||waitMin
+  };
+  AeroServices.persist();
+  requestUiRefresh('desk','schedule','context','map');
+  return toast(`${flight.id}: ${flight.dispatchRouteRequest.label.toLowerCase()} sent; response in about ${waitMin} min.`);
+}
+
+function finishDispatchRouteCoordination(flight,message){
+  recalculateOperations();
+  processDerivedOperationalProblems(simNow());
+  updatePassengerConnections();
+  AeroServices.persist();
+  requestUiRefresh('left','desk','context','schedule','filter','map','weather');
+  toast(message);
+  return true;
+}
+
+function applyDispatchDestinationPlanNow(flight,airport,{mode='',reason=''}={}){
+  const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
+  if(!flight||!aircraft) return {ok:false,message:'Select an active flight with an assigned aircraft.'};
+  if(!AIRPORTS[airport]) return {ok:false,message:'Choose a valid airport.'};
+  const selectedMode=mode || (airport===flight.from?'return_origin':'diversion');
+  if(selectedMode==='return_origin'&&!dispatchRouteCoordinationRequiresResponse(flight)){
+    return {ok:false,message:'Return-to-origin coordination is only useful after departure.'};
+  }
+  const currentDestination=flightOperationalDestination(flight);
+  if(airport===currentDestination) return {ok:false,message:`${flight.id} is already planned to ${airport}.`};
+  const revision=typeof applyOperationalDiversionDestination==='function'
+    ? applyOperationalDiversionDestination(flight,null,aircraft,airport,{mode:selectedMode,reason})
+    : null;
+  if(!revision) return {ok:false,message:'The route plan could not be revised.'};
+  const label=selectedMode==='return_origin'?'return-to-origin plan':'alternate plan';
+  let amount=0;
+  if(typeof recordRecoveryCostEvent==='function'){
+    amount=Math.max(800,Math.round((Math.abs(Number(revision.estimatedTimeDeltaMin)||0)*60+1200)/100)*100);
+    recordRecoveryCostEvent({
+      flight,category:'dispatch',kind:selectedMode,amount,
+      airport,
+      description:`${flight.id}: Dispatch coordinated ${label} to ${airport}`
+    });
+  }
+  return {ok:true,message:`${flight.id}: ${label} coordinated to ${airport}.`,revision,amount};
+}
+
+function coordinateDispatchDestinationPlan(flightId,airport,{mode='',reason=''}={}){
+  const flight=state.flights.find(item=>item.id===flightId&&!item.cancelled);
+  if(!flight) return toast('Select an active flight with an assigned aircraft.');
+  if(dispatchRouteCoordinationRequiresResponse(flight)){
+    return requestDispatchRouteCoordination(flight,{action:'destination',mode:mode || (airport===flight.from?'return_origin':'diversion'),airport,reason});
+  }
+  const result=applyDispatchDestinationPlanNow(flight,airport,{mode,reason});
+  if(!result.ok) return toast(result.message);
+  return finishDispatchRouteCoordination(flight,result.message);
+}
+
+function applyDispatchRouteRevisionNow(flight,mode='direct',{reason='',t=simNow()}={}){
+  if(!flight) return {ok:false,message:'Select an active flight first.'};
+  const routeApi=window.AeroRoutePlanning;
+  if(!routeApi?.createRouteRevision) return {ok:false,message:'Route planning is not available.'};
+  const hazards=mode==='weather_detour'
+    ? (routeApi.routeHazardSummaryForFlight?.(flight,t,{forecast:true})?.hazards||[])
+    : [];
+  if(mode==='weather_detour'&&!hazards.length) return {ok:false,message:'No route weather hazard is available for an avoidance refile.'};
+  const revision=routeApi.createRouteRevision(flight,{
+    mode,
+    reason:reason || (mode==='weather_detour'?'Dispatch weather avoidance refile':'Dispatch direct-route refile'),
+    createdAt:t,
+    hazards,
+    metadata:{source:'dispatch_route_coordination'}
+  });
+  if(!revision) return {ok:false,message:'The route could not be revised.'};
+  const delta=Math.round(Number(revision.estimatedTimeDeltaMin)||0);
+  if(delta>0){
+    if(flightHasDeparted(flight,t)) flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,delta);
+    else flight.airspaceDelayMin=Math.max(Number(flight.airspaceDelayMin)||0,delta);
+    flight.airspaceConstraintLabel=mode==='weather_detour'?'Dispatch weather avoidance route':'Dispatch route refile';
+  }else if(delta<0&&flightHasDeparted(flight,t)){
+    flight.enrouteRecoveryMin=Math.max(Number(flight.enrouteRecoveryMin)||0,Math.abs(delta));
+  }
+  let amount=0;
+  if(typeof recordRecoveryCostEvent==='function'){
+    amount=Math.max(300,Math.round((Math.abs(delta)*40+500)/100)*100);
+    recordRecoveryCostEvent({
+      flight,category:'dispatch',kind:mode,amount,
+      airport:flight.from,
+      description:`${flight.id}: ${revision.reason}`
+    });
+  }
+  const effect=delta>0?`+${delta} min`:delta<0?`${delta} min`:'no time change';
+  return {ok:true,message:`${flight.id}: route revision recorded (${effect}).`,revision,amount};
+}
+
+function coordinateDispatchRouteRevision(flightId,mode='direct'){
+  const flight=state.flights.find(item=>item.id===flightId&&!item.cancelled);
+  if(!flight) return toast('Select an active flight first.');
+  if(dispatchRouteCoordinationRequiresResponse(flight)){
+    return requestDispatchRouteCoordination(flight,{action:'route_revision',mode,reason:mode==='weather_detour'?'Dispatch weather avoidance refile':'Dispatch direct-route refile'});
+  }
+  const result=applyDispatchRouteRevisionNow(flight,mode);
+  if(!result.ok) return toast(result.message);
+  return finishDispatchRouteCoordination(flight,result.message);
+}
+
+function dispatchRouteCoordinationAccepted(request,flight){
+  const roll=stableFraction(`${request.id}:response`);
+  const deniedLimit=request.action==='destination' ? .12 : .16;
+  if(roll<deniedLimit) return {accepted:false,status:'denied',outcome:'Flight deck / ATC did not accept the requested plan.'};
+  if(request.action==='route_revision'&&roll<.32) return {accepted:true,status:'partial',outcome:'Flight deck / ATC accepted a limited route improvement.'};
+  return {accepted:true,status:'accepted',outcome:'Flight deck / ATC accepted the requested plan.'};
+}
+
+function processDispatchRouteCoordinationRequests(t=simNow()){
+  let changed=false;
+  for(const flight of state.flights||[]){
+    const request=flight.dispatchRouteRequest;
+    if(!request||request.status!=='pending'||t<request.respondsAt) continue;
+    const response=dispatchRouteCoordinationAccepted(request,flight);
+    if(!response.accepted){
+      flight.dispatchRouteRequest={...request,status:response.status,completedAt:t,outcome:response.outcome};
+      changed=true;
+      continue;
+    }
+    const result=request.action==='destination'
+      ? applyDispatchDestinationPlanNow(flight,request.airport,{mode:request.mode,reason:request.reason})
+      : applyDispatchRouteRevisionNow(flight,request.mode,{reason:request.reason,t});
+    flight.dispatchRouteRequest={
+      ...request,
+      status:result.ok?response.status:'unusable',
+      completedAt:t,
+      outcome:result.ok?response.outcome:result.message,
+      appliedRevisionId:result.revision?.id||'',
+      appliedCost:result.amount||0
+    };
+    changed=true;
+  }
+  return changed;
 }
 
 function prioritizeFuel(flightId){
@@ -2724,7 +2868,7 @@ function recoveryPlansForFlight(flight){
     flight:{...flight,actualDeparture:flightActualDeparture(flight)},
     downstreamFlights:downstreamFlights.map(item=>({...item,actualDeparture:flightActualDeparture(item)})),
     connections:connectionStatusForFlight(flight),
-    spareAvailable:aircraftRecoveryNeeded&&incidentReplacementCandidates(flight).length>0
+    spareAvailable:aircraftRecoveryNeeded&&problemReplacementCandidates(flight).length>0
   });
   const duty=crewDutyForFlight(flight);
   if(!duty.legal){
@@ -2764,22 +2908,12 @@ function applyRecoveryPlan(flightId,planId){
     acknowledgeFlightIssue(flight.id); return;
   }
   if(planId==='augment-crew'){
-    flight.crewAugmented=true;
-    const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
-    const family=Management.aircraftFamily(aircraft.model);
-    for(const role of ['captains','firstOfficers']){
-      const missing=Math.max(0,2-qualifiedStaffAt(flight.from,role,family));
-      if(missing) requestPersonnelResource(role,flight.from,missing,family);
-    }
-    const cabinRequired=Math.max(2,Math.ceil(cabinSeatCount(aircraft)/50)*2);
-    const cabinMissing=Math.max(0,cabinRequired-staffAt(flight.from,'cabinCrew'));
-    if(cabinMissing) requestPersonnelResource('cabinCrew',flight.from,cabinMissing);
-    flight.recoveryAction='Augmented operating crew assigned';
+    return requestCrewAssignment(flightId,{mode:'augment',roles:CREW_ROLES,source:'reserve'});
   }else if(planId==='expedite'){
     flight.handlingDelayMin=Math.max(0,(flight.handlingDelayMin||0)-15);
     flight.recoveryAction='Ground resources prioritized';
   }else if(planId==='use-spare'){
-    const spare=incidentReplacementCandidates(flight)[0];
+    const spare=problemReplacementCandidates(flight)[0];
     if(!spare) return toast('No eligible spare remains available.');
     if(flight.serviceId){ substituteSelectedRotation(flight.id,spare.id); return; }
     flight.aircraftId=spare.id; clearAircraftSpecificDelay(flight);
@@ -2792,9 +2926,9 @@ function applyRecoveryPlan(flightId,planId){
 
 function flightIssueKey(f){
   return [f.staffingBlocked,f.maintenanceBlocked,f.positioningBlocked,f.slotMissed,f.technicalDelayMin,f.handlingDelayMin,
-    f.manualDelayMin,f.weatherDelayMin,f.liveWeatherDelayMin,f.incidentDelayMin,f.airportDelayMin,f.airspaceDelayMin,f.taxiOutDelayMin,f.taxiInDelayMin,f.nightRestrictionDelayMin,f.nightRestrictionConflictDelayMin,f.propagatedDelayMin,f.slotDelayMin,f.enrouteDelayMin,
+    f.manualDelayMin,f.weatherDelayMin,f.liveWeatherDelayMin,f.problemDelayMin,f.airportDelayMin,f.airspaceDelayMin,f.taxiOutDelayMin,f.taxiInDelayMin,f.nightRestrictionDelayMin,f.nightRestrictionConflictDelayMin,f.propagatedDelayMin,f.slotDelayMin,f.enrouteDelayMin,
     f.connectionCriticalPax,f.connectionAtRiskPax,f.connectionMissedPax,f.crewAugmented,
-    openIncidentsForFlight(f.id).map(incident=>incident.id).join(',')].join(':');
+    openProblemsForFlight(f.id).map(problem=>problem.id).join(',')].join(':');
 }
 
 function requestUiRefresh(...views){
@@ -2859,106 +2993,6 @@ function maintenanceSupportOptions(airportCode,aircraft=null,t=simNow()){
     })
     .filter(Boolean)
     .sort((a,b)=>a.km-b.km||b.score-a.score);
-}
-
-function mobileMaintenanceTeamPlan(incident,t=simNow()){
-  const flight=state.flights.find(item=>item.id===incident?.flightId&&!item.cancelled);
-  const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
-  const airport=incident?.context?.airport||flight?.from||aircraft?.location;
-  if(!flight||!aircraft||!AIRPORTS[airport]) return {available:false,reason:'The affected aircraft or airport is no longer available.'};
-  const candidates=maintenanceSupportOptions(airport,aircraft,t).filter(item=>item.airport!==airport);
-  if(!candidates.length) return {available:false,reason:`No maintenance-capable station can dispatch a mobile team to ${airport}.`};
-  const source=candidates[0];
-  const responseMin=Math.round(75+source.km/650*60);
-  const cost=Math.round(3200+source.km*6+(MODELS[aircraft.model]?.seats||120)*18);
-  return {
-    available:true,aircraft,flight,airport,source:source.airport,sourceLabel:source.label,
-    responseMin,cost,arrivesAt:t+responseMin*MIN,
-    reason:`Mobile team from ${source.airport} can reach ${airport} in about ${responseMin} minutes.`
-  };
-}
-
-function applyMobileMaintenanceTeam(incident){
-  const plan=mobileMaintenanceTeamPlan(incident);
-  if(!plan.available) return toast(plan.reason);
-  plan.aircraft.mobileMaintenanceAirport=plan.airport;
-  plan.aircraft.mobileMaintenanceAvailableAt=plan.arrivesAt;
-  plan.aircraft.mobileMaintenanceUntil=plan.arrivesAt+8*HOUR;
-  plan.aircraft.mobileMaintenanceSource=plan.source;
-  plan.flight.economics??={ticketRevenue:plan.flight.revenue||0};
-  plan.flight.economics.recoveryOps=(Number(plan.flight.economics.recoveryOps)||0)+plan.cost;
-  refreshEconomicsTotals(plan.flight);
-  postTransaction(-plan.cost,'Mobile maintenance',`${plan.aircraft.tail} team ${plan.source} → ${plan.airport}`,plan.flight.id);
-  return plan;
-}
-
-function maintenanceFerryPlanState(incident,t=simNow()){
-  const flight=state.flights.find(item=>item.id===incident?.flightId&&!item.cancelled);
-  const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
-  const from=incident?.context?.airport||flight?.from||aircraft?.location;
-  if(!flight||!aircraft||!AIRPORTS[from]) return {ready:false,reason:'The affected aircraft or airport is no longer available.'};
-  if(incident?.technicalContext?.deferAllowed===false||aircraft.defectUntil>t){
-    return {ready:false,flight,aircraft,from,to:'',reason:'This aircraft is not legal to ferry until Maintenance Control clears a ferry permit or sends support to the aircraft.'};
-  }
-  const capable=maintenanceSupportOptions(from,aircraft,t).filter(item=>item.airport!==from);
-  if(!capable.length) return {ready:false,reason:`No maintenance-capable airport is available for ${aircraft.tail}.`};
-  const ferry=(state.flights||[]).find(item=>
-    item.flightType==='ferry'&&item.aircraftId===aircraft.id&&!item.cancelled&&!item.settled&&
-    item.from===from&&capable.some(candidate=>candidate.airport===flightOperationalDestination(item))&&
-    flightActualDeparture(item)>=t-5*MIN
-  );
-  if(!ferry){
-    return {
-      ready:false,aircraft,flight,from,to:capable[0].airport,
-      reason:`Create a ferry flight from ${from} to a maintenance-capable station, for example ${capable[0].airport}.`
-    };
-  }
-  return {ready:true,aircraft,flight,from,to:flightOperationalDestination(ferry),ferry,reason:`${ferry.id} positions ${aircraft.tail} to maintenance support at ${flightOperationalDestination(ferry)}.`};
-}
-
-function maintenanceResourceContextForFlight(flight,t=simNow()){
-  if(!flight||flight.cancelled||flight.settled||flight.departureLogged||flight.flightType==='ferry') return null;
-  const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
-  if(!aircraft) return null;
-  const status=Management.maintenanceStatus(aircraft,t);
-  const postflight=postflightTechnicalContextForFlight(flight,t);
-  const maintenanceNeeded=Boolean(
-    status?.grounding||
-    aircraft.defectUntil>t||
-    postflight?.reason==='scheduled maintenance due after inbound'||
-    (postflight?.active&&postflight.delayMin>=45)
-  );
-  if(!maintenanceNeeded) return null;
-  const support=maintenanceSupportAtAirport(flight.from,aircraft,t);
-  if(support.available) return null;
-  return {
-    sourceId:flight.id,
-    aircraftId:aircraft.id,
-    tail:aircraft.tail,
-    airport:flight.from,
-    reason:aircraft.defectReason||postflight?.reason||status?.label||'Maintenance required',
-    supportLabel:support.label,
-    active:true
-  };
-}
-
-function createMaintenanceResourceIncidentForAircraft(aircraft,airport,context={}){
-  const flight=(state.flights||[]).filter(item=>
-    item.aircraftId===aircraft.id&&!item.cancelled&&!item.settled&&!item.departureLogged&&item.from===airport
-  ).sort((a,b)=>flightActualDeparture(a)-flightActualDeparture(b)||a.id.localeCompare(b.id))[0];
-  if(!flight) return null;
-  const incidentContext={
-    sourceId:`${aircraft.id}:${airport}:maintenance-resource`,
-    aircraftId:aircraft.id,tail:aircraft.tail,airport,
-    reason:context.reason||aircraft.defectReason||'Maintenance required',
-    supportLabel:context.supportLabel||maintenanceSupportAtAirport(airport,aircraft).label,
-    active:true
-  };
-  return createIncident('maintenance_resource_unavailable',flight,{
-    detectedAt:simNow(),source:'derived',
-    sourceKey:`derived:maintenance_resource_unavailable:${aircraft.id}:${airport}`,
-    context:incidentContext
-  });
 }
 
 function requestAircraft(modelName,cabin=defaultCabin(modelName),location=state.home){

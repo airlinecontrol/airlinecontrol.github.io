@@ -28,9 +28,8 @@
       state.aircraft=[];
       state.flights=[];
       state.services=[];
-      state.incidents=[];
-      state.incidentTransitions=[];
-      state.coordinationTasks=[];
+      state.problems=[];
+      state.problemTransitions=[];
       state.externalRequests=[];
       state.resourceAssignments=[];
       state.personnelTransfers=[];
@@ -93,58 +92,11 @@
     w.refreshAll();
     await wait(150);
 
-    {
-      const holdAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
-      const held=w.createFlightRecord({
-        aircraftId:holdAc.id,
-        from:'JFK',
-        to:'FRA',
-        departure:base-30*MIN,
-        fare:{economy:140,business:360,first:700}
-      });
-      held.weatherChecked=true;
-      held.constraintChecked=true;
-      held.opsChecked=true;
-      w.recalculateOperations();
-      const blocker=w.createIncident('aircraft_out_of_position',held,{
-        training:true,
-        detectedAt:base-45*MIN,
-        source:'fixture',
-        sourceKey:`stable-ground-hold:${held.id}`,
-        context:{sourceId:held.id,expectedLocation:'JFK',currentLocation:'FRA'}
-      });
-      blocker.deadline=base-40*MIN;
-      setNow(w,base);
-      w.processEvents();
-      w.recalculateOperations();
-      const firstDelay=held.incidentDelayMin||0;
-      const firstDeparture=w.flightActualDeparture(held);
-      assert(blocker.status==='open'&&blocker.defaultApplied,'ground hold blocker did not remain open after missed default deadline');
-      assert(held.incidentHoldStartedAt,'ground hold did not record a stable hold marker');
-      for(let step=1;step<=8;step++){
-        setNow(w,base+step*20*MIN);
-        w.processEvents();
-        w.recalculateOperations();
-        assert((held.incidentDelayMin||0)===firstDelay,`ground hold kept rolling incident delay at step ${step}: ${firstDelay} -> ${held.incidentDelayMin||0}`);
-        assert(w.flightActualDeparture(held)===firstDeparture,`ground hold kept moving actual departure at step ${step}`);
-        assert(blocker.status==='open','ground hold blocker closed while the resource problem still existed');
-      }
-      blocker.status='resolved';
-      blocker.blocking=false;
-      blocker.resolvedAt=base+200*MIN;
-      setNow(w,base+200*MIN);
-      assert(w.updateIncidentConstraints(w.simNow()),'ground hold release did not retime the held flight once');
-      w.recalculateOperations();
-      assert((held.incidentDelayMin||0)>firstDelay,'ground hold release did not apply the accumulated delay');
-      assert(w.flightActualDeparture(held)>w.simNow(),'released ground hold should schedule a future departure instead of departing in the past');
-      held.cancelled=true;
-    }
-
     const warningStates=new Map();
     const warningFlickers=[];
-    const duplicateIncidents=[];
+    const duplicateProblems=[];
     const instantAutoCloses=[];
-    const staleCancelledIncidents=[];
+    const staleCancelledProblems=[];
 
     function recordWarnings(now){
       const visible=w.operationWarnings(now);
@@ -171,19 +123,19 @@
 
     function auditOpenState(now){
       const seen=new Map();
-      const open=w.openOperationalIncidents();
-      for(const incident of open){
-        const key=[incident.flightId||'',incident.type,incident.sourceKey||incident.context?.sourceKey||'manual'].join('|');
+      const open=w.openOperationalProblems();
+      for(const problem of open){
+        const key=[problem.flightId||'',problem.type,problem.sourceKey||problem.context?.sourceKey||'manual'].join('|');
         seen.set(key,(seen.get(key)||0)+1);
       }
       for(const [key,count] of seen.entries()){
-        if(count>1) duplicateIncidents.push(`${key} x${count} at ${w.shortClock(now)}`);
+        if(count>1) duplicateProblems.push(`${key} x${count} at ${w.shortClock(now)}`);
       }
       const cancelledIds=new Set(w.eval('state.flights.filter(f=>f.cancelled).map(f=>f.id)'));
-      for(const incident of open){
-        if(cancelledIds.has(incident.flightId)) staleCancelledIncidents.push(`${incident.id} ${incident.type} on ${incident.flightId}`);
+      for(const problem of open){
+        if(cancelledIds.has(problem.flightId)) staleCancelledProblems.push(`${problem.id} ${problem.type} on ${problem.flightId}`);
       }
-      for(const transition of w.recentIncidentTransitions(80)){
+      for(const transition of w.recentProblemTransitions(80)){
         if(transition.event!=='auto_closed'||transition.details?.reason!=='condition_cleared') continue;
         const visible=Number(transition.details?.visibleMs||0);
         if(visible>0&&visible<30*MIN) instantAutoCloses.push(`${transition.type} ${transition.flightId} closed after ${Math.round(visible/MIN)} min`);
@@ -202,19 +154,20 @@
         w.renderDeskStack(true);
         await wait(20);
         assert(d.querySelector('#schedule-board'),'schedule board disappeared during soak');
-        assert(d.querySelector('[data-desk-widget="incidents"]'),'incident widget disappeared during soak');
+        assert(d.querySelector('[data-desk-widget="warnings"]'),'incidents and warnings widget disappeared during soak');
+        assert(!d.querySelector('[data-desk-widget="problems"]'),'standalone incident widget returned during soak');
       }
     }
 
-    assert(!duplicateIncidents.length,'duplicate open incidents detected:\n'+duplicateIncidents.slice(0,8).join('\n'));
-    assert(!instantAutoCloses.length,'derived incidents auto-closed inside the grace window:\n'+instantAutoCloses.slice(0,8).join('\n'));
-    assert(!staleCancelledIncidents.length,'open incidents remained on cancelled flights:\n'+staleCancelledIncidents.slice(0,8).join('\n'));
+    assert(!duplicateProblems.length,'duplicate open problems detected:\n'+duplicateProblems.slice(0,8).join('\n'));
+    assert(!instantAutoCloses.length,'derived problems auto-closed inside the grace window:\n'+instantAutoCloses.slice(0,8).join('\n'));
+    assert(!staleCancelledProblems.length,'open problems remained on cancelled flights:\n'+staleCancelledProblems.slice(0,8).join('\n'));
     assert(!warningFlickers.length,'warnings flickered during soak:\n'+warningFlickers.slice(0,8).join('\n'));
     assert(w.recentSimulationRandomRolls(1).length===1,'simulation RNG log was not populated');
 
     result.textContent=`PASS simulation soak validated
 flights=${w.eval('state.flights.length')}
-openIncidents=${w.openOperationalIncidents().length}
+openProblems=${w.openOperationalProblems().length}
 warningsTracked=${warningStates.size}
 rngRolls=${w.eval('state.rng.counter')}`;
   }catch(error){

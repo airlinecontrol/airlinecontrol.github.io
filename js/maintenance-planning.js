@@ -23,13 +23,13 @@ function maintenancePlanConflict(ac,plan){
     .sort((a,b)=>flightActualDeparture(a)-flightActualDeparture(b))[0]||null;
 }
 
-function cancelMaintenanceAffectedFlights(ac,plan,{preserveIncidentId='',reason=''}={}){
+function cancelMaintenanceAffectedFlights(ac,plan,{preserveProblemId='',reason=''}={}){
   if(!ac||!plan) return [];
   const affected=state.flights
     .filter(f=>f.aircraftId===ac.id&&!f.cancelled&&!f.settled&&!f.departureLogged&&flightActualArrival(f)>plan.start&&flightActualDeparture(f)<plan.end)
     .sort((a,b)=>flightActualDeparture(a)-flightActualDeparture(b)||a.id.localeCompare(b.id));
   for(const flight of affected){
-    applyFlightCancellation(flight,reason||plan.reason||plan.label||'Scheduled maintenance check',{preserveIncidentId});
+    applyFlightCancellation(flight,reason||plan.reason||plan.label||'Scheduled maintenance check',{preserveProblemId});
     flight.maintenanceBlocked=false;
     flight.maintenanceDelayMin=0;
   }
@@ -41,7 +41,7 @@ function defaultMaintenanceStart(acId,options={}){
   return (ac&&earliestMaintenancePlan(ac,options)?.start)||simNow()+2*HOUR;
 }
 
-function scheduleMaintenanceCheckForAircraft(acId,start,{skipConfirm=false,reason='',allowFlightConflict=false,preserveIncidentId='',allowUnsupportedMaintenance=false,workType='scheduled_check',finding=null,melItems=[]}={}){
+function scheduleMaintenanceCheckForAircraft(acId,start,{skipConfirm=false,reason='',allowFlightConflict=false,preserveProblemId='',allowUnsupportedMaintenance=false,workType='scheduled_check',finding=null,melItems=[]}={}){
   const ac=state.aircraft.find(item=>item.id===acId);
   if(!ac) return;
   const maintenance=Management.maintenanceStatus(ac,simNow());
@@ -49,9 +49,7 @@ function scheduleMaintenanceCheckForAircraft(acId,start,{skipConfirm=false,reaso
   const requestedStart=Number.isFinite(start)?Math.max(simNow(),start):defaultMaintenanceStart(ac.id,{workType,finding,melItems});
   const support=maintenanceSupportAtAirport(ac.location,ac,requestedStart);
   if(!support.available&&!allowUnsupportedMaintenance){
-    const incident=createMaintenanceResourceIncidentForAircraft(ac,ac.location,{reason:reason||maintenance.label,supportLabel:support.label});
-    if(incident) toast(`${ac.tail} has no maintenance support at ${ac.location}. Resolve the maintenance-resource case first.`);
-    else toast(`${ac.tail} has no maintenance support at ${ac.location}. Move the aircraft or send a mobile maintenance team first.`);
+    toast(`${ac.tail} has no maintenance support at ${ac.location}. Move the aircraft to a supported station before scheduling the work.`);
     return null;
   }
   const plan=Management.maintenancePlan(ac,requestedStart,ac.location,MODELS[ac.model]?.seats||100,{workType,finding,melItems});
@@ -70,7 +68,7 @@ function scheduleMaintenanceCheckForAircraft(acId,start,{skipConfirm=false,reaso
   plan.reason=reason||plan.label||'Scheduled maintenance check';
   ac.maintenance.scheduled=plan;
   const cancelledFlights=allowFlightConflict
-    ? cancelMaintenanceAffectedFlights(ac,plan,{preserveIncidentId,reason:plan.reason})
+    ? cancelMaintenanceAffectedFlights(ac,plan,{preserveProblemId,reason:plan.reason})
     : [];
   updateMaintenanceConstraints(simNow());
   recalculateOperations();

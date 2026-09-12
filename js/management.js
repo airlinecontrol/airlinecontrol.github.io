@@ -337,7 +337,7 @@ window.AeroManagement = (() => {
     return changed;
   }
 
-  function flightReadiness({flight,aircraft,now,staffingShortages=[],fuelPlan=null,openIncidents=[]}){
+  function flightReadiness({flight,aircraft,now,staffingShortages=[],fuelPlan=null,openProblems=[]}){
     const departure=flight.actualDeparture??flight.departure;
     const maintenance=aircraft?maintenanceStatus(aircraft,now):null;
     const weather=weatherAt(flight.from,departure);
@@ -354,8 +354,8 @@ window.AeroManagement = (() => {
     add('slot','Departure slot',flight.slotMissed?'warn':'ready',flight.slotMissed?'Original slot missed; recovery slot assigned':'Planned slot protected');
     add('weather','Departure weather',weather.level==='severe'?'block':weather.level==='caution'?'warn':'ready',`${weather.conditions} · wind ${weather.windKph} km/h`);
     add('rotation','Inbound rotation',flight.propagatedDelayMin?'warn':'ready',flight.propagatedDelayMin?`Inbound rotation adds ${flight.propagatedDelayMin} minutes`:'Aircraft rotation connected');
-    add('incident','Open incidents',openIncidents.some(incident=>incident.blocking)?'block':openIncidents.length?'warn':'ready',
-      openIncidents.length?openIncidents.map(incident=>incident.title||incident.type).join(' · '):'No unresolved operational incidents');
+    add('problem','Open problems',openProblems.some(problem=>problem.blocking)?'block':openProblems.length?'warn':'ready',
+      openProblems.length?openProblems.map(problem=>problem.title||problem.type).join(' · '):'No unresolved operational problems');
     const score={ready:0,warn:1,block:2};
     const overall=gates.reduce((worst,gate)=>score[gate.status]>score[worst]?gate.status:worst,'ready');
     return {overall,gates,weather,maintenance};

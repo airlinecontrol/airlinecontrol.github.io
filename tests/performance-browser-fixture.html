@@ -22,7 +22,7 @@
     await loaded;
     const w=frame.contentWindow,d=frame.contentDocument;
     w.resetLocalSave?.();
-    w.eval('state.ops.automaticDisruptions=false; state.aircraft=[]; state.flights=[]; state.incidents=[]; state.coordinationTasks=[]; state.resourceRequests=[]; state.personnelTransfers=[]; state.services=[]; window.__perfState=state;');
+    w.eval('state.ops.automaticDisruptions=false; state.aircraft=[]; state.flights=[]; state.problems=[]; state.resourceRequests=[]; state.personnelTransfers=[]; state.services=[]; window.__perfState=state;');
 
     const MIN=60_000,HOUR=60*MIN;
     const airports=w.eval('Object.keys(AIRPORTS).filter(code=>AIRPORTS[code]?.lat&&AIRPORTS[code]?.lon)');
@@ -75,7 +75,7 @@
 
     for(let i=0;i<12;i++){
       const flight=w.__perfState.flights.find(item=>!item.cancelled&&item.departure>w.simNow()+i*HOUR);
-      if(flight) w.createIncident(i%2?'security_screening':'crew_sick',flight,{training:true,detectedAt:now+i*MIN});
+      if(flight) w.createProblem(i%2?'security_screening':'crew_sick',flight,{training:true,detectedAt:now+i*MIN});
     }
 
     const timings=[];

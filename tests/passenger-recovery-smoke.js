@@ -16,7 +16,7 @@ global.airportNightStatus=(airport,timestamp)=>{
   return {status:hour>=23||hour<5?'closed':'open'};
 };
 
-require('../js/incident-consequences.js');
+require('../js/recovery-costs.js');
 
 const dayFlight={
   id:'AS1',from:'LHR',to:'FRA',

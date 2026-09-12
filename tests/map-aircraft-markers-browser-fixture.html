@@ -40,8 +40,8 @@
     taxi.actualDeparture=taxi.departure;
     taxi.actualArrival=now+90*60_000;
     taxi.arrival=taxi.actualArrival;
-    const incident=w.createIncident('onboard_medical',critical,{training:true,detectedAt:now});
-    assert(incident?.severity==='critical','fixture critical incident was not created');
+    const problem=w.createProblem('onboard_medical',critical,{training:true,detectedAt:now});
+    assert(problem?.severity==='critical','fixture critical problem was not created');
 
     for(let i=0;i<60&&!w.__aeroMapReady;i++) await wait(100);
     w.updateMapData();
@@ -61,7 +61,7 @@
     assert(taxiMarker?.classList.contains('taxi'),'taxiing aircraft is not marked as taxiing');
     assert(w.currentAircraftPosition(taxiAc,now).status==='taxi_out','current aircraft position does not expose taxi-out state');
     assert(criticalMarker?.classList.contains('airborne'),'critical aircraft should still be airborne');
-    assert(criticalMarker?.classList.contains('critical'),'critical incident aircraft is not marked red-critical');
+    assert(criticalMarker?.classList.contains('critical'),'critical problem aircraft is not marked red-critical');
     const airborneColor=w.getComputedStyle(airborneMarker.querySelector('.plane-glyph')).color;
     const criticalColor=w.getComputedStyle(criticalMarker.querySelector('.plane-glyph')).color;
     assert(airborneColor.includes('255, 209, 102'),'airborne aircraft glyph is not yellow');

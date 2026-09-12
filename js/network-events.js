@@ -13,7 +13,7 @@
     {
       id:'eur-core-sector',
       eventType:'atc_sector_capacity',
-      incidentType:'network_atc_sector_capacity',
+      problemType:'network_atc_sector_capacity',
       label:'Central Europe sector capacity',
       reason:'Eurocontrol sector regulation',
       severity:'warning',
@@ -30,7 +30,7 @@
     {
       id:'us-ne-sector',
       eventType:'atc_sector_capacity',
-      incidentType:'network_atc_sector_capacity',
+      problemType:'network_atc_sector_capacity',
       label:'US Northeast sector capacity',
       reason:'FAA enroute sector metering',
       severity:'warning',
@@ -47,7 +47,7 @@
     {
       id:'nat-restricted',
       eventType:'airspace_closure',
-      incidentType:'network_airspace_closure',
+      problemType:'network_airspace_closure',
       label:'North Atlantic restricted airspace',
       reason:'Temporary oceanic restricted area',
       severity:'critical',
@@ -64,7 +64,7 @@
     {
       id:'gulf-restricted',
       eventType:'airspace_closure',
-      incidentType:'network_airspace_closure',
+      problemType:'network_airspace_closure',
       label:'Gulf restricted airspace',
       reason:'Temporary military airspace restriction',
       severity:'critical',
@@ -128,7 +128,7 @@
       source:'simulated_network',
       networkId:`${area.eventType}:${area.id}:${period.index}`,
       eventType:area.eventType,
-      incidentType:area.incidentType,
+      problemType:area.problemType,
       label:area.label,
       reason:area.reason,
       severity:area.severity||'warning',
@@ -151,7 +151,7 @@
         source:'convective_weather',
         networkId:`convective:${cell.id}`,
         eventType:'convective_weather',
-        incidentType:'network_convective_weather',
+        problemType:'network_convective_weather',
         label:cell.label||'Convective weather corridor',
         reason:`${cell.label||'Convective weather'} crossing route corridors`,
         severity:'critical',
@@ -231,7 +231,7 @@
 
   function networkEventAppliesToFlight(event,flight,t=simNow()){
     if(!event||!flight||flight.cancelled||flight.settled) return false;
-    if(flight.flightType==='ferry'&&event.incidentType==='network_convective_weather') return false;
+    if(flight.flightType==='ferry'&&event.problemType==='network_convective_weather') return false;
     const dep=typeof flightActualDeparture==='function'?flightActualDeparture(flight):flight.departure;
     const arr=typeof flightActualArrival==='function'?flightActualArrival(flight):flight.arrival;
     if(arr<t-15*MINUTE) return false;
@@ -247,9 +247,22 @@
       .sort((a,b)=>(typeof flightActualDeparture==='function'?flightActualDeparture(a):a.departure)-(typeof flightActualDeparture==='function'?flightActualDeparture(b):b.departure));
   }
 
+  function networkEventProblemRequired(event,affected,t=simNow()){
+    if(!event||!affected?.length) return false;
+    if(event.problemType==='network_atc_sector_capacity') return false;
+    if(event.problemType!=='network_convective_weather') return true;
+    const airborne=affected.some(flight=>typeof flightIsAirborne==='function'&&flightIsAirborne(flight,t));
+    const imminentDeparture=affected.some(flight=>{
+      if(typeof flightHasDeparted==='function'&&flightHasDeparted(flight,t)) return false;
+      const departure=typeof flightActualDeparture==='function'?flightActualDeparture(flight):flight.departure;
+      return departure>=t&&departure-t<=90*MINUTE;
+    });
+    return airborne||imminentDeparture;
+  }
+
   function eventSignature(event,affected){
     return [
-      event.id,event.networkId,event.incidentType,event.eventType,
+      event.id,event.networkId,event.problemType,event.eventType,
       Math.round(event.activeFrom/MINUTE),Math.round(event.activeUntil/MINUTE),
       event.delayMin,event.rerouteDelayMin,
       affected.map(flight=>flight.id).join(',')
@@ -306,7 +319,7 @@
     return changed;
   }
 
-  function incidentContextForEvent(event,affected,t){
+  function problemContextForEvent(event,affected,t){
     const ids=affected.map(flight=>flight.id);
     const airborne=affected.filter(flight=>typeof flightIsAirborne==='function'&&flightIsAirborne(flight,t)).length;
     const departures=affected.filter(flight=>!(typeof flightHasDeparted==='function'&&flightHasDeparted(flight,t))).length;
@@ -332,18 +345,18 @@
     };
   }
 
-  function findNetworkIncident(event){
-    const dedupeKey=`network:${event.incidentType}:${event.networkId||event.id}`;
-    const problems=state.problems||state.incidents||[];
-    return problems.find(incident=>incident.status==='open'&&incident.dedupeKey===dedupeKey)
-      ||problems.find(incident=>incident.status==='open'&&incident.type===event.incidentType&&incident.context?.networkId===(event.networkId||event.id));
+  function findNetworkProblem(event){
+    const dedupeKey=`network:${event.problemType}:${event.networkId||event.id}`;
+    const problems=state.problems||state.problems||[];
+    return problems.find(problem=>problem.status==='open'&&problem.dedupeKey===dedupeKey)
+      ||problems.find(problem=>problem.status==='open'&&problem.type===event.problemType&&problem.context?.networkId===(event.networkId||event.id));
   }
 
-  function upsertNetworkIncident(event,affected,t){
+  function upsertNetworkProblem(event,affected,t){
     if(!affected.length) return false;
     const primary=affected.find(flight=>typeof flightIsAirborne==='function'&&flightIsAirborne(flight,t))||affected[0];
-    const context=incidentContextForEvent(event,affected,t);
-    const existing=findNetworkIncident(event);
+    const context=problemContextForEvent(event,affected,t);
+    const existing=findNetworkProblem(event);
     if(existing){
       const previous=JSON.stringify(existing.context||null);
       const next=JSON.stringify(context);
@@ -356,54 +369,49 @@
       if(current!==desired){ existing.affectedFlightIds=context.affectedFlightIds.slice(); changed=true; }
       if(existing.conditionClearedAt){ existing.conditionClearedAt=0; changed=true; }
       existing.lastDetectedAt=t;
-      if(typeof ensureIncidentIdentityFields==='function') changed=ensureIncidentIdentityFields(existing,primary,context,t)||changed;
+      if(typeof ensureProblemIdentityFields==='function') changed=ensureProblemIdentityFields(existing,primary,context,t)||changed;
       if(changed&&typeof invalidateOperationalIndex==='function') invalidateOperationalIndex();
       return changed;
     }
-    if((state.problems||state.incidents||[]).some(incident=>
-      incident.status==='resolved'&&incident.type===event.incidentType&&incident.dedupeKey===`network:${event.incidentType}:${event.networkId||event.id}`
+    if((state.problems||state.problems||[]).some(problem=>
+      problem.status==='resolved'&&problem.type===event.problemType&&problem.dedupeKey===`network:${event.problemType}:${event.networkId||event.id}`
     )) return false;
-    const incident=(typeof createProblem==='function'?createProblem:createIncident)(event.incidentType,primary,{
+    const problem=(typeof createProblem==='function'?createProblem:createProblem)(event.problemType,primary,{
       detectedAt:t,
       source:'network',
       sourceKey:event.id,
       context
     });
-    if(!incident) return false;
-    incident.severity=event.severity||incident.severity;
-    incident.affectedFlightIds=context.affectedFlightIds.slice();
-    incident.airport='';
-    if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'network_event_attached',{eventId:event.id,affectedCount:affected.length});
+    if(!problem) return false;
+    problem.severity=event.severity||problem.severity;
+    problem.affectedFlightIds=context.affectedFlightIds.slice();
+    problem.airport='';
+    if(typeof traceProblemTransition==='function') traceProblemTransition(problem,'network_event_attached',{eventId:event.id,affectedCount:affected.length});
     return true;
   }
 
-  function closeClearedNetworkIncidents(activeNetworkIds,t){
+  function closeClearedNetworkProblems(activeNetworkIds,t){
     let changed=false;
-    for(const incident of state.problems||state.incidents||[]){
-      if(incident.status!=='open'||incident.scope?.kind!=='network') continue;
-      const id=incident.context?.networkId||incident.scope.subjectId;
+    for(const problem of state.problems||state.problems||[]){
+      if(problem.status!=='open'||problem.scope?.kind!=='network') continue;
+      const id=problem.context?.networkId||problem.scope.subjectId;
       if(activeNetworkIds.has(id)) continue;
-      if(typeof incidentHasUserActionStarted==='function'&&incidentHasUserActionStarted(incident)) continue;
-      const visibleSince=incident.firstVisibleAt||incident.detectedAt||t;
-      if(!incident.conditionClearedAt){
-        incident.conditionClearedAt=t;
-        if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'condition_clear_pending',{clearAfter:CLEAR_GRACE_MS});
+      const visibleSince=problem.firstVisibleAt||problem.detectedAt||t;
+      if(!problem.conditionClearedAt){
+        problem.conditionClearedAt=t;
+        if(typeof traceProblemTransition==='function') traceProblemTransition(problem,'condition_clear_pending',{clearAfter:CLEAR_GRACE_MS});
         changed=true;
         continue;
       }
-      if(t-Math.max(visibleSince,incident.conditionClearedAt)<CLEAR_GRACE_MS) continue;
-      incident.status='resolved';
-      incident.blocking=false;
-      incident.resolvedAt=t;
-      incident.autoClosedAt=t;
-      incident.autoCloseReason='network_event_cleared';
-      incident.automaticResolution=true;
-      incident.selectedAction='condition_cleared';
-      incident.outcome='The shared network constraint cleared before OCC action was needed.';
-      for(const task of (typeof incidentTasks==='function'?incidentTasks(incident.id):[])){
-        if(task.status!=='completed') task.status='cancelled';
-      }
-      if(typeof traceIncidentTransition==='function') traceIncidentTransition(incident,'auto_closed',{reason:'network_event_cleared'});
+      if(t-Math.max(visibleSince,problem.conditionClearedAt)<CLEAR_GRACE_MS) continue;
+      problem.status='resolved';
+      problem.blocking=false;
+      problem.resolvedAt=t;
+      problem.autoClosedAt=t;
+      problem.autoCloseReason='network_event_cleared';
+      problem.automaticResolution=true;
+      problem.outcome='The shared network constraint cleared before OCC action was needed.';
+      if(typeof traceProblemTransition==='function') traceProblemTransition(problem,'auto_closed',{reason:'network_event_cleared'});
       changed=true;
     }
     if(changed&&typeof invalidateOperationalIndex==='function') invalidateOperationalIndex();
@@ -417,7 +425,7 @@
       .filter(event=>event.status==='active'&&t>=event.activeFrom-CLEAR_GRACE_MS&&t<=event.activeUntil+CLEAR_GRACE_MS);
   }
 
-  function processNetworkOperationalIncidents(t=simNow()){
+  function processNetworkOperationalProblems(t=simNow()){
     let changed=false;
     const activeIds=new Set();
     const activeNetworkIds=new Set();
@@ -425,12 +433,14 @@
       const affected=affectedFlightsForNetworkEvent(event,t);
       if(affected.length<event.minAffected) continue;
       activeIds.add(event.id);
-      activeNetworkIds.add(event.networkId||event.id);
       if(syncNetworkEventState(event,affected,t)) changed=true;
-      if(upsertNetworkIncident(event,affected,t)) changed=true;
+      if(networkEventProblemRequired(event,affected,t)){
+        activeNetworkIds.add(event.networkId||event.id);
+        if(upsertNetworkProblem(event,affected,t)) changed=true;
+      }
     }
     if(expireNetworkEvents(activeIds,t)) changed=true;
-    if(closeClearedNetworkIncidents(activeNetworkIds,t)) changed=true;
+    if(closeClearedNetworkProblems(activeNetworkIds,t)) changed=true;
     return changed;
   }
 
@@ -479,16 +489,16 @@
     return Math.round((routeCost+delayCost)/100)*100;
   }
 
-  function applyNetworkEventAction(incident,action,{task=null,t=simNow()}={}){
-    const context=incident?.context||{};
+  function applyNetworkEventAction(problem,action,{task=null,t=simNow(),flightIds=null}={}){
+    const context=problem?.context||{};
     const event=normaliseEvent({
-      id:context.eventId||context.sourceId||incident?.id,
-      networkId:context.networkId||incident?.scope?.subjectId||context.eventId||incident?.id,
+      id:context.eventId||context.sourceId||problem?.id,
+      networkId:context.networkId||problem?.scope?.subjectId||context.eventId||problem?.id,
       eventType:context.eventType||'network',
-      incidentType:incident?.type||context.incidentType||'network_atc_sector_capacity',
-      label:context.label||global.AeroIncidentModel?.titleForType?.(incident?.type)||'Network event',
+      problemType:problem?.type||context.problemType||'network_atc_sector_capacity',
+      label:context.label||global.AeroProblemModel?.titleForType?.(problem?.type)||'Network event',
       reason:context.reason||'Network operational constraint',
-      severity:incident?.severity||'warning',
+      severity:problem?.severity||'warning',
       activeFrom:context.activeFrom||t,
       activeUntil:context.activeUntil||t+60*MINUTE,
       delayMin:context.delayMin||20,
@@ -496,9 +506,10 @@
       polygon:context.polygon||[]
     });
     if(!event) return {ok:false,reason:'Network event geometry is missing.'};
-    const affectedIds=new Set(incidentAffectedFlightIds(incident));
+    const affectedIds=new Set(problemAffectedFlightIds(problem));
+    const requestedIds=Array.isArray(flightIds)&&flightIds.length?new Set(flightIds):null;
     const flights=(state.flights||[])
-      .filter(flight=>affectedIds.has(flight.id)&&!flight.cancelled&&!flight.settled)
+      .filter(flight=>affectedIds.has(flight.id)&&(!requestedIds||requestedIds.has(flight.id))&&!flight.cancelled&&!flight.settled)
       .filter(flight=>networkEventAppliesToFlight(event,flight,t)||action==='hold_departures')
       .sort((a,b)=>(typeof flightActualDeparture==='function'?flightActualDeparture(a):a.departure)-(typeof flightActualDeparture==='function'?flightActualDeparture(b):b.departure));
     if(!flights.length) return {ok:false,reason:'No currently affected flights are available for this network plan.'};
@@ -518,7 +529,7 @@
     const averageDelay=Math.round(totalDelay/flights.length);
     const responseMin=Math.max(6,Math.round((task?.timing?.responseMin||0)||8+Math.min(18,flights.length*1.6)));
     const cost=networkActionCost(event,flights,action,totalDelay);
-    incident.networkOutcome={
+    problem.networkOutcome={
       action,
       label:labelForAction(action),
       affectedCount:flights.length,
@@ -528,8 +539,8 @@
       cost,
       appliedAt:t
     };
-    incident.coordinatedDelayMin=Math.max(Number(incident.coordinatedDelayMin)||0,averageDelay);
-    incident.networkRecoveryCost=cost;
+    problem.coordinatedDelayMin=Math.max(Number(problem.coordinatedDelayMin)||0,averageDelay);
+    problem.networkRecoveryCost=cost;
     return {
       ok:true,
       action,
@@ -544,9 +555,9 @@
     };
   }
 
-  function flightCoveredByActiveEvent(flight,t=simNow(),incidentType=''){
+  function flightCoveredByActiveEvent(flight,t=simNow(),problemType=''){
     return activeNetworkEvents(t).some(event=>
-      (!incidentType||event.incidentType===incidentType)&&networkEventAppliesToFlight(event,flight,t)
+      (!problemType||event.problemType===problemType)&&networkEventAppliesToFlight(event,flight,t)
     );
   }
 
@@ -556,9 +567,10 @@
     activeNetworkEvents,
     affectedFlightsForNetworkEvent,
     networkEventAppliesToFlight,
-    processNetworkOperationalIncidents,
+    networkEventProblemRequired,
+    processNetworkOperationalProblems,
     applyNetworkEventAction,
     flightCoveredByActiveEvent
   };
-  global.processNetworkOperationalIncidents=processNetworkOperationalIncidents;
+  global.processNetworkOperationalProblems=processNetworkOperationalProblems;
 })(typeof window!=='undefined'?window:globalThis);

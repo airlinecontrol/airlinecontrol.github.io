@@ -87,10 +87,7 @@
     assert(!/RISK|MISSED|NEW/.test(d.querySelector('[data-slot-flight="'+next.id+'"].slot-marker.planned.risk')?.textContent||''),'future slot impact marker should not show loud status text');
     assert(!d.querySelector('[data-slot-flight="'+next.id+'"].slot-marker.planned.missed'),'future slot impact was shown as already missed');
 
-    const roleIncident=w.createIncident('crew_sick',outbound,{training:true,detectedAt:w.simNow()});
-    roleIncident.affectedRole='captains';
-    assert(w.performOperationalTask(`${roleIncident.id}:crew-strategy`,'replace'),'role-specific replacement strategy failed');
-    assert(w.performOperationalTask(`${roleIncident.id}:crew-allocate`,'',{optionId:'FRA:captains'}),'role-specific crew allocation failed');
+    outbound.crewRoleSwaps={captains:{role:'captains',at:w.simNow(),reason:'Fixture captain replacement'}};
     w.recalculateOperations();
     w.refreshAll();
     await wait(180);
@@ -101,12 +98,24 @@
 
     w.settleSelectedFlight(ret.id);
     await wait(120);
-    d.querySelector('[data-desk-panel="personnel:crew-swap"]').click();
+    d.querySelector('[data-desk-panel="personnel:overview"]').click();
     await wait(120);
-    assert(d.querySelector('[data-crew-swap-flight="'+ret.id+'"]'),'personnel widget does not expose full crew swap for selected flight');
-    assert(d.querySelector('[data-crew-swap-flight="'+ret.id+'"]')?.textContent.includes('full'),'personnel widget swap action is not clearly marked as full crew');
-    assert(!d.querySelector('[data-crew-swap-flight="'+ret.id+'"]').disabled,'crew swap should be available with local LHR reserve crew');
-    d.querySelector('[data-crew-swap-flight="'+ret.id+'"]').click();
+    d.querySelector('[data-assign-crew-pool="LHR"]').click();
+    await wait(120);
+    const flightSelect=d.querySelector('[data-crew-assignment-flight]');
+    flightSelect.value=ret.id;flightSelect.dispatchEvent(new w.Event('change',{bubbles:true}));
+    await wait(80);
+    const mode=d.querySelector('[data-crew-assignment-mode]');
+    assert(mode,'personnel widget does not expose crew assignment');
+    mode.value='full';mode.dispatchEvent(new w.Event('change',{bubbles:true}));
+    assert(!d.querySelector('[data-request-crew-assignment]').disabled,'full swap should be available with local LHR reserves: '+d.querySelector('[data-crew-assignment-blocker]')?.textContent);
+    d.querySelector('[data-request-crew-assignment]').click();
+    const request=w.state.crewAssignments.at(-1);
+    assert(request&&request.status==='requested'&&!ret.crewDutySplit,'full swap must wait for reporting and briefing');
+    w.state.clock={realBase:Date.now(),simBase:request.readyAt,speed:0,paused:true};
+    w.processCrewAssignments(request.readyAt);
+    w.updateCrewAssignmentEffects(request.readyAt);
+    w.refreshAll();
     await wait(220);
 
     assert(ret.crewDutySplit===true,'crew swap did not mark the return flight as split');
