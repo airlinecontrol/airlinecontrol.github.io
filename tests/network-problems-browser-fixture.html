@@ -119,8 +119,14 @@
 
     w.refreshAll();
     await wait(120);
-    const caseText=d.querySelector(`[data-critical-incident="${problem.caseId||problem.id}"]`)?.textContent||'';
+    const caseCard=d.querySelector(`[data-critical-incident="${problem.caseId||problem.id}"]`);
+    const caseText=caseCard?.textContent||'';
     assert(caseText.includes('Affected flights')&&caseText.includes(first.id)&&caseText.includes(second.id),'problem card does not show affected network flights');
+    assert(caseCard?.querySelector('[data-problem-recovery-outlook]'),'time-based network problem does not show a recovery outlook');
+    assert(!d.querySelector('[data-desk-widget="network"]'),'Read-only network widget still duplicates attention');
+    assert(!d.querySelector('[data-network-constraint="NET-FIXTURE-AIRSPACE"]'),'Network case is repeated as an informational constraint');
+    assert(!d.querySelector('[data-network-constraint="NET-FIXTURE-SECTOR"]'),'Network warning is repeated as an informational constraint');
+    assert(/Recovery outlook/i.test(caseText)&&/remaining/i.test(caseText),'network recovery outlook does not show its projected remaining duration');
 
     for(let i=0;i<80&&!w.__aeroMapReady;i++) await wait(100);
     assert(w.__aeroMapReady,'map did not finish initializing before network fixture checks');

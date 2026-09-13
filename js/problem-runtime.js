@@ -8,18 +8,13 @@ function problemById(problemId){
   return problemCollection().find(item=>item.id===problemId)||null;
 }
 
-function openOperationalProblems(){
-  return problemCollection().filter(problem=>problem.status==='open');
+function openOperationalProblems(t=simNow()){
+  return operationalIndex(t).openProblems;
 }
 
-function openProblemsForFlight(flightId){
+function openProblemsForFlight(flightId,t=simNow()){
   if(!flightId) return [];
-  return openOperationalProblems().filter(problem=>{
-    const ids=typeof problemAffectedFlightIds==='function'
-      ? problemAffectedFlightIds(problem)
-      : [problem.flightId].filter(Boolean);
-    return ids.includes(flightId);
-  });
+  return operationalIndex(t).openProblemsByFlight.get(flightId)||[];
 }
 
 function defaultPolicyForProblem(problem){
@@ -28,8 +23,8 @@ function defaultPolicyForProblem(problem){
 
 const PROBLEM_DEFAULT_STATE_VERSION=1;
 
-function problemAffectedFlightsForRuntime(problem){
-  const ids=typeof problemAffectedFlightIds==='function'
+function problemAffectedFlightsForRuntime(problem,t=simNow()){
+  const ids=problemAirportTiming(problem)?timedAirportProblemFlightIds(problem,t):typeof problemAffectedFlightIds==='function'
     ? problemAffectedFlightIds(problem)
     : [problem?.flightId].filter(Boolean);
   return ids.map(id=>state.flights.find(flight=>flight.id===id)).filter(Boolean);
@@ -50,6 +45,12 @@ function problemPendingUserResponse(flight,t=simNow()){
   if(routeRequest?.status==='pending') add(routeRequest.label||'Dispatch coordination response',routeRequest.respondsAt,'dispatch');
   const recoveryRequest=flight.enrouteRecoveryRequest;
   if(recoveryRequest?.status==='pending') add('En-route recovery response',recoveryRequest.respondsAt,'dispatch');
+  const holding=flight.holding;
+  if(holding?.status==='pending') add('Holding-plan response',holding.respondsAt,'dispatch');
+  else if(holding?.status==='active'){
+    const holdUntil=[holding.expectedReleaseAt,holding.fuelDecisionAt].map(Number).filter(Number.isFinite).sort((a,b)=>a-b)[0];
+    if(holdUntil) add('Active holding plan',holdUntil,'dispatch');
+  }
   for(const assignment of state.crewAssignments||[]){
     const flightIds=assignment.flightIds||[assignment.flightId];
     if(flightIds.includes(flight.id)&&typeof crewAssignmentPending==='function'&&crewAssignmentPending(assignment)){
@@ -73,7 +74,7 @@ function problemDefaultModeForFlight(problem,flight,t=simNow()){
       ?.find(outcome=>outcome.id===response?.outcomeId)?.fallbackMode;
     return response?.fallbackMode||declared||'flight_deck_response';
   }
-  return policy?.mode||'flight_deck_safe';
+  return policy?.airborneMode||'flight_deck_safe';
 }
 
 function problemDefaultState(problem,t=simNow(),{create=false}={}){
@@ -87,7 +88,7 @@ function problemDefaultState(problem,t=simNow(),{create=false}={}){
 
 function problemDefaultDeadline(problem,flight,entry,t=simNow()){
   const policy=defaultPolicyForProblem(problem)||{};
-  const visibleAt=Number(problem.firstVisibleAt)||Number(problem.detectedAt)||t;
+  const visibleAt=Math.max(Number(entry.exposedAt)||0,Number(problem.firstVisibleAt)||Number(problem.detectedAt)||t);
   const minimumVisibleUntil=visibleAt+Math.max(10,Number(policy.minimumVisibleMin)||10)*MIN;
   const airborne=flightIsAirborne(flight,t);
   let baseDeadline=airborne
@@ -118,7 +119,7 @@ function problemDefaultEntry(problem,flight,t=simNow(),{create=false}={}){
   const unattended=problemDefaultState(problem,t,{create});
   if(!unattended||!flight) return null;
   const entries=unattended.flights??={};
-  const entry=entries[flight.id]??(create?entries[flight.id]={flightId:flight.id,status:'pending',deferredUntil:0,appliedAt:0,outcome:''}:null);
+  const entry=entries[flight.id]??(create?entries[flight.id]={flightId:flight.id,exposedAt:t,status:'pending',deferredUntil:0,appliedAt:0,outcome:''}:null);
   if(!entry) return null;
   const timing=problemDefaultDeadline(problem,flight,entry,t);
   entry.mode=problemDefaultModeForFlight(problem,flight,t);
@@ -131,7 +132,7 @@ function problemDefaultEntry(problem,flight,t=simNow(),{create=false}={}){
 
 function problemDefaultConsequence(problem,t=simNow()){
   const unattended=problemDefaultState(problem,t);
-  const entries=problemAffectedFlightsForRuntime(problem)
+  const entries=problemAffectedFlightsForRuntime(problem,t)
     .filter(flight=>!flight.cancelled&&!flight.settled&&!flightHasCompleted(flight,t))
     .map(flight=>unattended?.flights?.[flight.id])
     .filter(entry=>entry&&entry.status!=='applied')
@@ -214,10 +215,22 @@ function applyProblemDefault(problem,flight,entry,t=simNow()){
 
 function processProblemDefaults(problem,t=simNow()){
   if(!problem||problem.status!=='open') return false;
+  const affectedFlights=problemAffectedFlightsForRuntime(problem,t);
+  const affectedIds=new Set(affectedFlights.map(flight=>flight.id));
+  let exposureChanged=false;
+  if(problemAirportTiming(problem)||problem.scope?.kind==='aircraft'){
+    for(const [id,entry] of Object.entries(problem.unattended?.flights||{})){
+      if(entry.status!=='applied'&&!affectedIds.has(id)){
+        delete problem.unattended.flights[id];
+        exposureChanged=true;
+      }
+    }
+  }
+  if(!affectedFlights.length) return exposureChanged;
   const before=JSON.stringify({firstVisibleAt:problem.firstVisibleAt,deadline:problem.deadline,unattended:problem.unattended});
   problemDefaultState(problem,t,{create:true});
   const entries=[];
-  for(const flight of problemAffectedFlightsForRuntime(problem)){
+  for(const flight of affectedFlights){
     if(flight.cancelled||flight.settled||flightHasCompleted(flight,t)) continue;
     const entry=problemDefaultEntry(problem,flight,t,{create:true});
     if(!entry||entry.status==='applied') continue;
@@ -233,12 +246,12 @@ function processProblemDefaults(problem,t=simNow()){
       entry.nextAttemptAt=t+5*MIN;
     }
   }
-  const pendingEntries=Object.values(problem.unattended?.flights||{}).filter(entry=>entry.status!=='applied'&&Number(entry.deadline));
+  const pendingEntries=Object.values(problem.unattended?.flights||{}).filter(entry=>affectedIds.has(entry.flightId)&&entry.status!=='applied'&&Number(entry.deadline));
   if(pendingEntries.length) problem.deadline=Math.min(...pendingEntries.map(entry=>entry.deadline));
   if(AeroProblemModel.scopeForType(problem.type)==='flight'&&entries.length&&entries.every(entry=>entry.status==='applied')){
     closeProblem(problem,t,'unattended_default',entries.map(item=>item.outcome).filter(Boolean).join(' '));
   }
-  return before!==JSON.stringify({firstVisibleAt:problem.firstVisibleAt,deadline:problem.deadline,unattended:problem.unattended});
+  return exposureChanged||before!==JSON.stringify({firstVisibleAt:problem.firstVisibleAt,deadline:problem.deadline,unattended:problem.unattended});
 }
 
 function problemDiversionDurationMs(problem,flight,aircraft,alternate){
@@ -281,9 +294,15 @@ function applyOperationalDiversionDestination(flight,problem,aircraft,alternate,
 
 function applyArrivalInspectionFollowUp(problem,flight){
   if(!problem||!AeroProblemModel.arrivalInspectionOnClose(problem.type)||!flight) return false;
+  if(problem.arrivalInspectionRecorded) return false;
+  problem.arrivalInspectionRecorded=true;
   flight.arrivalInspectionRequired=true;
+  flight.arrivalInspectionVersion=(flight.arrivalInspectionVersion||0)+1;
   const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
-  if(aircraft) aircraft.arrivalInspectionRequired=true;
+  if(aircraft){
+    aircraft.arrivalInspectionRequired=true;
+    aircraft.arrivalInspectionVersion=(aircraft.arrivalInspectionVersion||0)+1;
+  }
   return true;
 }
 
@@ -304,9 +323,23 @@ function closeProblem(problem,t,reason,outcome,{automatic=true}={}){
   problem.autoClosedAt=automatic?t:problem.autoClosedAt||0;
   problem.autoCloseReason=automatic?reason:problem.autoCloseReason||'';
   if(outcome) problem.outcome=outcome;
+  if(typeof observeDerivedProblemClosure==='function') observeDerivedProblemClosure(problem,reason);
   if(typeof resolveProblemImpacts==='function') resolveProblemImpacts(problem,t,'handled');
   if(typeof traceProblemTransition==='function') traceProblemTransition(problem,automatic?'auto_closed':'closed',{reason,outcome:problem.outcome||''});
   return true;
+}
+
+function reconcileProblemsAfterFlightRemoval(flightIds,t=simNow(),{preserveProblemId=''}={}){
+  const removed=new Set(flightIds);
+  for(const problem of state.problems||[]){
+    if(problem.status!=='open'||problem.id===preserveProblemId) continue;
+    problem.affectedFlightIds=(problem.affectedFlightIds||[]).filter(id=>!removed.has(id));
+    // The triggering flight does not own the lifetime of a shared constraint.
+    if(problem.scope?.kind==='flight'&&removed.has(problem.flightId)){
+      closeProblem(problem,t,'flight_removed','The affected flight was cancelled or removed from the programme.');
+    }
+  }
+  invalidateOperationalIndex();
 }
 
 function allAffectedFlightsCancelledOrGone(problem){
@@ -332,12 +365,16 @@ function problemContextStillActive(helperName,flight,t){
   return Boolean(helper(flight,t)?.active);
 }
 
-function aircraftStillBlockedForProblem(problem,flight,t){
-  const aircraft=state.aircraft.find(item=>item.id===(problem.aircraftId||flight?.aircraftId));
+function aircraftStillBlockedForProblem(problem,t){
+  const aircraft=state.aircraft.find(item=>item.id===(problem.scope?.subjectId||problem.aircraftId));
   if(!aircraft) return false;
-  if(problem.type==='mel_defect') return Boolean(aircraft.melItems?.some(item=>item.status==='open'));
-  if(problem.type==='postflight_technical_defect') return problemContextStillActive('postflightTechnicalContextForFlight',flight,t);
-  if(problem.type==='aircraft_misposition_after_diversion') return problemContextStillActive('aircraftMispositionAfterDiversionContextForFlight',flight,t);
+  if(problem.type==='mel_defect') return aircraftIsDefective(aircraft,t)||Boolean(aircraft.melItems?.some(item=>['open','expired'].includes(item.status)));
+  if(problem.type==='postflight_technical_defect'){
+    const previous=state.flights.find(item=>item.id===problem.context?.previousFlightId);
+    return Boolean(aircraft.arrivalInspectionRequired||previous?.arrivalInspectionRequired||(aircraft.condition??100)<76||Management.maintenanceStatus(aircraft,t)?.due);
+  }
+  if(problem.type==='aircraft_misposition_after_diversion') return problemAffectedFlightsForRuntime(problem,t)
+    .some(item=>problemContextStillActive('aircraftMispositionAfterDiversionContextForFlight',item,t));
   return Boolean(aircraft.defectUntil&&aircraft.defectUntil>t);
 }
 
@@ -350,7 +387,7 @@ function crewStillBlockedForProblem(problem,flight,t){
       return !crewDutyForFlight(flight).legal;
     case 'no_legal_crew':
       return Boolean(typeof legalCrewConfirmationBlocker==='function'
-        ? legalCrewConfirmationBlocker(problem)
+        ? legalCrewConfirmationBlocker(problem,t)
         : flight.staffingBlocked);
     case 'crew_misposition_after_diversion': {
       if(CREW_ROLES.every(role=>assignedCrewRoleCount(flight,role)>=(crewRequirementForFlight(flight)[role]||0))) return false;
@@ -366,10 +403,10 @@ function groundStationProblemStillActive(problem,flight,t){
   switch(problem.type){
     case 'night_curfew_conflict':
       return Boolean(flight.nightRestrictionConflictDelayMin);
-    case 'destination_closure_ground':
-      return problemContextStillActive('destinationClosureGroundContextForFlight',flight,t);
     case 'fuel_supplier_outage':
-      return Boolean(problem.context?.active!==false&&!flight.departureLogged);
+      return Boolean(problem.context?.active!==false&&!flight.departureLogged&&(
+        !Number(problem.context?.activeUntil)||t<Number(problem.context.activeUntil)
+      ));
     case 'deicing_capacity_collapse':
       return problemContextStillActive('deicingCapacityCollapseContextForFlight',flight,t);
     case 'holdover_expired':
@@ -386,11 +423,24 @@ function problemShouldClose(problem,t=simNow()){
   if(AeroProblemModel.isRetiredType(problem.type)){
     return {reason:'retired_problem',outcome:AeroProblemModel.retiredOutcomeForType(problem.type)};
   }
+  if(problemAirportTiming(problem)){
+    const window=problemAirportOperatingWindow(problem);
+    return problem.context?.active===false||t>=window.endAt
+      ? {reason:'airport_window_cleared',outcome:'The airport restriction has ended.'}
+      : null;
+  }
+  if(problem.scope?.kind==='aircraft'){
+    return aircraftStillBlockedForProblem(problem,t)
+      ? null
+      : {reason:'aircraft_state_cleared',outcome:'Aircraft state no longer violates this problem condition.'};
+  }
+  if(problem.scope?.kind==='network'){
+    return problemNetworkEventActive(problem,t)
+      ? null
+      : {reason:'network_event_cleared',outcome:'The shared network constraint is no longer active.'};
+  }
   if(allAffectedFlightsCancelledOrGone(problem)){
     return {reason:'affected_flights_closed',outcome:'All affected flights are cancelled, settled, or no longer in the operating window.'};
-  }
-  if(problem.scope?.kind==='network'&&!problemNetworkEventActive(problem,t)){
-    return {reason:'network_event_cleared',outcome:'The shared network constraint is no longer active.'};
   }
   const flight=problemPrimaryFlightForRuntime(problem);
   if(!flight){
@@ -409,13 +459,10 @@ function problemShouldClose(problem,t=simNow()){
       return {reason:'phase_invalid',outcome:'The flight is not airborne, so this in-flight problem is no longer valid.'};
     }
   }
-  if(['mel_defect','postflight_technical_defect','aircraft_misposition_after_diversion'].includes(problem.type)){
-    return aircraftStillBlockedForProblem(problem,flight,t)?null:{reason:'aircraft_state_cleared',outcome:'Aircraft state no longer violates this problem condition.'};
-  }
   if(['crew_sick','crew_fatigue_report','no_legal_crew','crew_misposition_after_diversion'].includes(problem.type)){
     return crewStillBlockedForProblem(problem,flight,t)?null:{reason:'crew_state_cleared',outcome:'Crew state no longer violates this problem condition.'};
   }
-  if(['night_curfew_conflict','destination_closure_ground','fuel_supplier_outage','deicing_capacity_collapse','holdover_expired','atc_ground_stop'].includes(problem.type)){
+  if(['night_curfew_conflict','fuel_supplier_outage','deicing_capacity_collapse','holdover_expired','atc_ground_stop'].includes(problem.type)){
     return groundStationProblemStillActive(problem,flight,t)?null:{reason:'operation_state_cleared',outcome:'The live operating state no longer violates this problem condition.'};
   }
   if(model?.phase==='ground'&&flightHasDeparted(flight,t)){
@@ -456,15 +503,18 @@ function refreshProblem(problem,t=simNow()){
   if(typeof ensureProblemIdentityFields==='function'){
     changed=ensureProblemIdentityFields(problem,flight,problem.context,t)||changed;
   }
-  changed=processProblemDefaults(problem,t)||changed;
   const close=problemShouldClose(problem,t);
-  if(close) changed=closeProblem(problem,t,close.reason,close.outcome)||changed;
+  if(close) return closeProblem(problem,t,close.reason,close.outcome)||changed;
+  changed=processProblemDefaults(problem,t)||changed;
+  const afterDefault=problemShouldClose(problem,t);
+  if(afterDefault) changed=closeProblem(problem,t,afterDefault.reason,afterDefault.outcome)||changed;
   return changed;
 }
 
 function processProblems(t=simNow()){
   let changed=false;
-  for(const problem of openOperationalProblems().slice()){
+  // Keep unexposed airport events alive so changed ETAs can enter their window.
+  for(const problem of problemCollection().filter(item=>item.status==='open')){
     if(refreshProblem(problem,t)) changed=true;
   }
   if(changed&&typeof invalidateOperationalIndex==='function') invalidateOperationalIndex();

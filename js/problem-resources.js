@@ -119,12 +119,12 @@
       : 'No suitable alternate is available yet.';
   }
 
-  function legalCrewConfirmationBlocker(problem){
+  function legalCrewConfirmationBlocker(problem,t=simNow()){
     const flight=state.flights.find(item=>item.id===problem?.flightId&&!item.cancelled);
     const aircraft=flight&&state.aircraft.find(item=>item.id===flight.aircraftId);
     if(!flight||!aircraft) return 'The affected flight is no longer available.';
-    const departure=Math.max(flightActualDeparture(flight),simNow());
-    const deficits=personnelDeficitsForFlight(aircraft,departure,flight.arrival-flight.departure,flight.from,flight.id,flightUsesLocalCrew(flight),flight.flightType)
+    const {departure,duration}=staffingEvaluationWindow(flight,t);
+    const deficits=personnelDeficitsForFlight(aircraft,departure,duration,flight.from,flight.id,flightUsesLocalCrew(flight),flight.flightType)
       .filter(item=>['captains','firstOfficers','cabinCrew'].includes(item.role));
     if(!deficits.length) return '';
     const missing=deficits.map(item=>`${PERSONNEL[item.role]?.label||item.role}${item.qualification?` rated ${item.qualification}`:''}: ${item.available}/${item.required}`).join(' · ');

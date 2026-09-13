@@ -113,7 +113,9 @@ function requestEnrouteRecovery(flightId,optionId){
   const flight=state.flights.find(item=>item.id===flightId&&!item.cancelled);
   const context=enrouteRecoveryContextForFlight(flight);
   if(!flight) return toast('Select a valid flight first.');
+  if(flight.dispatchRouteRequest?.status==='pending'||flight.holding?.status==='pending') return toast('Wait for the current flight deck / ATC response.');
   if(context.pending) return toast(`${flight.id}: en-route recovery request is already pending.`);
+  if(context.completed) return toast(`${flight.id}: the recovery request has already been answered.`);
   const option=context.options.find(item=>item.id===optionId);
   if(context.unavailableReason) return toast(context.unavailableReason);
   if(!option||option.disabled) return toast(option?.disabledReason||'This en-route recovery option is not available.');
@@ -131,15 +133,34 @@ function requestEnrouteRecovery(flightId,optionId){
   return toast(`${flight.id}: ${option.label.toLowerCase()} sent; response in about ${waitMin} min.`);
 }
 
+function coordinateShorterRoute(flightId){
+  const flight=state.flights.find(item=>item.id===flightId&&!item.cancelled);
+  if(!flight||flightHasCompleted(flight)) return toast('Select an uncompleted flight.');
+  const context=enrouteRecoveryContextForFlight(flight);
+  const direct=context.options.find(option=>option.id==='direct');
+  if(!context.unavailableReason&&!direct.disabled&&!context.completed) return requestEnrouteRecovery(flightId,'direct');
+  return coordinateDispatchRouteRevision(flightId,'direct');
+}
+
 function processEnrouteRecoveryRequests(t=simNow()){
   let changed=false;
   for(const flight of state.flights||[]){
     const request=flight.enrouteRecoveryRequest;
     if(!request||request.status!=='pending'||t<request.respondsAt) continue;
+    const live=enrouteRecoveryContextForFlight(flight,t);
+    const currentOption=live.options.find(option=>option.id===request.option);
+    const blocker=live.unavailableReason||currentOption?.disabledReason||(!currentOption?'Recovery option no longer available.':'');
+    if(blocker){
+      flight.enrouteRecoveryRequest={...request,status:'unusable',completedAt:t,outcome:blocker,recoveredMin:0,appliedCost:0};
+      changed=true;
+      continue;
+    }
     const roll=stableFraction(`${request.id}:response`);
     const denied=roll<(request.option==='priority'?.1:.18);
     const partial=!denied&&roll<(request.option==='priority'?.42:.58);
-    const option={id:request.option,label:request.label,recoverMin:request.recoverMin,cost:request.cost,extraFuelGal:request.extraFuelGal};
+    const recoverMin=Math.min(request.recoverMin,currentOption.recoverMin);
+    const option={...currentOption,recoverMin,cost:Math.min(request.cost,currentOption.cost),
+      extraFuelGal:Math.ceil(currentOption.extraFuelGal*recoverMin/Math.max(1,currentOption.recoverMin))};
     if(denied){
       const deniedOutcome=request.option==='speed'
         ? 'Flight deck could not support the speed-up recommendation.'
@@ -178,7 +199,7 @@ function processEnrouteRecoveryRequests(t=simNow()){
 
   const api={
     enrouteRecoveryContextForFlight,applyEnrouteRecovery,
-    requestEnrouteRecovery,processEnrouteRecoveryRequests
+    requestEnrouteRecovery,processEnrouteRecoveryRequests,coordinateShorterRoute
   };
   global.AeroEnrouteRecovery=api;
   Object.assign(global,api);

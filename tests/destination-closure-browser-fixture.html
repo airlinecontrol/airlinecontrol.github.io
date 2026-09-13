@@ -1,0 +1,135 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AOC destination closure arrival-window fixture</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result');
+  const frame=document.getElementById('game');
+  const MIN=60_000;
+  const assert=(condition,message)=>{if(!condition) throw new Error(message);};
+  try{
+    localStorage.removeItem('aerosim_mvp_v6');
+    localStorage.removeItem('aerosim_occ_ui_v1');
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=destination-closure';
+    await loaded;
+    const w=frame.contentWindow;
+    w.setSimulationPaused(true);
+    const state=w.eval('state');
+    state.ops.automaticDisruptions=false;
+    state.problems=[];state.flights=[];state.aircraft=[];
+    const now=w.simNow();
+    const make=(from='FRA',to='LHR',airborne=false)=>{
+      const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),from);
+      const flight=w.createFlightRecord({aircraftId:ac.id,from,to,departure:now+(airborne?-60:30)*MIN,fare:{economy:140,business:360,first:700}});
+      flight.departureLogged=airborne;
+      return flight;
+    };
+    const before=make(),start=make(),delayed=make(),recovered=make(),end=make();
+    const outbound=make('LHR','FRA'),diverted=make(),airborne=make('FRA','LHR',true);
+    const closureStart=now+60*MIN,closureEnd=now+180*MIN;
+    const projections=[[before,59,59],[start,60,60],[delayed,30,120],[recovered,120,200],[end,180,180],[outbound,120,120],[diverted,120,120],[airborne,120,120]];
+    for(const [flight,planned,actual] of projections){
+      flight.arrival=now+planned*MIN;
+      flight.actualArrival=now+actual*MIN;
+      flight.actualDeparture=flight.departure;
+    }
+    diverted.diversionAirport='CDG';
+    w.invalidateOperationalIndex();
+    assert(w.flightIsAirborne(airborne,now),'airborne fixture is not actually airborne');
+    const closure=w.createProblem('destination_closure_ground',start,{
+      training:true,detectedAt:now,source:'fixture',
+      context:{airport:'LHR',activeFrom:closureStart,activeUntil:closureEnd,active:true,reason:'Runway inspection',affectedFlightIds:[before.id,outbound.id]}
+    });
+    const ids=()=>w.problemAffectedFlightIds(closure).slice().sort().join(',');
+    const expected=[start.id,delayed.id,airborne.id].sort().join(',');
+    assert(ids()===expected,`closure must match actual inbound arrivals in [start,end), not departures or scheduled arrivals: ${ids()}`);
+    assert(w.departureBlockingProblemsForFlight(delayed).includes(closure),'delayed arrival into closure must block departure');
+    assert(!w.departureBlockingProblemsForFlight(recovered).includes(closure),'arrival after reopening must not block departure');
+    assert(w.problemDefaultModeForFlight(closure,airborne,now)==='divert','an airborne flight in a shared closure must not inherit ground cancellation');
+    assert(w.problemDefaultModeForFlight(closure,delayed,now)==='cancel_at_departure','ground flight must retain its departure cancellation policy');
+    const card=w.incidentAttentionCards([{id:closure.id,root:closure,problems:[closure]}],now)[0];
+    assert(card.flights.map(f=>f.id).sort().join(',')===expected,'incident card does not use the same arrival-window exposure');
+    assert(card.recoveryOutlook?.endAt===closureEnd,'recovery outlook changed the closure window');
+
+    // Defaults must recheck live ETAs, even before a render/index refresh.
+    start.actualArrival=closureEnd;
+    delayed.actualArrival=closureEnd+MIN;
+    airborne.diversionAirport='CDG';
+    w.processProblemDefaults(closure,now+40*MIN);
+    assert(!start.cancelled&&!delayed.cancelled,'default cancelled a flight whose revised arrival is outside the closure');
+    assert(!closure.unattended.flights[start.id]&&!closure.unattended.flights[delayed.id],'irrelevant arrivals retained stale cancellation timers');
+    w.refreshProblem(closure,now+40*MIN);w.invalidateOperationalIndex();
+    assert(ids()==='','old primary/contextual flight IDs survived a changed ETA or destination');
+    assert(closure.status==='open','airport event should survive temporarily having no exposed arrivals');
+    assert(!w.openOperationalProblems().includes(closure),'unexposed airport event must not create an attention card');
+    assert(!w.actionableProblemIdSet(now+40*MIN).has(closure.id),'unexposed airport event must not ding');
+    assert(!w.refreshProblem(closure,now+40*MIN),'unchanged unexposed closure keeps dirtying the simulation');
+
+    before.actualArrival=now+150*MIN;
+    w.refreshProblem(closure,now+40*MIN);w.invalidateOperationalIndex();
+    assert(ids()===before.id,'newly delayed flight did not enter the existing airport window');
+    assert(state.problems.filter(p=>p.status==='open').length===1,'new exposure created a duplicate airport problem');
+    assert(!before.cancelled,'newly exposed flight was cancelled before its review window');
+    assert(closure.unattended.flights[before.id].deadline>=now+50*MIN,'new exposure inherited an already-expired default deadline');
+    assert(!w.refreshProblem(closure,now+40*MIN),'unchanged exposed closure keeps dirtying the simulation');
+    w.refreshProblem(closure,closureEnd);w.invalidateOperationalIndex();
+    assert(closure.status==='resolved','closure did not expire at its reopening time');
+    assert(!before.cancelled,'closure expiration must happen before any overdue cancellation');
+
+    // Long-haul arrivals use the closure window, not the old +/- airport horizon.
+    state.problems=[];
+    const longHaul=make('ATL','LHR',true);
+    longHaul.actualDeparture=longHaul.departure;
+    longHaul.arrival=longHaul.actualArrival=now+9*60*MIN;
+    const futureArrival=make('FRA','LHR');
+    futureArrival.departure=futureArrival.actualDeparture=now+8.5*60*MIN;
+    futureArrival.arrival=futureArrival.actualArrival=now+9.5*60*MIN;
+    w.invalidateOperationalIndex();
+    const futureClosure=w.createProblem('destination_closure',longHaul,{
+      training:true,detectedAt:now,source:'fixture',
+      context:{airport:'LHR',forecastFrom:now+8*60*MIN,forecastUntil:now+10*60*MIN}
+    });
+    assert(w.problemAffectedFlightIds(futureClosure).includes(futureArrival.id),'future inbound was discarded by a departure-based lookahead');
+    assert(w.departureBlockingProblemsForFlight(futureArrival).includes(futureClosure),'airport closure discovered in flight does not protect other ground departures');
+    assert(w.AeroProblemModel.timeProjectionForProblem(futureClosure,now)?.endAt===now+10*60*MIN,'forecast closure lost its recovery window');
+
+    // A short-term storm is irrelevant if clear at the projected long-haul ETA.
+    state.problems=[];
+    const weatherCalls=[];
+    const realWeather=w.AeroWeatherEngine.weatherAt;
+    let stormStart=now,stormEnd=now+2*60*MIN;
+    const weather=(code,at)=>{
+      weatherCalls.push({code,at});
+      const severe=code==='LHR'&&at>=stormStart&&at<stormEnd;
+      return {airport:code,level:severe?'severe':'normal',type:severe?'storm':'clear',icon:severe?'TS':'VMC',
+        conditions:severe?'Thunderstorm cells':'Normal operations',label:severe?'Severe':'Normal',
+        capacityFactor:severe?.5:1,delayMin:severe?55:0,visibilityKm:severe?.5:20,ceilingFt:severe?200:10000,
+        windKph:10,windDirection:200,gustKph:15,validFrom:stormStart,validUntil:stormEnd,weatherSystemId:'fixture-storm'};
+    };
+    w.AeroWeatherEngine.weatherAt=weather;
+    state.ops.automaticDisruptions=true;
+    longHaul.weatherLiveChecks={routeApplied:true};
+    w.maybeApplyLiveWeatherImpact(longHaul,now);
+    assert(!state.problems.some(p=>p.type==='destination_closure'),'near-term storm triggered a closure for a flight arriving hours after it ends');
+    assert(weatherCalls.some(call=>call.code==='LHR'&&call.at===longHaul.actualArrival),'airborne closure detector did not query weather at current ETA');
+
+    stormStart=now+8*60*MIN;stormEnd=now+10*60*MIN;
+    longHaul.weatherLiveChecks={routeApplied:true};
+    w.maybeApplyLiveWeatherImpact(longHaul,now);
+    const weatherClosure=state.problems.find(p=>p.type==='destination_closure');
+    assert(weatherClosure?.context.forecastAt===longHaul.actualArrival,'ETA-time severe weather did not create a closure with the correct forecast timestamp');
+    longHaul.actualArrival=now+11*60*MIN;
+    weatherCalls.length=0;
+    w.maybeApplyLiveWeatherImpact(longHaul,now);
+    assert(weatherCalls.some(call=>call.code==='LHR'&&call.at===longHaul.actualArrival),'changed arrival did not refresh the forecast within the same weather-check period');
+    w.refreshProblem(weatherClosure,now);w.invalidateOperationalIndex();
+    assert(!w.openProblemsForFlight(longHaul.id).includes(weatherClosure),'changed ETA remained attached to the weather closure');
+    w.AeroWeatherEngine.weatherAt=realWeather;
+    state.ops.automaticDisruptions=false;
+    result.textContent='PASS\nArrival-window exposure, live ETA changes, shared scope, default safety, forecast selection and card consistency';
+  }catch(error){result.textContent='FAIL\n'+(error.stack||error);}
+})();
+</script>

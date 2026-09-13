@@ -28,24 +28,11 @@
     if(typeof global.refreshAll==='function') global.refreshAll();
   }
 
-  function openContextWorkbench({scroll='top'}={}){
-    const documentRef=global.document;
-    const widget=documentRef&&documentRef.querySelector('[data-widget="context-workbench"]');
-    if(!widget) return null;
-    if(typeof global.setWidgetOpen==='function') global.setWidgetOpen(widget,true,{persist:false});
-    const rightSidebar=widget.closest('.sidebar');
-    if(rightSidebar){
-      const top=scroll==='widget' ? widget.offsetTop : 0;
-      rightSidebar.scrollTo({top,behavior:'smooth'});
-    }
-    return widget;
-  }
-
   function commit(){
     persist();
     renderAll();
   }
 
-  global.AeroServices={confirm,notify,persist,renderAll,commit,openContextWorkbench};
+  global.AeroServices={confirm,notify,persist,renderAll,commit};
   global.toast=notify;
 })(window);

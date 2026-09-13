@@ -1,0 +1,130 @@
+/* Shared widget content and interaction contract. Map/timeline geometry stays in aerosim-next.css. */
+:root{--ui-body:13px;--ui-meta:12px;--ui-small:11px;--ui-label:#a8bcc6}
+:is(.rail-widget-body,.occ-widget-body){font-size:var(--ui-body);line-height:1.4}
+:is(.rail-widget-body,.occ-widget-body) :is(p,span,em,small,dt,dd,label){font-size:var(--ui-meta);letter-spacing:0}
+:is(.rail-widget-body,.occ-widget-body) :is(b,strong){font-size:var(--ui-body);letter-spacing:0}
+:is(.rail-widget-body,.occ-widget-body) h2{font-size:var(--ui-meta);letter-spacing:0;margin:0 0 8px}
+:is(.rail-widget-body,.occ-widget-body) :is(input,select,button){font-size:var(--ui-body);letter-spacing:0}
+:is(.rail-widget-body,.occ-widget-body) :is(input,select){min-width:0;max-width:100%}
+:is(.rail-widget-body,.occ-widget-body) :is(.primary-button,.secondary-button,.danger-button){min-height:32px;padding:6px 9px;border-radius:5px}
+:is(.rail-widget-body,.occ-widget-body) :is(.desk-action-link,.desk-action-tab){font-size:var(--ui-meta)}
+:is(.rail-widget-body,.occ-widget-body) :is(.empty-state,.panel-note){font-size:var(--ui-meta);padding:8px 0;margin:0}
+.aircraft-section{min-height:0}
+.desk-section{padding:8px 0}
+.desk-action-panel{margin:0;padding:0;background:transparent;border-radius:0}
+.desk-action-panel .page-heading{display:none}
+.desk-action-panel .form-grid{margin-top:0}
+.desk-action-tab:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.desk-tabs{scroll-margin:6px}
+.occ-widget-toggle:has(.occ-widget-state[hidden]),.occ-widget-toggle:not(:has(.occ-widget-state)){grid-template-columns:auto minmax(0,1fr)}
+.occ-widget-state[hidden]{display:none!important}
+.rail-widget-toggle:has(.occ-widget-state[hidden]){grid-template-columns:auto minmax(0,1fr)}
+.ui-tabpanel{min-width:0}
+.incident-affected-list button span b{font-size:var(--ui-meta)}
+.info-tip{vertical-align:middle}
+.ui-tooltip{position:fixed;z-index:10000;max-width:min(320px,calc(100vw - 16px));padding:9px 11px;border:1px solid #42616f;border-radius:5px;background:#102630;color:#edf7fa;font:13px/1.45 system-ui,sans-serif;box-shadow:0 8px 24px #0008;pointer-events:none}
+.ui-tooltip[hidden]{display:none}
+.ui-tooltip.multiline{white-space:pre-line;max-width:min(420px,calc(100vw - 16px))}
+.ui-list-more,.ui-list-less{display:block;margin-top:9px;min-height:28px}
+.ui-list-less{color:var(--muted)}
+.ui-details{margin:8px 0;min-width:0}
+.ui-details>summary{cursor:pointer;color:var(--ui-label);font-size:var(--ui-meta);padding:4px 0}
+.ui-details>p:empty{display:none}
+.ui-details>p{margin:6px 0;color:var(--ui-label)}
+.ui-facts{display:grid;gap:5px;margin:6px 0 0}
+.ui-facts>div{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:start}
+.ui-facts :is(dt,span){color:var(--ui-label)}
+.ui-facts :is(dd,b){margin:0;text-align:right;overflow-wrap:anywhere}
+.ui-request-status{display:grid;gap:6px;min-width:0;padding:10px 0}
+.ui-request-status header{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.ui-request-status header b{min-width:0}
+.ui-request-status header span{flex-shrink:0;color:var(--warn);font-variant-numeric:tabular-nums}
+.ui-request-status .ui-request-label{color:var(--accent)}
+.ui-request-status.success .ui-request-label{color:#9dd6b9}
+.ui-request-status.warning .ui-request-label{color:#edc176}
+.ui-request-status p{margin:0;color:var(--ui-label);overflow-wrap:anywhere}
+.ui-request-status .progress-track{margin:0;height:4px}
+.ui-request-status .form-actions{margin:2px 0 0}
+.ui-select{display:grid;gap:4px;min-width:0;width:100%}
+.ui-select input[type="search"]{height:28px;min-height:28px;padding:3px 7px;font-size:var(--ui-meta);border-radius:4px;background:transparent;color:var(--text);border:1px solid #29404b}
+.ui-select-result{color:var(--ui-label);font-size:var(--ui-small)}
+.ui-select-result[hidden]{display:none}
+.crew-pool-role-grid :is(span,b){white-space:normal;overflow:visible;text-overflow:clip}
+.crew-pool-status,.crew-pool-qualifications{color:var(--ui-label)}
+.crew-pool-card .crew-pool-status,.crew-pool-card header .secondary-button,.dispatch-overview-aircraft-row .secondary-button.compact{font-size:var(--ui-meta)}
+.occ-management-host .form-grid.compact-form label{font-size:var(--ui-meta)}
+.crew-pool-card .ui-shortage{color:var(--warn)}
+.crew-pool-card>header{flex-wrap:wrap}
+.crew-assignment-receipt.compact{padding:0;background:transparent}
+.crew-assignment-receipt{gap:2px}
+.station-service-form,.station-receipt,.station-overview,.personnel-form{gap:9px}
+.station-request-row{grid-template-columns:minmax(0,1fr);gap:3px}
+.station-request-row em{text-align:left}
+.station-facts,.crew-assignment-facts{gap:5px}
+.dispatch-flight-context{padding:0;background:transparent}
+.dispatch-flight-context .dispatch-route-visual{padding:0;background:transparent}
+.dispatch-flight-context .dispatch-flight-heading b{font-size:15px;white-space:normal}
+.dispatch-flight-context .dispatch-flight-heading em{white-space:normal;overflow:visible}
+.dispatch-flight-context .dispatch-flight-heading strong{font-size:var(--ui-small)}
+.dispatch-overview-aircraft-row{padding:6px 0;background:transparent!important;gap:8px}
+.dispatch-overview-aircraft-row>div:first-child{min-width:0}
+.dispatch-overview-aircraft-row span{color:var(--ui-label)}
+.dispatch-departure-editor h2{display:flex;justify-content:space-between}
+.dispatch-departure-editor fieldset{min-width:0;border:0;padding:0;margin:0;display:grid;gap:8px}
+.dispatch-departure-editor label{display:grid;gap:5px;color:var(--ui-label)}
+.dispatch-departure-editor .occ-action-controls{justify-content:flex-start;flex-wrap:wrap}
+.dispatch-departure-editor [data-occ-custom-delay]{width:58px;flex:0 0 58px}
+.dispatch-departure-editor [data-occ-hold-until]{flex:1;min-width:170px;width:100%}
+.dispatch-cancellation-list .occ-action-row{grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:6px 0}
+.dispatch-route-section .occ-action-row{display:grid;grid-template-columns:minmax(0,1fr);gap:7px;padding:10px 0}
+.dispatch-route-section .occ-action-controls{justify-content:flex-start;min-width:0}
+.dispatch-route-section .occ-action-controls.wide{display:flex;flex-wrap:wrap;gap:7px}
+.dispatch-route-section .occ-action-controls.wide>select{flex:1 1 100%;width:100%}
+.dispatch-route-section .choice-button{width:100%;min-width:0;text-align:left;display:grid;gap:4px;padding:9px}
+.dispatch-route-section .choice-button :is(span,em){line-height:1.4;font-style:normal}
+.dispatch-route-section .choice-button :is(.choice-consequence,.choice-cost){font-size:var(--ui-meta)}
+.dispatch-route-section .choice-list{grid-template-columns:minmax(0,1fr)}
+.dispatch-route-section .choice-button:disabled{opacity:1;background:#0d1b23;border-color:#263941;cursor:not-allowed}
+.dispatch-route-section .choice-button:disabled b{color:#92a9b4}
+.dispatch-route-section .choice-button:disabled span{color:#a8bcc6}
+.dispatch-route-section .choice-button:disabled em{color:#a69b76}
+.dispatch-route-section .enroute-result-card{padding:0;background:transparent}
+.ui-unavailable{margin:0;color:var(--ui-label)}
+.passenger-recovery-row,.crew-accommodation-row{grid-template-columns:minmax(0,1fr);gap:8px}
+.passenger-recovery-row .occ-action-controls,.crew-accommodation-row .occ-action-controls{justify-content:flex-start;width:100%;min-width:0}
+:is(.passenger-recovery-row,.crew-accommodation-row) .ui-request-status{width:100%}
+.incident-attention-card :is(.incident-required-response,.incident-default-countdown,.incident-recovery-outlook){padding:8px 0;background:transparent;border:0;box-shadow:none;border-radius:0}
+.incident-attention-header>div>span,.incident-default-countdown p{color:#c0b2b8}
+.incident-affected-list>span,.incident-crew-absence>span{font-size:var(--ui-small)}
+.incident-affected-list button{min-height:32px}
+.incident-affected-list button :is(em,small){font-size:var(--ui-small)}
+.incident-attention-card :is(p,span,small){line-height:1.4}
+.incident-crew-absence>div{flex-wrap:wrap}
+.incident-crew-absence small{text-align:left}
+.compact-navigation{display:none}
+.clock-display{display:flex;align-items:baseline;gap:6px;white-space:nowrap}
+.clock-display small{font-size:11px;color:var(--ui-label)}
+.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@media(max-width:1100px){.brand span{font-size:14px}.sim-clock{gap:5px}.topbar-control select{max-width:130px}}
+@media(max-width:900px){
+  html,body{height:auto;overflow:auto}
+  #app{display:flex;flex-direction:column;height:auto;min-height:100dvh;overflow:visible!important}
+  .topbar{flex-wrap:wrap;height:auto;min-height:54px;z-index:1001}
+  .topbar .sim-clock{display:contents}
+  .clock-display{order:5;flex:1 0 100%;justify-content:center;padding:2px 0 4px}
+  .sim-clock span{display:block!important;font-size:12px;min-width:0;text-align:left}
+  .compact-navigation{position:sticky;top:var(--topbar-height,54px);z-index:1000;display:flex;gap:4px;padding:5px 10px;background:var(--bg)}
+  .compact-navigation button{flex:1;padding:7px 4px;border:0;border-radius:4px;background:var(--widget);color:var(--text);font-size:12px}
+  .operations-shell{display:flex!important;flex-direction:column;overflow:visible!important;width:100%;min-width:0;height:auto;min-height:0!important}
+  .rail-splitter{display:none!important}
+  .operations-rail,.context-rail{height:auto;max-height:none;overflow:visible!important;flex:none;width:100%}
+  .context-rail{order:0}
+  #center-workspace{order:1;width:100%;min-width:0!important;height:700px;min-height:500px!important;flex:none;scroll-margin-top:110px}
+  .operations-rail{order:2;scroll-margin-top:110px}
+  .left-rail-columns,#deskStack.desk-stack{grid-template-columns:minmax(0,1fr)!important}
+  .desk-stack-attention{order:-1}
+  .occ-board-widget,#schedule-pane,.operations-rail{scroll-margin-top:calc(var(--topbar-height,54px) + 50px)}
+}
+@media(max-width:680px){
+  .brand{margin:0}.topbar-spacer{display:none}.topbar-control{flex:1}
+}

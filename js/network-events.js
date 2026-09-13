@@ -143,7 +143,6 @@
 
   function weatherNetworkEvents(t){
     if(!global.AeroWeatherEngine?.weatherCells) return [];
-    const period=Math.floor(t/(3*HOUR_MS));
     return global.AeroWeatherEngine.weatherCells(t)
       .filter(cell=>cell.type==='storm'&&cell.severity==='severe'&&(cell.polygon||[]).length>=3)
       .map(cell=>({
@@ -155,8 +154,8 @@
         label:cell.label||'Convective weather corridor',
         reason:`${cell.label||'Convective weather'} crossing route corridors`,
         severity:'critical',
-        activeFrom:period*3*HOUR_MS,
-        activeUntil:(period+1)*3*HOUR_MS,
+        activeFrom:cell.activeFrom||t,
+        activeUntil:cell.activeUntil||t+3*HOUR_MS,
         delayMin:Math.max(18,finite(cell.delayMin,25)),
         rerouteDelayMin:Math.max(10,Math.round(finite(cell.delayMin,25)*.7)),
         minAffected:2,

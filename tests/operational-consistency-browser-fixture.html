@@ -1,0 +1,162 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AOC operational consistency fixture</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result');
+  const frame=document.getElementById('game');
+  const assert=(condition,message)=>{if(!condition) throw new Error(message);};
+  try{
+    localStorage.clear();
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=operational-consistency';
+    await loaded;
+    const w=frame.contentWindow;
+    const MIN=60_000,HOUR=60*MIN,now=Date.UTC(2026,8,21,12);
+    const failures=[];
+    function reset(){
+      w.eval(`state=newState();state.clock={simBase:${now},realBase:Date.now(),speed:0,paused:true};state.ops.automaticDisruptions=false;invalidateOperationalIndex();`);
+    }
+    function createFlight(departure=now+2*HOUR,aircraft=null){
+      const ac=aircraft||w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      return {ac,flight:w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'LHR',departure,fare:{economy:120,business:300,first:0}})};
+    }
+    function check(name,run){
+      reset();
+      try{run();}catch(error){failures.push(`${name}: ${error.message}`);}
+    }
+    function crewProblem(flight,{cleared=true}={}){
+      const problem=w.createProblem('crew_sick',flight,{training:true,detectedAt:now-HOUR});
+      assert(problem,'crew problem was not created');
+      if(cleared) w.eval('state.crewUnavailability=[]');
+      return problem;
+    }
+
+    check('Completed flights remain immutable',()=>{
+      const {ac,flight}=createFlight(now-3*HOUR);
+      flight.fueled=true;flight.departureLogged=true;
+      w.recalculateOperations();w.processFlightLifecycleTransitions(now);
+      assert(flight.settled,'setup did not complete the flight');
+      const original={departure:w.flightActualDeparture(flight),arrival:w.flightActualArrival(flight),cycles:ac.cycles,completed:w.eval('state.stats.completed')};
+      ac.defectUntil=now+2*HOUR;ac.defectReason='New ground defect';
+      for(let i=0;i<3;i++){w.recalculateOperations();w.processFlightLifecycleTransitions(now);}
+      assert(flight.settled&&flight.departureLogged,'a later defect reopened a completed flight');
+      assert(w.flightActualDeparture(flight)===original.departure&&w.flightActualArrival(flight)===original.arrival,'recorded flight times changed');
+      ac.defectUntil=0;
+      w.recalculateOperations();w.processFlightLifecycleTransitions(now+5*HOUR);
+      assert(ac.cycles===original.cycles&&w.eval('state.stats.completed')===original.completed,'flight completion was counted twice');
+    });
+
+    check('Airborne departure is recorded, arrival is projected',()=>{
+      const {ac,flight}=createFlight(now-90*MIN);
+      flight.manualDelayMin=30;w.recalculateOperations();
+      flight.departureLogged=true;flight.fueled=true;
+      const departure=w.flightActualDeparture(flight),arrival=w.flightActualArrival(flight);
+      ac.defectUntil=now+3*HOUR;flight.manualDelayMin=90;
+      flight.enrouteDelayMin=20;
+      w.recalculateOperations();
+      assert(w.flightActualDeparture(flight)===departure,'a ground constraint changed recorded off-block time');
+      assert(w.flightActualArrival(flight)>arrival,'airborne delay no longer updates projected arrival');
+      assert(w.flightHasDeparted(flight,now),'airborne flight became a future flight');
+    });
+
+    check('Clear recovery before enforcing defaults',()=>{
+      const {flight}=createFlight(now-5*MIN);
+      flight.fueled=true;
+      const problem=crewProblem(flight);
+      assert(w.problemShouldClose(problem,now)?.reason==='crew_state_cleared','setup did not clear the crew problem');
+      w.refreshProblem(problem,now);
+      assert(!flight.cancelled,'a recovered flight was auto-cancelled');
+      assert(problem.status==='resolved'&&problem.autoCloseReason==='crew_state_cleared','successful recovery was not recorded');
+    });
+
+    check('Unresolved defaults still cancel',()=>{
+      const {flight}=createFlight(now-5*MIN);
+      const problem=crewProblem(flight,{cleared:false});
+      w.refreshProblem(problem,now);
+      assert(flight.cancelled,'unresolved crew blockage bypassed the default');
+    });
+
+    check('Aircraft problem stays on the original tail',()=>{
+      const {ac,flight}=createFlight();
+      const spare=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      ac.defectUntil=now+8*HOUR;ac.defectReason='Unrepaired technical fault';
+      ac.melItems=[{id:'TEST-MEL',status:'open',expiresAt:now+24*HOUR,remainingCycles:6}];
+      const problem=w.createProblem('mel_defect',flight,{training:true,detectedAt:now});
+      const originalKey=problem.dedupeKey;
+      w.swapSelectedFlightAircraft(flight.id,spare.id);
+      assert(flight.aircraftId===spare.id,'setup did not swap aircraft');
+      w.refreshProblem(problem,now);
+      assert(problem.scope.subjectId===ac.id&&problem.aircraftId===ac.id,'the defect moved onto the replacement');
+      assert(problem.dedupeKey===originalKey,'aircraft problem identity changed');
+      assert(problem.status==='open','the original aircraft defect was incorrectly resolved');
+      assert(!w.openProblemsForFlight(flight.id).some(item=>item.id===problem.id),'replacement flight remains blocked by the old aircraft');
+      const {flight:followup}=createFlight(now+4*HOUR,ac);
+      const sameProblem=w.createProblem('mel_defect',followup,{training:true,detectedAt:now});
+      assert(sameProblem.id===problem.id,'same aircraft defect created a duplicate after substitution');
+      ac.melItems=[];ac.defectUntil=0;
+      w.refreshProblem(problem,now);
+      assert(problem.status==='resolved','repair did not clear the aircraft problem');
+    });
+
+    for(const recovery of [false,true]) check(`Flight problems retain their flight after a ${recovery?'recovery':'manual'} swap`,()=>{
+      const {flight}=createFlight();
+      const spare=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      const problem=crewProblem(flight,{cleared:false});
+      if(recovery){
+        flight.technicalDelayMin=45;
+        w.recalculateOperations();
+        w.applyRecoveryPlan(flight.id,'use-spare');
+      }else w.swapSelectedFlightAircraft(flight.id,spare.id);
+      assert(flight.aircraftId===spare.id,'setup did not swap aircraft');
+      w.refreshProblem(problem,now);
+      assert(problem.status==='open'&&problem.scope.subjectId===flight.id,'aircraft swap cleared a flight-scoped crew problem');
+      assert(problem.aircraftId===spare.id,'flight problem aircraft context did not follow the flight');
+    });
+
+    check('Staffing uses the revised departure',()=>{
+      const {ac,flight}=createFlight(now+30*MIN);
+      flight.actualDeparture=flight.departure+2*HOUR;
+      flight.actualArrival=flight.arrival+2*HOUR;
+      w.eval(`state.personnel.assignments={FRA:{groundHandling:20,operations:10,customerService:10}};state.crewRecoveries=[${JSON.stringify({id:'TEST-REST',flightId:'PREVIOUS',status:'confirmed',availabilityStatus:'resting',availableAirport:'FRA',availableAt:now+HOUR,family:w.eval(`Management.aircraftFamily(${JSON.stringify(ac.model)})`),roles:w.crewRequirementForFlight(flight)})}];`);
+      flight.staffingBlocked=true;
+      assert(!w.legalCrewContextForFlight(flight,now)?.active,'rested crew available before delayed departure was ignored');
+      assert(!w.legalCrewConfirmationBlocker({flightId:flight.id},now),'problem recovery disagrees with revised-departure staffing');
+      assert(!Object.keys(w.crewAssignmentNeedsForFlight(flight,now)).length,'crew assignment disagrees with revised-departure staffing');
+      w.updateStaffingConstraints(now);
+      assert(!flight.staffingBlocked,`live staffing constraint did not clear after crew became available for the revised departure: ${flight.staffingShortage}`);
+      flight.actualDeparture=now+45*MIN;
+      flight.actualArrival=flight.actualDeparture+(flight.arrival-flight.departure);
+      w.updateStaffingConstraints(now);
+      assert(w.legalCrewContextForFlight(flight,now)?.active,'crew rest finishing after departure was ignored');
+      assert(w.legalCrewConfirmationBlocker({flightId:flight.id},now),'problem recovery ignored crew resting past departure');
+    });
+
+    check('Warning values stay current without clearing grace regression',()=>{
+      const warning={id:'TEST-WARNING',type:'short_turn',level:'warning',title:'Short turn 30/40m',detail:'10 min under minimum',sortAt:now};
+      const first=w.stabilizeOperationWarnings([warning],now)[0];
+      const updated=w.stabilizeOperationWarnings([{...warning,title:'Short turn 35/40m',detail:'5 min under minimum',sortAt:now+MIN}],now+MIN)[0];
+      assert(updated.title==='Short turn 35/40m'&&updated.detail==='5 min under minimum','warning still shows stale values');
+      assert(updated.firstSeenAt===first.firstSeenAt&&updated.id===first.id,'warning identity changed during an update');
+      assert(updated.sortAt===first.sortAt,'an unchanged warning priority caused row reordering');
+      assert(w.stabilizeOperationWarnings([],now+2*MIN).some(item=>item.id===first.id&&item.clearing),'warning clearance grace was removed');
+    });
+
+    check('Problem queries are pure and share the operational index',()=>{
+      const {flight}=createFlight();
+      const problem=crewProblem(flight,{cleared:false});
+      problem.firstVisibleAt=0;
+      w.invalidateOperationalIndex();
+      const before=JSON.stringify(problem);
+      assert(w.openOperationalProblems().includes(problem),'open problem query lost the problem');
+      assert(w.openProblemsForFlight(flight.id).includes(problem),'flight problem query lost the problem');
+      assert(JSON.stringify(problem)===before,'reading problems mutated simulation state');
+      assert(w.openProblemsForFlight(flight.id)===w.operationalIndex().openProblemsByFlight.get(flight.id),'flight problem query bypassed the shared index');
+    });
+    assert(!failures.length,failures.join('\n'));
+    result.textContent='PASS operational consistency regressions';
+  }catch(error){result.textContent='FAIL '+(error.stack||error);}
+})();
+</script>

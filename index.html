@@ -9,7 +9,8 @@
   <link rel="icon" href="assets/favicon-16.png" sizes="16x16" type="image/png" />
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-  <link rel="stylesheet" href="aerosim-next.css?v=1.8.83" />
+  <link rel="stylesheet" href="aerosim-next.css?v=1.8.88" />
+  <link rel="stylesheet" href="ui-components.css?v=1.0.2" />
 </head>
 <body>
 <div id="app">
@@ -20,10 +21,11 @@
     <div class="top-stat"><span>Active</span><b id="headerActive">0</b></div>
     <div class="top-stat"><span>Upcoming</span><b id="headerUpcoming">0</b></div>
     <label class="topbar-control"><span>Home base</span><select id="homeBaseSelect" aria-label="Home base"></select></label>
-    <div class="sim-clock"><span id="simClock">—</span><select id="speed" aria-label="Simulation speed"><option value="1">1× real time</option><option value="10">10×</option></select></div>
+    <div class="sim-clock"><div class="clock-display"><span id="simClock">—</span><small id="displayTimezone" title="Display and input timezone"></small></div><select id="speed" aria-label="Simulation speed"><option value="1">1× real time</option><option value="10">10×</option></select></div>
     <button id="pauseTopbarBtn" class="topbar-icon-button pause-sim-button" type="button" title="Pause simulation" aria-label="Pause simulation" aria-pressed="false">&#10074;&#10074;</button>
     <button id="resetTopbarBtn" class="topbar-icon-button reset-state-button" type="button" title="Reset local state" aria-label="Reset local state">&#128465;</button>
   </header>
+  <nav class="compact-navigation" aria-label="Workspace sections"><button type="button" data-ui-jump="warnings">Attention</button><button type="button" data-ui-jump="planning">Dispatch</button><button type="button" data-ui-jump="schedule">Schedule</button><button type="button" data-ui-jump="resources">Resources</button></nav>
 
   <main id="operationsView" class="operations-shell">
     <aside class="operations-rail" aria-label="Flights, aircraft, and selected details">
@@ -173,38 +175,41 @@
 </div>
 
 <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
-<script src="js/management.js?v=14.3.6"></script>
+<script src="js/management.js?v=14.3.8"></script>
 <script src="js/catalogs.js?v=1.0.2"></script>
 <script src="js/problem-state.js?v=1.0.2"></script>
-<script src="js/core.js?v=14.4.38"></script>
-<script src="js/app-services.js?v=14.2.1"></script>
-<script src="js/weather-engine.js?v=14.3.4"></script>
-<script src="js/route-planning.js?v=1.0.5"></script>
+<script src="js/core.js?v=14.4.41"></script>
+<script src="js/app-services.js?v=14.2.2"></script>
+<script src="js/weather-engine.js?v=15.0.0"></script>
+<script src="js/route-planning.js?v=1.0.6"></script>
 <script src="js/ground-operations.js?v=14.0.0"></script>
 <script src="js/operational-intelligence.js?v=14.0.2"></script>
 <script src="js/recovery-costs.js?v=1.0.1"></script>
-<script src="js/problem-model.js?v=1.0.11"></script>
+<script src="js/problem-model.js?v=1.0.14"></script>
 <script src="js/migrations.js?v=1.0.4"></script>
-<script src="js/simulation.js?v=14.6.77"></script>
-<script src="js/problem-engine.js?v=1.0.11"></script>
-<script src="js/enroute-recovery.js?v=1.0.1"></script>
-<script src="js/scheduling.js?v=1.0.10"></script>
-<script src="js/crew-ops.js?v=1.1.1"></script>
-<script src="js/crew-assignments.js?v=1.0.3"></script>
+<script src="js/simulation.js?v=14.6.87"></script>
+<script src="js/problem-engine.js?v=1.0.14"></script>
+<script src="js/enroute-recovery.js?v=1.0.3"></script>
+<script src="js/holding.js?v=1.0.2"></script>
+<script src="js/scheduling.js?v=1.0.13"></script>
+<script src="js/crew-ops.js?v=1.1.3"></script>
+<script src="js/crew-assignments.js?v=1.0.4"></script>
 <script src="js/station-services.js?v=1.0.1"></script>
 <script src="js/customer-recovery.js?v=1.0.2"></script>
-<script src="js/maintenance-planning.js?v=1.0.1"></script>
-<script src="js/problem-runtime.js?v=2.1.1"></script>
-<script src="js/derived-problems.js?v=1.0.7"></script>
-<script src="js/network-events.js?v=1.0.4"></script>
-<script src="js/problem-generation.js?v=1.0.5"></script>
-<script src="js/problem-resources.js?v=14.2.25"></script>
-<script src="js/operational-warnings.js?v=1.0.2"></script>
-<script src="js/ui-warnings.js?v=1.1.5"></script>
-<script src="js/ui-schedule.js?v=1.0.9"></script>
-<script src="js/ui-personnel.js?v=1.1.2"></script>
-<script src="js/ui-station-services.js?v=1.0.1"></script>
-<script src="js/ui-next.js?v=1.10.139"></script>
-<script src="js/map.js?v=15.0.12"></script>
+<script src="js/maintenance-planning.js?v=1.0.2"></script>
+<script src="js/problem-runtime.js?v=2.1.6"></script>
+<script src="js/derived-problems.js?v=1.0.8"></script>
+<script src="js/network-events.js?v=1.0.5"></script>
+<script src="js/problem-generation.js?v=1.0.9"></script>
+<script src="js/problem-resources.js?v=14.2.26"></script>
+<script src="js/operational-warnings.js?v=1.0.7"></script>
+<script src="js/ui-components.js?v=1.0.2"></script>
+<script src="js/ui-warnings.js?v=1.1.7"></script>
+<script src="js/ui-crew-duty.js?v=1.0.0"></script>
+<script src="js/ui-schedule.js?v=1.0.11"></script>
+<script src="js/ui-personnel.js?v=1.1.3"></script>
+<script src="js/ui-station-services.js?v=1.0.2"></script>
+<script src="js/ui-next.js?v=1.10.151"></script>
+<script src="js/map.js?v=15.0.14"></script>
 </body>
 </html>

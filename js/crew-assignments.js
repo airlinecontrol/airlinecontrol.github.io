@@ -175,7 +175,8 @@ function crewAssignmentRequestRoles(flight,mode,selectedRoles){
   const requirement=crewRequirementForFlight(flight);
   const roles=mode==='full'?CREW_ROLES:mode==='augment'?CREW_ROLES:selectedRoles;
   const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
-  const deficits=mode==='augment'&&flight.crewAugmented?personnelDeficitsForFlight(aircraft,Math.max(simNow(),flightActualDeparture(flight)),flightActualArrival(flight)-flightActualDeparture(flight),flight.from,flight.id,true,flight.flightType):[];
+  const {departure,duration}=staffingEvaluationWindow(flight);
+  const deficits=mode==='augment'&&flight.crewAugmented?personnelDeficitsForFlight(aircraft,departure,duration,flight.from,flight.id,true,flight.flightType):[];
   const operationalNeeds=crewAssignmentNeedsForFlight(flight);
   return Object.fromEntries(roles.filter(role=>CREW_ROLES.includes(role)).map(role=>[
     role,mode==='augment'
@@ -190,8 +191,7 @@ function crewAssignmentNeedsForFlight(flight,t=simNow()){
   if(!aircraft) return {};
   const requirement=crewRequirementForFlight(flight,aircraft);
   const needs=Object.fromEntries(CREW_ROLES.map(role=>[role,Math.min(requirement[role]||0,crewUnavailableRoleCount(flight,role,t))]));
-  const departure=Math.max(t,flightActualDeparture(flight));
-  const duration=Math.max(MIN,flightActualArrival(flight)-flightActualDeparture(flight));
+  const {departure,duration}=staffingEvaluationWindow(flight,t);
   for(const deficit of personnelDeficitsForFlight(aircraft,departure,duration,flight.from,flight.id,flightUsesLocalCrew(flight),flight.flightType)){
     if(CREW_ROLES.includes(deficit.role)) needs[deficit.role]=Math.min(requirement[deficit.role]||0,Math.max(needs[deficit.role]||0,deficit.amount||0));
   }

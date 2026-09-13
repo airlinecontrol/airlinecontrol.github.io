@@ -65,6 +65,9 @@
     assert(problem.status==='resolved','Sick call remained open after legal role replacement');
     assert(w.crewDutyForFlight(flight).roleDuties[otherRole].dutyStart===oldReport,'Other role duty was reset');
     assert(w.crewDutyForFlight(flight).roleDuties[role].dutyStart===reportAt,'Replacement reporting time was not used for duty');
+    const dutyDisplay=w.AeroCrewDutyUi.describe(w.crewDutyForFlight(flight));
+    assert(dutyDisplay.roles.find(item=>item.role===role).dutyStart===reportAt,'Crew display lost the replacement report time');
+    assert(dutyDisplay.roles.find(item=>item.role===otherRole).dutyStart===oldReport,'Crew display reset an unaffected role clock');
     assert(s.crewUnavailability.some(item=>item.sourceId===problem.id&&item.until>ready),'Sick person became available on replacement');
     assert(record.readyAt===ready,'Readiness timer drifted');
 

@@ -1,5 +1,5 @@
 /* Independent Station Operations selection, exception forms, and request receipts. */
-const stationServiceUi={airport:'',flightId:'',handling:'arrival',service:'capacity',provider:'contract',units:4,durationMin:120,startAt:0,requestId:'',newRequest:false,showAll:false};
+const stationServiceUi={airport:'',flightId:'',handling:'arrival',service:'capacity',provider:'contract',units:4,durationMin:120,startAt:0,requestId:'',newRequest:false};
 
 function stationRequestStatus(record){
   return ({requested:'Awaiting provider response',offered:'Alternative offered',confirmed:'Confirmed - mobilizing',ready:'Provider ready',in_progress:record.service==='capacity'?'Additional teams available':'Service in progress',completed:'Service completed',unavailable:'Provider unavailable',cancelled:'Cancelled',expired:'Offer expired'})[record.status]||record.status;
@@ -35,31 +35,24 @@ function stationServiceFormOptions(){
     units:ui.units,durationMin:ui.durationMin,startAt:ui.startAt===0?simNow():ui.startAt,flight,flights,phase};
 }
 function stationRequestReceipt(record){
-  const now=simNow();
   const response=record.status==='requested',offered=record.status==='offered';
   const target=response?record.respondsAt:offered?record.offerExpiresAt:record.status==='confirmed'?record.readyAt:record.status==='in_progress'?record.endsAt:0;
-  const remaining=target?`${Math.max(0,Math.ceil((target-now)/MIN))} min remaining`:'';
-  const progress=response?clamp((now-record.requestedAt)/Math.max(MIN,record.respondsAt-record.requestedAt),0,1):record.status==='in_progress'?clamp((now-record.startedAt)/Math.max(MIN,record.endsAt-record.startedAt),0,1):null;
-  return `<section class="station-receipt" data-station-receipt="${esc(record.id)}" role="status">
-    <div class="station-status-heading"><b>${esc(stationRequestStatus(record))}</b><span>${esc(remaining)}</span></div>
-    <span>${esc(STATION_SERVICES[record.service].label)} · ${esc(STATION_PROVIDERS[record.provider])}</span>
-    ${progress!==null?`<div class="progress-track"><span style="width:${formatPct(progress)}"></span></div>`:''}
-    ${record.outcome?`<p>${esc(record.outcome)}</p>`:''}
-    <dl class="station-facts"><div><dt>Provider ready</dt><dd>${esc(formatTime(record.readyAt))}</dd></div><div><dt>Service window</dt><dd>${esc(shortClock(record.startAt))} - ${esc(shortClock(record.endsAt))}</dd></div><div><dt>${record.confirmedAt?'Booked cost':'Quoted cost'}</dt><dd>${money(record.cost)}</dd></div></dl>
-    <div class="form-actions">${offered?`<button class="primary-button" type="button" data-station-accept="${esc(record.id)}">Accept offer</button>`:''}
-      ${['requested','offered','confirmed','ready'].includes(record.status)?`<button class="desk-action-link" type="button" data-station-cancel="${esc(record.id)}">${offered?'Decline offer':'Cancel request'}</button>`:''}</div>
-  </section>`;
+  return `<div class="station-receipt" data-station-receipt="${esc(record.id)}">${AeroUi.requestStatus({
+    title:STATION_SERVICES[record.service].label,label:stationRequestStatus(record),detail:record.outcome||STATION_PROVIDERS[record.provider],
+    pending:Boolean(target),startAt:record.status==='in_progress'?record.startedAt:record.requestedAt,endAt:target,
+    tone:['unavailable','expired'].includes(record.status)?'warning':target?'':'success',
+    facts:[['Provider',STATION_PROVIDERS[record.provider]],...(offered?[['Offer expires',formatTime(record.offerExpiresAt)]]:[]),['Provider ready',formatTime(record.readyAt)],['Service window',`${shortClock(record.startAt)} - ${shortClock(record.endsAt)}`],[record.confirmedAt?'Booked cost':'Quoted cost',money(record.cost)]],
+    actions:`${offered?`<button class="primary-button" type="button" data-station-accept="${esc(record.id)}">Accept offer</button>`:''}${['requested','offered','confirmed','ready'].includes(record.status)?`<button class="desk-action-link" type="button" data-station-cancel="${esc(record.id)}">${offered?'Decline offer':'Cancel request'}</button>`:''}`
+  })}</div>`;
 }
 function stationOverviewMarkup(){
   const airport=stationSelectedAirport(),now=simNow(),weather=Management.weatherAt(airport,now);
   const profiles=Object.keys(STATION_PROVIDERS).map(id=>({id,...stationProviderProfile(airport,id,now)}));
   const records=stationServiceRequests().filter(item=>item.airport===airport)
     .sort((a,b)=>Number(stationServiceReserved(b))-Number(stationServiceReserved(a))||b.requestedAt-a.requestedAt);
-  const shown=stationServiceUi.showAll?records:records.slice(0,6);
   return `<section class="station-overview"><div class="station-weather"><span aria-hidden="true">${weatherIcon(weather)}</span><b>${esc(weather.conditions)}</b><span>${Math.round((weather.capacityFactor||1)*100)}% weather capacity</span></div>
     <dl class="station-facts">${profiles.map(profile=>`<div><dt>${esc(profile.label)}</dt><dd>${profile.available?`${profile.capacity} teams`:'Unavailable'}</dd></div>`).join('')}<div><dt>Additional teams active</dt><dd>${stationAdditionalTeams(airport,now)}</dd></div></dl>
-    <h2>Exceptional coordination</h2><div class="station-request-list">${shown.length?shown.map(record=>`<button type="button" class="station-request-row" data-station-open="${esc(record.id)}"><span><b>${esc(record.flightId||record.airport)} · ${esc(STATION_SERVICES[record.service].label)}</b><small>${esc(STATION_PROVIDERS[record.provider])} · ${esc(shortClock(record.startAt))}</small></span><em>${esc(stationRequestStatus(record))}</em></button>`).join(''):'<div class="empty-state">No station coordination requests.</div>'}</div>
-    ${records.length>6?`<button class="desk-action-link" type="button" data-station-show-all>${stationServiceUi.showAll?'Show fewer':`Show all ${records.length}`}</button>`:''}</section>`;
+    <h2>Requests</h2><div class="station-request-list">${records.length?AeroUi.list(records,record=>`<button type="button" class="station-request-row" data-station-open="${esc(record.id)}"><span><b>${esc(record.flightId||record.airport)} · ${esc(STATION_SERVICES[record.service].label)}</b><small>${esc(STATION_PROVIDERS[record.provider])} · ${esc(shortClock(record.startAt))}</small></span><em>${esc(stationRequestStatus(record))}</em></button>`,{key:`station-${airport}`}):'<div class="empty-state">No station requests.</div>'}</div></section>`;
 }
 function stationServiceFormMarkup(){
   const ui=stationServiceUi,options=stationServiceFormOptions(),service=options.service;
@@ -74,7 +67,7 @@ function stationServiceFormMarkup(){
   return `<section class="station-service-form">
     ${panel==='recovery'?`<label>Recovery action<select data-station-service>${serviceChoices.map(([id,model])=>`<option value="${id}" ${id===service?'selected':''}>${esc(model.label)}</option>`).join('')}</select></label>`:''}
     ${service==='replacement'?`<label>Handling phase<select data-station-handling><option value="arrival" ${ui.handling==='arrival'?'selected':''}>Arrival handling</option><option value="departure" ${ui.handling==='departure'?'selected':''}>Departure handling</option></select></label>`:''}
-    ${options.phase!=='station'?`<label>${service==='arrival'?'Diverted flight':'Flight'}<select data-station-flight ${!options.flights.length?'disabled':''}>${options.flights.length?options.flights.map(flight=>`<option value="${esc(flight.id)}" ${options.flightId===flight.id?'selected':''}>${esc(personnelFlightLabel(flight))}</option>`).join(''):`<option>${service==='arrival'?'No diverted arrival needs handling':service==='priority'?'No flight has recoverable handling delay':'No handler replacement is needed'}</option>`}</select></label>`:
+    ${options.phase!=='station'?`<label>${service==='arrival'?'Diverted flight':'Flight'}<select data-station-flight ${!options.flights.length?'disabled':''}>${options.flights.length?options.flights.map(flight=>`<option value="${esc(flight.id)}" ${options.flightId===flight.id?'selected':''}>${esc(AeroUi.flightLabel(flight))}</option>`).join(''):`<option>${service==='arrival'?'No diverted arrival needs handling':service==='priority'?'No flight has recoverable handling delay':'No handler replacement is needed'}</option>`}</select></label>`:
       `<div class="station-form-pair"><label>Additional teams<select data-station-units>${[2,4,6,8].map(n=>`<option value="${n}" ${ui.units===n?'selected':''}>${n}</option>`).join('')}</select></label><label>Duration<select data-station-duration>${[60,120,240].map(n=>`<option value="${n}" ${ui.durationMin===n?'selected':''}>${n/60} hours</option>`).join('')}</select></label></div><label>Coverage from<input type="datetime-local" data-station-start value="${Number.isFinite(options.startAt)?datetimeLocalValue(options.startAt):''}"></label>`}
     <label>Provider<select data-station-provider>${Object.entries(STATION_PROVIDERS).map(([id,label])=>`<option value="${id}" ${ui.provider===id?'selected':''}>${esc(label)}</option>`).join('')}</select></label>
     <dl class="station-facts"><div><dt>Provider capacity ${infoTip('Modeled handling teams, reduced by weather. Existing requests reserve service windows; this is not runway capacity.')}</dt><dd>${preview.profile.capacity} teams / ${preview.units} required</dd></div><div><dt>Response</dt><dd>${preview.responseMin} min</dd></div><div><dt>Earliest provider ready</dt><dd>${esc(formatTime(preview.readyAt))}</dd></div><div><dt>Service window</dt><dd>${esc(shortClock(preview.startAt))} - ${esc(shortClock(preview.endsAt))}</dd></div><div><dt>Potential impact</dt><dd>${preview.impactMin?`+${preview.impactMin} min wait`:'No additional wait'}</dd></div><div><dt>Estimated cost</dt><dd>${money(preview.cost)}</dd></div></dl>
@@ -89,7 +82,7 @@ function stationServicesDeskMarkup(){
     delete workspaceUi.nextDeskPanels.station;
     saveWorkspaceUi();
   }
-  return `<div data-station-widget><label class="station-selector">Station<select data-station-airport>${Object.keys(AIRPORTS).sort().map(code=>`<option value="${code}" ${code===airport?'selected':''}>${esc(code)} - ${esc(AIRPORTS[code].name)}</option>`).join('')}</select></label>
+  return `<div data-station-widget><label class="station-selector">Station<select data-station-airport>${Object.keys(AIRPORTS).sort().map(code=>`<option value="${code}" ${code===airport?'selected':''}>${esc(AeroUi.airportLabel(code))}</option>`).join('')}</select></label>
     ${deskActionBar('station',[{panel:'overview',label:'Overview'},{panel:'diversion',label:'Diversions'},{panel:'recovery',label:'Recovery'}])}
     ${activeDeskTab('station')==='overview'?stationOverviewMarkup():stationServiceFormMarkup()}</div>`;
 }
@@ -113,10 +106,9 @@ function bindStationServiceControls(root){
   host.querySelectorAll('[data-station-new]').forEach(button=>button.addEventListener('click',()=>{stationServiceUi.requestId='';stationServiceUi.newRequest=true;refresh();}));
   host.querySelector('[data-station-cancel]')?.addEventListener('click',event=>{cancelStationService(event.currentTarget.dataset.stationCancel);refresh();});
   host.querySelector('[data-station-accept]')?.addEventListener('click',event=>{acceptStationServiceOffer(event.currentTarget.dataset.stationAccept);refresh();});
-  host.querySelector('[data-station-show-all]')?.addEventListener('click',()=>{stationServiceUi.showAll=!stationServiceUi.showAll;refresh();});
   root.querySelectorAll('[data-station-open]').forEach(button=>button.addEventListener('click',()=>{
     const record=stationServiceRequest(button.dataset.stationOpen);stationServiceUi.requestId=record.id;stationServiceUi.newRequest=false;stationServiceUi.airport=record.airport;
-    setDeskPanel('station',STATION_SERVICES[record.service].tab,{toggle:false});refresh();
+    setDeskPanel('station',STATION_SERVICES[record.service].tab);refresh();
     document.getElementById('occ-desk-station')?.scrollIntoView({behavior:'smooth',block:'start'});
   }));
   host.addEventListener('focusout',()=>setTimeout(()=>{if(!activeFormControlWithin(host)) renderDeskStack(false);},0));

@@ -98,6 +98,13 @@ function airportNightTooltip(airport){
   return `${airport.iata} - ${airport.name}\n${modeLabel}: ${rule.start}-${rule.end} local\n${rule.detail||rule.label}`;
 }
 
+function airportMapTooltip(airport,t=simNow()){
+  const weather=Management.weatherAt(airport.iata,t);
+  const remaining=weather.validUntil>t?formatDuration(weather.validUntil-t):'updating';
+  const system=weather.weatherSystemId?`\nSystem: ${weather.weatherSystemId}`:'';
+  return `${airportNightTooltip(airport)}\nWeather: ${weather.conditions} · capacity ${Math.round(weather.capacityFactor*100)}%\nForecast for ${remaining}${system}`;
+}
+
 function simplifyBaseMapLabels(){
   for(const id of HIDDEN_BASEMAP_LABEL_LAYERS){
     if(layerExists(id)) map.setLayoutProperty(id,'visibility','none');
@@ -122,8 +129,8 @@ function aircraftMarkerHtml(ac, p, index=operationalIndex()) {
   const label = p.flight ? `${p.flight.id}  ${ac.tail}` : ac.tail;
   const problem=aircraftMapProblemState(ac,p,index);
   const rotation = Math.round((p.heading || 0) - 45);
-  const movementClass=p.status==='airborne'?'airborne':p.status==='taxi_out'||p.status==='taxi_in'?'taxi':'ground';
-  const statusLabel=p.status==='taxi_out'?'Taxi out':p.status==='taxi_in'?'Taxi in':p.status==='airborne'?'Airborne':'On ground';
+  const movementClass=p.holding?'airborne holding':p.status==='airborne'?'airborne':p.status==='taxi_out'||p.status==='taxi_in'?'taxi':'ground';
+  const statusLabel=p.holding?'Holding':p.status==='taxi_out'?'Taxi out':p.status==='taxi_in'?'Taxi in':p.status==='airborne'?'Airborne':'On ground';
   return `<div class="plane-shell ${movementClass} ${problem.level} ${selected ? 'selected' : ''}" title="${esc(problem.label||statusLabel)}">
     <span class="plane-glyph" style="transform:rotate(${rotation}deg)">&#9992;</span>
     <span class="plane-label-map">${esc(label)}</span>
@@ -134,10 +141,11 @@ function createAirportMarker(airport){
   const element=document.createElement('button');
   element.type='button';
   element.className='airport-marker';
-  const tooltip=airportNightTooltip(airport);
-  element.title=tooltip;
+  element.title=airportNightTooltip(airport);
   element.innerHTML=`<span class="airport-dot"></span><span class="airport-label">${esc(airport.iata)}</span>`;
   element.addEventListener('mouseenter',()=>{
+    const tooltip=airportMapTooltip(airport);
+    element.title=tooltip;
     mapPopup
       .setLngLat([airport.lon,airport.lat])
       .setHTML(esc(tooltip).replace(/\n/g,'<br>'))
@@ -151,29 +159,12 @@ function createAirportMarker(airport){
   const marker=new maplibregl.Marker({element,anchor:'center'})
     .setLngLat([airport.lon,airport.lat])
     .addTo(map);
-  airportMarkers.set(airport.iata,marker);
+  airportMarkers.set(airport.iata,{marker,element});
 }
 
 function createAirportMarkers(){
   if(airportMarkers.size) return;
   for (const airport of Object.values(AIRPORTS)) createAirportMarker(airport);
-}
-
-function circlePolygon(lon,lat,radiusKm,steps=72){
-  const coords=[];
-  const angularDistance=radiusKm/6371;
-  const latRad=lat*Math.PI/180;
-  const lonRad=lon*Math.PI/180;
-  for(let i=0;i<=steps;i++){
-    const bearing=2*Math.PI*i/steps;
-    const pointLat=Math.asin(Math.sin(latRad)*Math.cos(angularDistance)+Math.cos(latRad)*Math.sin(angularDistance)*Math.cos(bearing));
-    const pointLon=lonRad+Math.atan2(
-      Math.sin(bearing)*Math.sin(angularDistance)*Math.cos(latRad),
-      Math.cos(angularDistance)-Math.sin(latRad)*Math.sin(pointLat)
-    );
-    coords.push([((pointLon*180/Math.PI+540)%360)-180,pointLat*180/Math.PI]);
-  }
-  return coords;
 }
 
 function routeLineFeature(f,routeWeather,t){
@@ -244,14 +235,16 @@ function rebuildSelectedRouteIfNeeded(){
   const plan=flight&&window.AeroRoutePlanning?.ensureFlightRoutePlan?.(flight);
   const revision=plan&&window.AeroRoutePlanning?.activeRevision?.(plan);
   const progress=flight&&window.AeroRoutePlanning?.routeProgressForFlight?.(flight,t);
+  const holding=flight?.holding||null;
   const signature=flight&&revision
-    ? `${flight.id}:${revision.id}:${flightOperationalDestination(flight)}:${flightActualDeparture(flight)}:${flightActualArrival(flight)}:${Math.floor((progress||0)*1000)}`
+    ? `${flight.id}:${revision.id}:${flightOperationalDestination(flight)}:${flightActualDeparture(flight)}:${flightActualArrival(flight)}:${Math.floor((progress||0)*1000)}:${holding?.status||''}:${holding?.enteredAt||0}`
     : '';
   if(signature===selectedRouteSignature) return;
   selectedRouteSignature=signature;
   if(!flight||!revision){
     clearMapSource('selected-route-flown');
     clearMapSource('selected-route-remaining');
+    clearMapSource('selected-route-holding');
     return;
   }
   const split=window.AeroRoutePlanning?.splitRouteCoordinatesForFlight?.(flight,t);
@@ -259,6 +252,15 @@ function rebuildSelectedRouteIfNeeded(){
   const remaining=selectedRouteFeature(flight,split?.remaining,'remaining',split);
   setMapSourceData('selected-route-flown',mapFeatureCollection(flown?[flown]:[]));
   setMapSourceData('selected-route-remaining',mapFeatureCollection(remaining?[remaining]:[]));
+  const holdingCoordinates=window.AeroHolding?.holdingIsActive?.(flight)
+    ? window.AeroHolding.holdingPatternWaypoints(flight).map(point=>[point.lon,point.lat])
+    : [];
+  const holdingFeature=holdingCoordinates.length>=2?{
+    type:'Feature',id:`${flight.id}-holding`,
+    properties:{id:flight.id,phase:'holding',tooltip:`${flight.id} · active ATC hold · EFC ${shortClock(holding.expectedReleaseAt)}`},
+    geometry:{type:'LineString',coordinates:holdingCoordinates}
+  }:null;
+  setMapSourceData('selected-route-holding',mapFeatureCollection(holdingFeature?[holdingFeature]:[]));
 }
 
 function rebuildRoutesIfNeeded() {
@@ -314,7 +316,7 @@ function weatherCellFeature(cell,selected=false){
       fillOpacity:cell.severity==='severe' ? .16 : .10,
       opacity:selected ? .9 : cell.severity==='severe' ? .55 : .38,
       width:selected ? 2 : 1,
-      tooltip:`${cell.label} · ${cell.severity} · possible +${cell.delayMin}m`
+      tooltip:`${cell.label} · ${cell.severity} · possible +${cell.delayMin}m · forecast for ${formatDuration(Math.max(0,(cell.activeUntil||simNow())-simNow()))}`
     },
     geometry:{type:'Polygon',coordinates:[coordinates]}
   };
@@ -351,27 +353,6 @@ function networkEventFeature(event){
   };
 }
 
-function airportWeatherFeature(code,weather){
-  const airport=AIRPORTS[code];
-  if(!airport) return null;
-  const style=weatherLevelStyle(weather.level);
-  return {
-    type:'Feature',
-    id:`airport-weather-${code}`,
-    properties:{
-      code,
-      level:weather.level,
-      color:style.color,
-      fillColor:style.fillColor,
-      fillOpacity:style.fillOpacity,
-      opacity:style.opacity,
-      width:weather.level==='normal'?1:2,
-      tooltip:`${code} · ${weather.conditions} · wind ${weather.windDirection}°/${weather.windKph}G${weather.gustKph} km/h · vis ${weather.visibilityKm} km · ceiling ${weather.ceilingFt} ft · capacity ${Math.round(weather.capacityFactor*100)}%`
-    },
-    geometry:{type:'Polygon',coordinates:[circlePolygon(airport.lon,airport.lat,weather.impactRadiusKm||35)]}
-  };
-}
-
 function rebuildWeatherMapIfNeeded(){
   if(!mapReady||!window.AeroWeatherEngine) return;
   const t=simNow();
@@ -389,9 +370,15 @@ function rebuildWeatherMapIfNeeded(){
   if(signature===weatherMapSignature) return;
   weatherMapSignature=signature;
 
+  for(const {code,weather} of weatherByCode){
+    const record=airportMarkers.get(code);
+    if(!record) continue;
+    record.element.classList.toggle('weather-caution',weather.level==='caution');
+    record.element.classList.toggle('weather-severe',weather.level==='severe');
+    record.element.title=airportMapTooltip(AIRPORTS[code],t);
+  }
   const selectedId=typeof operationFilterWeatherCellId==='function'?operationFilterWeatherCellId():'';
   setMapSourceData('weather-cells',mapFeatureCollection(cells.map(cell=>weatherCellFeature(cell,selectedId===cell.id)).filter(Boolean)));
-  setMapSourceData('airport-weather',mapFeatureCollection(weatherByCode.map(item=>airportWeatherFeature(item.code,item.weather)).filter(Boolean)));
 }
 
 function rebuildNetworkEventsIfNeeded(){
@@ -440,6 +427,7 @@ function updateMapData() {
     const problem=aircraftMapProblemState(ac,p,index);
     const iconKey=[
       p.status,
+      p.holding?1:0,
       ac.id===selectedAircraftId?1:0,
       p.flight?p.flight.id:'ground',
       problem.level,
@@ -494,7 +482,7 @@ function showLayerPopup(event){
 }
 
 function bindMapLayerInteractions(){
-  for(const layerId of ['routes','selected-route-flown','selected-route-remaining','weather-cells-fill','airport-weather-fill','network-events-fill']){
+  for(const layerId of ['routes','selected-route-flown','selected-route-remaining','selected-route-holding','weather-cells-fill','network-events-fill']){
     map.on('mouseenter',layerId,()=>{ map.getCanvas().style.cursor='pointer'; });
     map.on('mousemove',layerId,showLayerPopup);
     map.on('mouseleave',layerId,()=>{
@@ -506,7 +494,7 @@ function bindMapLayerInteractions(){
     const id=event.features?.[0]?.properties?.id;
     if(id) settleSelectedFlight(id);
   });
-  for(const layerId of ['selected-route-flown','selected-route-remaining']){
+  for(const layerId of ['selected-route-flown','selected-route-remaining','selected-route-holding']){
     map.on('click',layerId,event=>{
       const id=event.features?.[0]?.properties?.id;
       if(id) settleSelectedFlight(id);
@@ -526,23 +514,14 @@ function bindMapLayerInteractions(){
 }
 
 function initialiseMapLayers(){
-  addGeoJsonSource('airport-weather');
   addGeoJsonSource('weather-cells');
   addGeoJsonSource('network-events');
   addGeoJsonSource('route-weather');
   addGeoJsonSource('routes');
   addGeoJsonSource('selected-route-flown');
   addGeoJsonSource('selected-route-remaining');
+  addGeoJsonSource('selected-route-holding');
 
-  addFillLayer('airport-weather-fill','airport-weather',{
-    'fill-color':['get','fillColor'],
-    'fill-opacity':['get','fillOpacity']
-  });
-  addLineLayer('airport-weather-line','airport-weather',{
-    'line-color':['get','color'],
-    'line-opacity':['get','opacity'],
-    'line-width':['get','width']
-  });
   addFillLayer('weather-cells-fill','weather-cells',{
     'fill-color':['get','fillColor'],
     'fill-opacity':['get','fillOpacity']
@@ -584,16 +563,20 @@ function initialiseMapLayers(){
     'line-width':3,
     'line-dasharray':[2,1.6]
   });
+  addLineLayer('selected-route-holding','selected-route-holding',{
+    'line-color':'#f0c95c',
+    'line-opacity':.96,
+    'line-width':4
+  });
 
   bindMapLayerInteractions();
 }
 
-const routeLayer={clearLayers:()=>{ routeSignature=''; selectedRouteSignature=''; clearMapSource('routes'); clearMapSource('route-weather'); clearMapSource('selected-route-flown'); clearMapSource('selected-route-remaining'); }};
+const routeLayer={clearLayers:()=>{ routeSignature=''; selectedRouteSignature=''; clearMapSource('routes'); clearMapSource('route-weather'); clearMapSource('selected-route-flown'); clearMapSource('selected-route-remaining'); clearMapSource('selected-route-holding'); }};
 const aircraftLayer={clearLayers:()=>{ for(const record of aircraftMarkers.values()) record.marker.remove(); aircraftMarkers.clear(); }};
 const weatherLayer={clearLayers:()=>{ weatherMapSignature=''; clearMapSource('weather-cells'); }};
 const networkEventLayer={clearLayers:()=>{ networkEventMapSignature=''; clearMapSource('network-events'); }};
-const airportWeatherLayer={clearLayers:()=>{ weatherMapSignature=''; clearMapSource('airport-weather'); }};
-const airportLayer={clearLayers:()=>{ for(const marker of airportMarkers.values()) marker.remove(); airportMarkers.clear(); }};
+const airportLayer={clearLayers:()=>{ for(const record of airportMarkers.values()) record.marker.remove(); airportMarkers.clear(); }};
 
 map.invalidateSize=function(){ map.resize(); };
 map.setView=function(center,zoom,options={}){

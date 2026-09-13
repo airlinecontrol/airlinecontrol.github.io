@@ -39,6 +39,7 @@
     await wait(150);
     let card=d.querySelector(`[data-critical-incident="${problem.caseId}"]`);
     assert(card?.querySelector('.incident-required-response.pending'),'incident card does not show the pending cabin response');
+    assert(!card?.querySelector('[data-problem-recovery-outlook]'),'state-driven medical problem incorrectly shows a recovery outlook');
     assert(/Cabin medical assessment/i.test(card.textContent),'incident card does not identify the expected cabin response');
 
     const midpoint=Math.round((problem.requiredResponse.requestedAt+problem.requiredResponse.respondsAt)/2);
@@ -94,6 +95,22 @@
     assert(technicalCard.textContent.includes(technicalProblem.requiredResponse.severityLabel),'technical fault card does not display fault severity');
     assert(technicalCard.textContent.includes(technicalProblem.requiredResponse.decision),'technical fault card does not display the flight-deck decision');
     assert(technicalProblem.status==='open','receiving the flight-deck assessment incorrectly resolved the technical problem');
+
+    const timedEventAt=technicalCompletedAt;
+    const timedAircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const timedFlight=w.createFlightRecord({
+      aircraftId:timedAircraft.id,from:'FRA',to:'LHR',departure:timedEventAt+8*60*60_000,
+      fare:{economy:140,business:360,first:700}
+    });
+    const timedContext=w.generatedOperationalEventContext('fuel_supplier_outage',timedFlight,timedEventAt);
+    assert(timedContext?.activeUntil>timedEventAt,'temporary fuel-supply event has no modeled end time');
+    const timedProblem=w.createProblem('fuel_supplier_outage',timedFlight,{
+      training:true,detectedAt:timedEventAt,source:'fixture',sourceKey:'fixture:timed-fuel-outage',context:timedContext
+    });
+    assert(w.AeroProblemModel.timeProjectionForProblem(timedProblem,timedEventAt)?.timeBased,'temporary fuel-supply event has no recovery outlook');
+    const afterTimedEvent=timedContext.activeUntil+60_000;
+    w.eval(`state.clock={realBase:Date.now(),simBase:${afterTimedEvent},speed:0,paused:true,previousSpeed:1}; processProblems(simNow());`);
+    assert(timedProblem.status==='resolved'&&timedProblem.autoCloseReason==='operation_state_cleared','temporary event did not clear with its modeled operational window');
     result.textContent=`PASS\nmedical=${problem.requiredResponse.outcomeId}\ntechnical=${technicalProblem.requiredResponse.outcomeId}`;
   }catch(error){result.textContent='FAIL\n'+(error.stack||error);}
 })();

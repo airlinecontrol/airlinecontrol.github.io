@@ -17,6 +17,7 @@
     await loaded;
     const w=frame.contentWindow,d=frame.contentDocument;
     w.resetLocalSave();
+    w.eval('state.ops.automaticDisruptions=false; state.clock={realBase:Date.now(),simBase:Date.UTC(2026,8,15,10),speed:0,paused:true,previousSpeed:1};');
     await wait(150);
 
     const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
@@ -46,8 +47,8 @@
     const through=w.crewDutyForFlight(outbound);
     assert(through.sectors===2&&through.legal,'through duty should be legal with two sectors');
     assert(d.querySelectorAll('.crew-duty-bar').length>=1,'schedule crew duty bar is missing');
-    assert(d.querySelector('.crew-duty-bar')?.getAttribute('title')?.includes(outbound.id),'crew duty bar title does not reference flights');
-    assert(d.querySelector('.crew-duty-bar')?.textContent.includes('Crew duty'),'crew duty bar should use a simple label');
+    assert(d.querySelector('.crew-duty-bar')?.dataset.help?.includes(outbound.id),'crew coverage detail does not reference flights');
+    assert(d.querySelector('.crew-duty-bar')?.textContent.includes('Crew coverage'),'crew duty bar should identify coverage, not one shared clock');
     assert(!/\d+\.\d\/\d+\.\d/.test(d.querySelector('.crew-duty-bar')?.textContent||''),'crew duty bar exposes detailed duty math in the schedule');
 
     const next=w.createFlightRecord({aircraftId:ac.id,from:'FRA',to:'LHR',departure:ret.arrival+20*60_000,fare:{economy:150,business:390,first:750},serviceId:'SCD2',serviceLeg:'outbound'});
@@ -94,7 +95,7 @@
     assert(outbound.crewRoleSwaps?.captains,'captain replacement was not tracked on the flight');
     assert(w.crewDutyForFlight(outbound).roleSwaps.some(item=>item.role==='captains'),'captain replacement was not reflected in the duty record');
     assert(d.querySelector('.crew-duty-bar.has-role-swap'),'crew duty bar does not show a role-swap marker');
-    assert(d.querySelector('.crew-duty-bar.has-role-swap')?.getAttribute('title')?.includes('role replacement'),'crew duty bar title does not explain role replacement');
+    assert(d.querySelector('.crew-duty-bar.has-role-swap')?.dataset.help?.includes('Role replacement'),'crew coverage detail does not explain role replacement');
 
     w.settleSelectedFlight(ret.id);
     await wait(120);
@@ -106,7 +107,7 @@
     flightSelect.value=ret.id;flightSelect.dispatchEvent(new w.Event('change',{bubbles:true}));
     await wait(80);
     const mode=d.querySelector('[data-crew-assignment-mode]');
-    assert(mode,'personnel widget does not expose crew assignment');
+    assert(mode,'personnel widget does not expose crew assignment: '+d.querySelector('.crew-pool-assignment')?.textContent);
     mode.value='full';mode.dispatchEvent(new w.Event('change',{bubbles:true}));
     assert(!d.querySelector('[data-request-crew-assignment]').disabled,'full swap should be available with local LHR reserves: '+d.querySelector('[data-crew-assignment-blocker]')?.textContent);
     d.querySelector('[data-request-crew-assignment]').click();

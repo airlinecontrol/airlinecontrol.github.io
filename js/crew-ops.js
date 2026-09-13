@@ -228,6 +228,18 @@ function crewRecoveryRoleCount(record,role,family=''){
   return Math.max(0,Math.floor(Number(roles[role])||0));
 }
 
+function pruneCrewRecoveryHistory(){
+  const previous=state.crewRecoveries||[];
+  if(!previous.length) return false;
+  const flightIds=new Set(state.flights.map(flight=>flight.id));
+  const reservedIds=new Set(crewAssignments().filter(crewAssignmentActive)
+    .flatMap(record=>record.allocations.filter(item=>item.sourceType==='recovery').map(item=>item.sourceId)));
+  state.crewRecoveries=previous.filter(record=>flightIds.has(record.flightId)||reservedIds.has(record.id)
+    ||!['confirmed','cancelled'].includes(record.status)
+    ||(record.status==='confirmed'&&CREW_ROLES.some(role=>crewRecoveryRoleCount(record,role)>(record.consumedRoles?.[role]||0))));
+  return previous.length!==state.crewRecoveries.length;
+}
+
 function crewRecoveryAvailableStaffAt(airport,role,family='',t=simNow(),excludeFlightId=''){
   return (state.crewRecoveries||[]).reduce((sum,record)=>{
     if(record.flightId===excludeFlightId) return sum;
@@ -494,6 +506,11 @@ function staffingRequirementSnapshot(ac,departure,duration,airport=ac.location,c
     if(Math.abs(otherDep-departure)<60*MIN){ needed.operations++; if(f.flightType!=='ferry') needed.customerService++; }
   }
   return {airport,family,needed,qualifiedNeeded};
+}
+
+function staffingEvaluationWindow(flight,t=simNow()){
+  const expectedDeparture=flightActualDeparture(flight);
+  return {departure:Math.max(expectedDeparture,t),duration:Math.max(MIN,flightActualArrival(flight)-expectedDeparture)};
 }
 
 function personnelDeficitsForFlight(ac,departure,duration,airport=ac.location,candidateId=null,localFlightCrew=true,flightType='passenger'){

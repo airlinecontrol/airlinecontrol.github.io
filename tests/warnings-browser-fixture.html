@@ -252,6 +252,24 @@
       d.querySelector('[data-desk-widget="warnings"] [data-toggle-desk]')?.click();
       assert(true,'warning widget remains clickable after stale retired problem cleanup');
     }
+    {
+      const fuelAc=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'ATL');
+      const fuelFlight=w.createFlightRecord({aircraftId:fuelAc.id,from:'ATL',to:'MCO',departure:now+45*60_000,fare:{economy:120,business:300,first:0}});
+      fuelFlight.fueled=false;
+      fuelFlight.departureLogged=false;
+      fuelFlight.actualDeparture=fuelFlight.departure;
+      fuelFlight.actualArrival=fuelFlight.arrival;
+      for(const at of [now,fuelFlight.departure-15*60_000]){
+        assert(!w.operationWarnings(at).some(item=>item.type==='fuel_uplift_warning'),'routine pending fueling created a warning');
+      }
+      const retained={id:`fuel-uplift:${fuelFlight.id}`,type:'fuel_uplift_warning',flightId:fuelFlight.id,aircraftId:fuelAc.id,title:'Fuel uplift pending',level:'warning',sortAt:now};
+      w.eval(`state.warningRegistry[${JSON.stringify(retained.id)}]=${JSON.stringify(retained)}`);
+      assert(!w.operationWarnings(now).some(item=>item.id===retained.id),'removed fuel warning remained visible during the clearance grace period');
+      assert(!w.eval(`state.warningRegistry[${JSON.stringify(retained.id)}]`),'removed fuel warning remained in saved warning memory');
+      w.renderDeskStack(true);
+      assert(!d.querySelector('[data-desk-widget="warnings"]').textContent.includes('Fuel uplift pending'),'removed fuel warning remained in the widget');
+      assert(!fuelFlight.fueled,'removing the warning changed fuel state');
+    }
     result.textContent='PASS warning widget validated';
   }catch(error){
     result.textContent='FAIL '+(error.stack||error);

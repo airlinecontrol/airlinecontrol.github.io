@@ -1,0 +1,169 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Airline OCC holding browser fixture</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result');
+  const frame=document.getElementById('game');
+  const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+  const setNow=(w,at)=>w.eval(`state.clock={...state.clock,simBase:${Math.round(at)},realBase:Date.now(),speed:0,paused:true,previousSpeed:10};`);
+  try{
+    localStorage.removeItem('aerosim_mvp_v6');
+    localStorage.removeItem('aerosim_occ_ui_v1');
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=holding&cache='+Date.now();
+    await loaded;
+    const w=frame.contentWindow,d=frame.contentDocument;
+    w.resetLocalSave();
+    w.eval(`
+      state.ops.automaticDisruptions=false;
+      state.aircraft=[];
+      state.flights=[];
+      state.problems=[];
+      state.externalRequests=[];
+    `);
+    await wait(120);
+    const now=w.simNow();
+
+    assert(w.AeroHolding?.holdingProposalForFlight,'holding module is not exposed');
+    const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const flight=w.createFlightRecord({
+      aircraftId:aircraft.id,
+      from:'FRA',
+      to:'LHR',
+      departure:now-45*60_000,
+      fare:{economy:160,business:420,first:780}
+    });
+    flight.departureLogged=true;
+    flight.actualDeparture=flight.departure;
+    flight.arrival=now+45*60_000;
+    flight.actualArrival=flight.arrival;
+    flight.operationalDurationMs=flight.arrival-flight.departure;
+    const fuelPlan=w.flightFuelPlan('FRA','LHR',aircraft);
+    flight.fueled=true;
+    flight.tripFuelGallons=fuelPlan.tripBurnGal;
+    flight.fuelReserveGallons=fuelPlan.reserveGal;
+    flight.fuelOnboardAtDeparture=fuelPlan.fuelCapacityGal;
+    aircraft.fuelGallons=fuelPlan.fuelCapacityGal;
+    w.recalculateOperations();
+    const problem=w.createProblem('destination_below_minima',flight,{
+      training:true,
+      detectedAt:now-10*60_000,
+      sourceKey:'fixture:short-weather-hold',
+      context:{
+        airport:'LHR',
+        active:true,
+        forecastFrom:now-10*60_000,
+        forecastUntil:w.flightActualArrival(flight)+18*60_000,
+        reason:'Short landing-weather restriction'
+      }
+    });
+    assert(problem,'time-based destination problem was not created');
+    problem.deadline=now+2*60*60_000;
+    const proposal=w.AeroHolding.holdingProposalForFlight(flight,now);
+    assert(proposal?.available,`safe short hold was not offered: ${proposal?.unavailableReason||'no proposal'}`);
+    assert(proposal.proposedMin>=15&&proposal.proposedMin<=25,'hold duration does not follow the forecast-clearance gap');
+    assert(proposal.fuel.maxSafeHoldMin>=proposal.proposedMin,'holding proposal exceeds its fuel-backed limit');
+
+    const arrivalBefore=w.flightActualArrival(flight);
+    w.requestHoldingPlan(flight.id);
+    assert(flight.holding?.status==='pending','holding began without a flight-deck/ATC response');
+    assert(!w.AeroHolding.holdingIsActive(flight),'pending holding request changed the flight state');
+    w.processProblemDefaults(problem,flight.holding.respondsAt-1);
+    assert(!flight.diversionAirport,'unattended safety default ignored a pending holding response');
+    let acceptedRequestId='';
+    for(let i=0;i<100;i++){
+      const candidate=`fixture-holding-accepted-${i}`;
+      if(w.stableFraction(`${candidate}:acceptance`)>.55){acceptedRequestId=candidate;break;}
+    }
+    assert(acceptedRequestId,'could not find a deterministic accepted holding response');
+    flight.holding.id=acceptedRequestId;
+    const acceptedAt=flight.holding.respondsAt+1;
+    setNow(w,acceptedAt);
+    assert(w.processHoldingOperations(acceptedAt),'holding response did not update the flight');
+    w.recalculateOperations();
+    assert(w.AeroHolding.holdingIsActive(flight),'accepted holding clearance did not enter the active state');
+    assert(w.AeroHolding.holdingPatternWaypoints(flight).length>=30,'active hold does not have a real racetrack geometry');
+    const progressAtEntry=w.flightProgress(flight,acceptedAt);
+    const holdPosition=w.currentAircraftPosition(aircraft,acceptedAt);
+    assert(holdPosition.holding&&holdPosition.status==='airborne','aircraft map position does not enter the holding pattern');
+
+    const fiveMinutesLater=acceptedAt+5*60_000;
+    setNow(w,fiveMinutesLater);
+    w.processHoldingOperations(fiveMinutesLater);
+    w.recalculateOperations();
+    const progressDuring=w.flightProgress(flight,fiveMinutesLater);
+    assert(flight.holdingDelayMin>=5,'active holding time did not become real en-route delay');
+    assert(w.flightActualArrival(flight)>=arrivalBefore+5*60_000,'holding delay did not move projected arrival');
+    assert(Math.abs(progressDuring-progressAtEntry)<.03,'route progress advanced while the aircraft was holding');
+    w.processProblemDefaults(problem,fiveMinutesLater);
+    assert(!flight.diversionAirport,'unattended safety default interrupted an active fuel-backed hold');
+    const movedHoldPosition=w.currentAircraftPosition(aircraft,fiveMinutesLater);
+    assert(movedHoldPosition.holding,'aircraft left the racetrack before release');
+    assert(Math.abs(movedHoldPosition.lat-holdPosition.lat)>.0001||Math.abs(movedHoldPosition.lon-holdPosition.lon)>.0001,'aircraft icon does not move around the holding pattern');
+
+    w.settleSelectedFlight(flight.id);
+    w.setDeskPanel('planning','route',{toggle:false});
+    w.renderDeskStack(true,true);
+    w.refreshScheduleTimeline(true);
+    await wait(140);
+    const dispatch=d.querySelector(`[data-dispatch-route-flight="${flight.id}"]`);
+    assert(dispatch?.textContent.includes('Holding active'),`Dispatch does not show the active holding state: ${JSON.stringify({holding:flight.holding,context:w.AeroHolding.holdingContextForFlight(flight),dispatch:dispatch?.textContent?.slice(0,500)})}`);
+    assert(dispatch.querySelector('[data-dispatch-holding-exit]'),'Dispatch does not offer coordinated holding exit');
+    assert(d.querySelector(`[data-dispatch-route="${flight.id}"] .dispatch-route-path.holding`),'Dispatch route visual does not draw the holding racetrack');
+    const scheduleBlock=d.querySelector(`.flight-block[data-flight-id="${flight.id}"]`);
+    assert(scheduleBlock?.classList.contains('holding'),'schedule flight is not marked as holding');
+    assert(scheduleBlock.querySelector('.flight-holding-label')?.textContent==='HOLD','schedule does not identify the active hold');
+
+    for(let i=0;i<60&&!w.__aeroMapReady;i++) await wait(100);
+    w.updateMapData();
+    await wait(80);
+    const holdingFeature=w.eval(`map.getSource('selected-route-holding')?.data?.features?.[0]`);
+    assert(holdingFeature?.properties?.phase==='holding',`selected flight map does not render the holding pattern: ${JSON.stringify(w.eval(`({ready:__aeroMapReady,selected:selectedFlightId,holding:state.flights.find(item=>item.id==='${flight.id}')?.holding,simNow:simNow(),status:statusOfFlight(state.flights.find(item=>item.id==='${flight.id}')),movement:flightMovementTimes(state.flights.find(item=>item.id==='${flight.id}')),source:map.getSource('selected-route-holding')?.data})`))}`);
+
+    flight.holding.expectedReleaseAt=fiveMinutesLater+2*60_000;
+    const releaseAt=flight.holding.expectedReleaseAt+1;
+    setNow(w,releaseAt);
+    w.processHoldingOperations(releaseAt);
+    w.recalculateOperations();
+    assert(flight.holding.status==='released','hold did not end at the expected-further-clearance time');
+    assert(flight.holding.totalDelayMin>=7,'released hold did not retain its full delay consequence');
+    assert(!w.currentAircraftPosition(aircraft,releaseAt).holding,'aircraft remained on the racetrack after release');
+
+    problem.status='resolved';
+    problem.resolvedAt=releaseAt;
+    w.invalidateOperationalIndex();
+    w.renderDeskStack(true,true);
+    await wait(80);
+    const idleHoldingButton=d.querySelector(`[data-dispatch-holding-plan="${flight.id}"]`);
+    assert(idleHoldingButton,'Holding coordination disappeared from Dispatch without an active problem');
+    assert(idleHoldingButton.disabled,'Holding coordination is enabled without a short-lived operational need');
+    assert(/No short-lived weather, airport, or ATC constraint/i.test(idleHoldingButton.textContent),'idle Holding coordination does not explain its current availability');
+
+    const unsafeAircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    const unsafeFlight=w.createFlightRecord({aircraftId:unsafeAircraft.id,from:'FRA',to:'LHR',departure:releaseAt-30*60_000,fare:{economy:120,business:300,first:650}});
+    unsafeFlight.departureLogged=true;
+    unsafeFlight.actualDeparture=unsafeFlight.departure;
+    unsafeFlight.arrival=releaseAt+50*60_000;
+    unsafeFlight.actualArrival=unsafeFlight.arrival;
+    unsafeFlight.operationalDurationMs=unsafeFlight.arrival-unsafeFlight.departure;
+    unsafeFlight.fueled=true;
+    unsafeFlight.tripFuelGallons=fuelPlan.tripBurnGal;
+    unsafeFlight.fuelReserveGallons=fuelPlan.reserveGal;
+    unsafeFlight.fuelOnboardAtDeparture=fuelPlan.requiredGal;
+    w.createProblem('destination_below_minima',unsafeFlight,{training:true,detectedAt:releaseAt,sourceKey:'fixture:unsafe-hold-weather',context:{airport:'LHR',active:true,forecastFrom:releaseAt,forecastUntil:unsafeFlight.arrival+15*60_000}});
+    w.createProblem('fuel_margin_low',unsafeFlight,{training:true,detectedAt:releaseAt,sourceKey:'fixture:unsafe-hold-fuel'});
+    w.recalculateOperations();
+    const unsafeProposal=w.AeroHolding.holdingProposalForFlight(unsafeFlight,releaseAt);
+    assert(unsafeProposal&&!unsafeProposal.available,'holding was offered during an active fuel-margin problem');
+    assert(/fuel margin/i.test(unsafeProposal.unavailableReason),'unsafe hold does not explain the fuel-margin blocker');
+
+    result.textContent='PASS holding coordination, response, racetrack movement, delay, release, UI, and fuel guard validated';
+  }catch(error){
+    result.textContent='FAIL '+(error.stack||error);
+  }
+})();
+</script>

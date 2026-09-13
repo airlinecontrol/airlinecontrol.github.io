@@ -359,6 +359,7 @@
     if(!flight) return 0;
     if(typeof flightHasDeparted==='function' && !flightHasDeparted(flight,t)) return 0;
     if(typeof flightHasCompleted==='function' && flightHasCompleted(flight,t)) return 1;
+    if(typeof flightProgress==='function') return clampRoute(flightProgress(flight,t),0,1);
     if(typeof flightMovementTimes==='function'){
       const movement=flightMovementTimes(flight);
       return clampRoute((t-movement.takeoffAt)/(movement.landingAt-movement.takeoffAt||1),0,1);

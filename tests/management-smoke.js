@@ -41,12 +41,13 @@ assert.ok(melPlan.durationHours<plan.durationHours,'MEL rectification should be 
 assert.ok(repairPlan.durationHours<plan.durationHours,'technical repair should be shorter than a full check');
 assert.ok(melPlan.cost<plan.cost,'MEL rectification should cost less than a full check');
 const beforeMelHours=state.aircraft[0].maintenance.lastCheckHours;
+const groundedForMaintenance=(aircraft,job)=>({available:true,availableAt:job.start});
 state.aircraft[0].maintenance.scheduled=melPlan;
-assert.equal(management.processMaintenance(state,melPlan.end+1,()=>{}),true);
+assert.equal(management.processMaintenance(state,melPlan.end+1,()=>{},groundedForMaintenance),true);
 assert.equal(state.aircraft[0].maintenance.lastCheckHours,beforeMelHours,'MEL rectification must not reset full-check hours');
 state.aircraft[0].maintenance.scheduled=plan;
 const transactions=[];
-assert.equal(management.processMaintenance(state,plan.end+1,(...args)=>transactions.push(args)),true);
+assert.equal(management.processMaintenance(state,plan.end+1,(...args)=>transactions.push(args),groundedForMaintenance),true);
 assert.equal(transactions.length,1);
 assert.equal(state.aircraft[0].maintenance.scheduled,null);
 assert.ok(state.aircraft[0].condition>70);

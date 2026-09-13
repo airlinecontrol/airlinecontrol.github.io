@@ -1,0 +1,212 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AOC lifecycle integrity fixture</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result'),frame=document.getElementById('game');
+  const assert=(condition,message)=>{if(!condition) throw new Error(message);};
+  const MIN=60000,HOUR=60*MIN,DAY=24*HOUR,base=Date.UTC(2026,8,21,12);
+  try{
+    localStorage.clear();
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=lifecycle-integrity';await loaded;
+    const w=frame.contentWindow,failures=[];
+    let s;
+    const time=t=>{s.clock={simBase:t,realBase:Date.now(),speed:0,paused:true};};
+    const reset=()=>{w.eval('state=newState()');s=w.eval('state');time(base);s.ops.automaticDisruptions=false;w.invalidateOperationalIndex();};
+    const make=(model='A320neo',departure=base+30*MIN,from='FRA',to='LHR')=>{
+      const ac=w.assignRequestedAircraft(model,w.defaultCabin(model),from);
+      return {ac,flight:w.createFlightRecord({aircraftId:ac.id,from,to,departure,fare:100})};
+    };
+    const check=(name,run)=>{reset();try{run();}catch(error){failures.push(`${name}: ${error.message}`);}};
+    const closure=flight=>w.createProblem('destination_closure_ground',flight,{training:true,detectedAt:base,
+      context:{airport:'LHR',activeFrom:base,activeUntil:base+4*HOUR,active:true}});
+    const mel=id=>({id,code:id,status:'open',category:'A',detectedAt:base-HOUR,deferredAt:base-HOUR,expiresAt:base+DAY,remainingCycles:5});
+
+    for(const remove of [false,true]) check(`${remove?'Remove':'Cancel'} one flight preserves shared closure`,()=>{
+      const {flight:a}=make(),{flight:b}=make(),problem=closure(a);
+      assert(w.departureBlockingProblemsForFlight(b).includes(problem),'setup did not expose both flights');
+      if(remove) w.removeStandaloneSchedule(a.id);else w.cancelSingleFlight(a.id,{skipConfirm:true});
+      assert(problem.status==='open','shared closure was resolved by one flight');
+      assert(w.departureBlockingProblemsForFlight(b).includes(problem),'other flight lost its departure protection');
+      assert(!w.problemAffectedFlightIds(problem).includes(a.id),'cancelled/removed flight remained exposed');
+    });
+    check('Aircraft defect survives cancelling its flight',()=>{
+      const {ac,flight}=make();ac.defectUntil=base+DAY;
+      const problem=w.createProblem('mel_defect',flight,{training:true,detectedAt:base});
+      w.cancelSingleFlight(flight.id,{skipConfirm:true});
+      assert(problem.status==='open'&&w.aircraftIsDefective(ac,base),'cancellation cleared an aircraft problem');
+      ac.defectUntil=0;w.refreshProblem(problem,base);
+      assert(problem.status==='resolved','repair did not clear the aircraft problem');
+    });
+    check('Shared events outlive their last exposed flight',()=>{
+      const {flight}=make(),airportProblem=closure(flight);
+      const event={id:'NET-AUDIT',networkId:'audit-network',activeFrom:base-MIN,activeUntil:base+HOUR};
+      s.networkEvents.push(event);
+      const networkProblem=w.createProblem('network_airspace_closure',flight,{training:true,detectedAt:base,
+        context:{networkId:event.networkId,affectedFlightIds:[flight.id],activeFrom:event.activeFrom,activeUntil:event.activeUntil}});
+      assert(networkProblem?.scope?.kind==='network','network setup invalid');
+      w.cancelSingleFlight(flight.id,{skipConfirm:true});w.processProblems(base);
+      assert(networkProblem.status==='open'&&airportProblem.status==='open','shared event closed when its last flight was cancelled');
+      assert(!w.problemAffectedFlightIds(networkProblem).length,'cancelled network exposure remained');
+      w.refreshProblem(networkProblem,base+2*HOUR);w.refreshProblem(airportProblem,base+5*HOUR);
+      assert(networkProblem.status==='resolved'&&airportProblem.status==='resolved','expired shared event did not close');
+    });
+    check('Due crew response precedes defaults after a time jump',()=>{
+      const {ac,flight}=make('A320neo',base+45*MIN),family=w.AeroManagement.aircraftFamily(ac.model);
+      s.personnel.assignments={FRA:{captains:4,firstOfficers:4,cabinCrew:16,groundHandling:20,operations:10,customerService:10}};
+      s.personnel.qualifications={FRA:{captains:{[family]:4},firstOfficers:{[family]:4}}};
+      w.recalculateOperations();
+      const problem=w.createProblem('crew_sick',flight,{training:true,detectedAt:base});
+      const record=w.requestCrewAssignment(flight.id,{mode:'replace',roles:[problem.affectedRole],source:'local'});
+      assert(record,'crew request unavailable');w.processProblems(base);
+      time(base+2*HOUR);w.processOperationalTimerEvents(w.eventProcessingContext(w.simNow()));
+      assert(!flight.cancelled,'default cancelled before processing an already-due crew response');
+      assert(record.status==='assigned'&&problem.status==='resolved','crew recovery did not finish');
+    });
+    check('Booking cannot perform maintenance during flight',()=>{
+      const {flight,ac}=make('A330-900',base-HOUR,'FRA','JFK');flight.departureLogged=true;flight.fueled=true;
+      assert(w.flightIsAirborne(flight,base),'setup not airborne');
+      const job=w.scheduleMaintenanceCheckForAircraft(ac.id,base,{skipConfirm:true,allowFlightConflict:true,workType:'arrival_inspection'});
+      assert(!job&&!ac.maintenance.scheduled,'maintenance booked during an airborne sector');
+      assert(!flight.cancelled,'booking cancelled an airborne flight');
+      const future=w.scheduleMaintenanceCheckForAircraft(ac.id,w.flightActualArrival(flight)+30*MIN,{skipConfirm:true,workType:'arrival_inspection'});
+      assert(future?.airport==='JFK','future booking did not use projected station');
+      const preview=w.maintenanceWorkPreview(ac.id,'arrival_inspection',w.flightActualArrival(flight)+30*MIN);
+      assert(preview.plan.airport==='JFK'&&preview.html.includes('at JFK'),'preview disagrees with booking station');
+    });
+    check('Maintenance waits for actual arrival and full duration',()=>{
+      const {flight,ac}=make('A330-900',base-HOUR,'FRA','JFK');flight.departureLogged=true;flight.fueled=true;
+      const job=w.scheduleMaintenanceCheckForAircraft(ac.id,w.flightActualArrival(flight)+30*MIN,{skipConfirm:true,workType:'arrival_inspection'});
+      assert(job,'future maintenance missing');
+      const start=job.start,duration=job.durationHours*HOUR;
+      flight.actualArrival=job.end+2*HOUR;
+      time(start);w.processAircraftMaintenance(start);
+      assert(job.status!=='active'&&!ac.maintenance.lastCompletedAt,'work started before arrival');
+      assert(w.maintenanceJobProgress(job,start)===0,'waiting work showed progress');
+      assert(w.maintenanceWorkCardMarkup({aircraft:ac,status:w.AeroManagement.maintenanceStatus(ac,start),job},start).includes('Awaiting'),'waiting reason absent from maintenance card');
+      const arrived=flight.actualArrival;
+      ac.location='JFK';flight.settled=true;time(arrived);
+      w.processAircraftMaintenance(arrived);
+      assert(job.status==='active'&&job.end>=arrived+duration,'late arrival skipped maintenance duration');
+      time(job.end);w.processAircraftMaintenance(job.end);
+      assert(!ac.maintenance.scheduled&&ac.maintenance.lastCompletedAt===job.end,'maintenance did not complete after full duration');
+    });
+    check('Inspection does not clear unrelated MEL or urgent defects',()=>{
+      const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      ac.melItems=[mel('OTHER')];ac.defectUntil=base+DAY;ac.defectReason='Unrelated urgent defect';ac.arrivalInspectionRequired=true;
+      const job=w.scheduleMaintenanceCheckForAircraft(ac.id,base,{skipConfirm:true,workType:'arrival_inspection'});
+      w.processAircraftMaintenance(base);time(job.end);
+      w.processAircraftMaintenance(job.end);w.processMelConstraints(job.end);
+      assert(ac.melItems[0].status==='open'&&ac.defectUntil===base+DAY,'inspection cleared unrelated findings');
+      assert(!ac.arrivalInspectionRequired,'inspection did not clear its own requirement');
+    });
+    check('MEL rectification clears only booked findings',()=>{
+      const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');ac.melItems=[mel('BOOKED'),mel('OTHER')];
+      const job=w.scheduleMaintenanceCheckForAircraft(ac.id,base,{skipConfirm:true,workType:'mel_rectification',melItems:[ac.melItems[0]]});
+      ac.melItems.push({...mel('NEW'),detectedAt:base+MIN,deferredAt:base+MIN});
+      w.processAircraftMaintenance(base);time(job.end);
+      w.processAircraftMaintenance(job.end);w.processMelConstraints(job.end);
+      assert(ac.melItems[0].status==='cleared','booked MEL was not repaired');
+      assert(ac.melItems.slice(1).every(item=>item.status==='open'),'unbooked or new MEL was cleared');
+      assert(ac.maintenance.lastCheckHours===0,'MEL repair reset full-check interval');
+    });
+    check('Booked inspection does not clear a newer inspection finding',()=>{
+      const {ac,flight}=make('A320neo',base-3*HOUR);
+      flight.settled=true;flight.departureLogged=true;flight.actualArrival=base-5*MIN;ac.location='LHR';
+      const first={id:'INSPECTION-1',type:'inflight_technical_fault'};
+      assert(w.applyArrivalInspectionFollowUp(first,flight),'inspection follow-up missing');
+      const version=ac.arrivalInspectionVersion;
+      w.applyArrivalInspectionFollowUp(first,flight);
+      assert(ac.arrivalInspectionVersion===version,'same follow-up recorded twice');
+      const job=w.scheduleMaintenanceCheckForAircraft(ac.id,base,{skipConfirm:true,workType:'arrival_inspection'});
+      assert(job,'inspection booking unavailable');
+      w.processAircraftMaintenance(base);
+      w.applyArrivalInspectionFollowUp({id:'INSPECTION-2',type:'inflight_technical_fault'},flight);
+      time(job.end);w.processAircraftMaintenance(job.end);
+      assert(ac.arrivalInspectionRequired&&flight.arrivalInspectionRequired,'old inspection cleared a new finding');
+    });
+    check('Full check repairs its booked MEL and resets check counters',()=>{
+      const ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+      ac.melItems=[mel('CHECK')];ac.flightHours=620;ac.cycles=455;
+      const job=w.scheduleMaintenanceCheckForAircraft(ac.id,base,{skipConfirm:true,workType:'scheduled_check'});
+      w.processAircraftMaintenance(base);time(job.end);w.processAircraftMaintenance(job.end);
+      assert(ac.melItems[0].status==='cleared','full check left its booked MEL open');
+      assert(ac.maintenance.lastCheckHours===620&&ac.maintenance.lastCheckCycles===455,'full-check counters not reset');
+    });
+    check('Crew resource survives source-flight pruning and reload',()=>{
+      const {ac,flight}=make('A320neo',base-28*HOUR);flight.settled=true;flight.departureLogged=true;
+      s.crewRecoveries=[{id:'CR1',flightId:flight.id,status:'confirmed',availabilityStatus:'available',availableAt:base-HOUR,availableAirport:'LHR',family:w.AeroManagement.aircraftFamily(ac.model),roles:{captains:1,firstOfficers:1,cabinCrew:4},consumedRoles:{}}];
+      w.pruneOperationalFlightRetention(base);
+      assert(!s.flights.includes(flight),'old source flight should still be pruned');
+      assert(w.availableStaffAt('LHR','captains',base)===1,'available recovered crew vanished');
+      w.save();w.eval('state=loadState()');s=w.eval('state');time(base);
+      assert(w.availableStaffAt('LHR','captains',base)===1,'recovered crew did not survive reload');
+      s.crewRecoveries[0].consumedRoles={...s.crewRecoveries[0].roles};
+      w.pruneOperationalFlightRetention(base);
+      assert(!s.crewRecoveries.length,'fully consumed orphan recovery record was retained');
+    });
+    check('Resting and reserved recovery resources survive pruning',()=>{
+      s.crewRecoveries=[{id:'REST',flightId:'REMOVED',status:'confirmed',availabilityStatus:'pending',availableAt:base+HOUR,availableAirport:'LHR',roles:{captains:1},consumedRoles:{}},
+        {id:'RESERVED',flightId:'REMOVED',status:'confirmed',roles:{captains:1},consumedRoles:{captains:1}}];
+      s.crewAssignments=[{id:'CA-AUDIT',status:'operating',allocations:[{sourceType:'recovery',sourceId:'RESERVED',role:'captains',amount:1}]}];
+      w.pruneCrewRecoveryHistory();
+      assert(s.crewRecoveries.length===2,'live resting or reserved source pruned');
+      assert(w.availableStaffAt('LHR','captains',base)===0,'resting crew became available early');
+      assert(w.availableStaffAt('LHR','captains',base+2*HOUR)===1,'resting resource was not available after rest');
+      s.crewAssignments=[];w.pruneCrewRecoveryHistory();
+      assert(s.crewRecoveries.length===1&&s.crewRecoveries[0].id==='REST','consumed source not reclaimed after reservation ended');
+    });
+    check('Derived recurrence distinguishes new and continuing conditions',()=>{
+      const {ac,flight}=make();ac.arrivalInspectionRequired=true;
+      const context={active:true,aircraftId:ac.id,reason:'Arrival inspection required'};
+      w.updateOpenDerivedProblem('postflight_technical_defect',flight,true,context,base);
+      const first=s.problems[0];assert(first,'first derived problem missing');
+      w.updateOpenDerivedProblem('postflight_technical_defect',flight,true,context,base+MIN);
+      assert(s.problems.length===1,'continuing condition duplicated');
+      ac.arrivalInspectionRequired=false;w.refreshProblem(first,base+MIN);
+      ac.arrivalInspectionRequired=true;
+      w.updateOpenDerivedProblem('postflight_technical_defect',flight,true,context,base+2*MIN);
+      assert(s.problems.filter(p=>p.status==='open').length===1&&s.problems.length===2,'new condition was suppressed by old resolution');
+      const second=s.problems[1];w.closeProblem(second,base+3*MIN,'unattended_default','Default handled');
+      w.updateOpenDerivedProblem('postflight_technical_defect',flight,true,context,base+4*MIN);
+      assert(s.problems.length===2,'unchanged condition reappeared after default');
+      w.updateOpenDerivedProblem('postflight_technical_defect',flight,false,null,base+5*MIN);
+      w.updateOpenDerivedProblem('postflight_technical_defect',flight,true,context,base+6*MIN);
+      assert(s.problems.length===3,'observed recovery did not permit another occurrence');
+    });
+    check('Recovery approval revalidates fuel without execution cost',()=>{
+      const {ac,flight}=make('A330-900',base-HOUR,'ATL','ORD'),plan=w.flightFuelPlan('ATL','ORD',ac);
+      flight.fueled=true;flight.departureLogged=true;flight.enrouteDelayMin=45;
+      flight.tripFuelGallons=plan.tripBurnGal;flight.fuelReserveGallons=plan.reserveGal;flight.fuelOnboardAtDeparture=plan.fuelCapacityGal;ac.fuelGallons=plan.fuelCapacityGal;
+      w.recalculateOperations();w.requestEnrouteRecovery(flight.id,'speed');
+      const request=flight.enrouteRecoveryRequest;assert(request,'speed request missing');
+      for(let i=0;i<100;i++){const id='AUDIT'+i;if(w.stableFraction(`${id}:response`)>.6){request.id=id;break;}}
+      const fuel=w.fuelMarginContextForFlight(flight,base);
+      flight.fuelOnboardAtDeparture-=fuel.projectedLandingFuelGal-fuel.reserveGal*.8;
+      time(request.respondsAt);w.processEnrouteRecoveryRequests(request.respondsAt);
+      assert(flight.enrouteRecoveryRequest.status==='unusable','unsafe speed-up was approved');
+      assert(!flight.enrouteRecoveryMin&&!flight.enrouteRecoveryCost,'unusable recovery changed timing or execution cost');
+      assert(/fuel/i.test(flight.enrouteRecoveryRequest.outcome),'unusable response does not explain fuel constraint');
+    });
+    check('Cached queries do not rescan flights',()=>{
+      const {ac,flight}=make();
+      s.aircraft=Array.from({length:70},(_,i)=>({...ac,id:`AC${i}`}));
+      s.flights=Array.from({length:700},(_,i)=>({...flight,id:`F${i}`,aircraftId:`AC${i%70}`}));
+      s.problems=Array.from({length:20},(_,i)=>({id:`P${i}`,flightId:`F${650+i}`,aircraftId:`AC${(650+i)%70}`,type:'mel_defect',status:'open',blocking:true,scope:{kind:'aircraft',subjectId:`AC${(650+i)%70}`},affectedFlightIds:[`F${650+i}`]}));
+      w.invalidateOperationalIndex();const index=w.operationalIndex(base);let scanned=0;
+      const original=s.flights.some;
+      s.flights.some=function(predicate){return original.call(this,(...args)=>{scanned++;return predicate(...args);});};
+      for(let i=0;i<100;i++) assert(w.operationalIndex(base)===index,'unchanged query missed cache');
+      delete s.flights.some;
+      assert(scanned===0,`${scanned} flight comparisons on cache hits`);
+      s.flights[650].aircraftId='AC0';w.refreshProblemAircraftContext(s.flights[650]);
+      assert(!w.openProblemsForFlight('F650').length,'swap did not invalidate exposure');
+    });
+    assert(!failures.length,failures.join('\n'));
+    result.textContent='PASS lifecycle integrity regressions';
+  }catch(error){result.textContent='FAIL '+(error.stack||error);}
+})();
+</script>

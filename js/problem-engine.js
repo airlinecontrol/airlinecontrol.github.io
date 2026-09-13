@@ -57,9 +57,9 @@ function problemDedupeSubjectId(type,flight,context=null){
   return flight?.id||context?.flightId||context?.sourceId||'';
 }
 
-function problemDedupeKeyForRequest(type,flight,{source='',sourceKey='',context=null,detectedAt=simNow()}={}){
-  const kind=problemDedupeScopeKind(type);
-  const subjectId=problemDedupeSubjectId(type,flight,context);
+function problemDedupeKeyForRequest(type,flight,{source='',sourceKey='',context=null,detectedAt=simNow(),scope=null}={}){
+  const kind=scope?.kind||problemDedupeScopeKind(type);
+  const subjectId=scope?.subjectId||problemDedupeSubjectId(type,flight,context);
   if(!kind||!subjectId) return '';
   if(kind==='airport'){
     if(sourceKey&&String(sourceKey).startsWith(`${kind}:${type}:${subjectId}:`)) return String(sourceKey);
@@ -70,12 +70,60 @@ function problemDedupeKeyForRequest(type,flight,{source='',sourceKey='',context=
   return [kind,type,subjectId].join(':');
 }
 
-function problemAffectedFlightIdsForRequest(type,flight,{scope=null,context=null,detectedAt=simNow()}={}){
+function problemAirportTiming(problem){
+  const definition=AeroProblemModel.definitionForType(problem?.type);
+  return definition?.scope==='airport'?definition.airportTiming||'':'';
+}
+
+function problemAirportOperatingWindow(problem){
+  const window=AeroProblemModel.timeWindowForProblem(problem);
+  return {
+    startAt:window?.startAt||Number(problem.detectedAt)||0,
+    endAt:window?.endAt||Infinity
+  };
+}
+
+function timedAirportProblemFlightIds(problem,t=simNow()){
+  const timing=problemAirportTiming(problem);
+  const airport=problem.scope?.subjectId||problem.context?.airport||problem.airport;
+  const window=problemAirportOperatingWindow(problem);
+  if(!timing||!airport||problem.context?.active===false||window.endAt<=t) return [];
+  return (state.flights||[]).filter(flight=>{
+    if(flight.cancelled||flight.settled) return false;
+    const endpoint=timing==='arrival'?flightOperationalDestination(flight):flight.from;
+    const at=timing==='arrival'?flightActualArrival(flight):flightActualDeparture(flight);
+    return endpoint===airport&&at>=window.startAt&&at<window.endAt;
+  }).map(flight=>flight.id);
+}
+
+function refreshTimedAirportProblemFlights(problem,t=simNow()){
+  if(!problemAirportTiming(problem)||problem.status!=='open') return false;
+  const next=timedAirportProblemFlightIds(problem,t);
+  if(next.join('|')===(problem.affectedFlightIds||[]).join('|')) return false;
+  problem.affectedFlightIds=next;
+  return true;
+}
+
+function liveProblemFlightIds(ids,scope){
+  const flights=operationalFlightLookup();
+  return [...ids].filter(id=>{
+    const flight=flights.get(id);
+    return flight&&!flight.cancelled&&!flight.settled&&(scope?.kind!=='aircraft'||flight.aircraftId===scope.subjectId);
+  });
+}
+
+function problemAffectedFlightIdsForRequest(type,flight,{scope=null,context=null,detectedAt=simNow(),t=detectedAt}={}){
+  const resolvedScope=scope||problemScopeForRequest(type,flight,context);
+  if(problemAirportTiming({type})){
+    return timedAirportProblemFlightIds({type,scope:resolvedScope,context,detectedAt},t);
+  }
   const ids=new Set();
   if(flight?.id) ids.add(flight.id);
   const contextualIds=context?.affectedFlightIds||context?.flightIds||[];
   if(Array.isArray(contextualIds)) contextualIds.forEach(id=>id&&ids.add(id));
-  const resolvedScope=scope||problemScopeForRequest(type,flight,context);
+  if(resolvedScope.kind==='aircraft'){
+    return liveProblemFlightIds(ids,resolvedScope);
+  }
   if(resolvedScope.kind==='airport'&&resolvedScope.subjectId){
     const airport=resolvedScope.subjectId;
     const start=detectedAt-2*HOUR;
@@ -90,16 +138,19 @@ function problemAffectedFlightIdsForRequest(type,flight,{scope=null,context=null
 }
 
 function problemAffectedFlightIds(problem){
+  if(!problem) return [];
+  // Airport exposure is a current projection, not a history of the triggering flight.
+  if(problemAirportTiming(problem)) return [...(problem.affectedFlightIds||[])];
   const ids=new Set();
   if(problem?.flightId) ids.add(problem.flightId);
   if(Array.isArray(problem?.affectedFlightIds)) problem.affectedFlightIds.forEach(id=>id&&ids.add(id));
-  return [...ids];
+  return problem.scope?.kind==='flight'?[...ids]:liveProblemFlightIds(ids,problem.scope);
 }
 
 function problemPrimaryFlight(problem){
   if(!problem) return null;
   const index=operationalIndex();
-  if(problem.flightId) return index.flightsById.get(problem.flightId)||null;
+  if(problem.flightId&&problem.scope?.kind!=='aircraft') return index.flightsById.get(problem.flightId)||null;
   for(const id of problemAffectedFlightIds(problem)){
     const flight=index.flightsById.get(id);
     if(flight) return flight;
@@ -116,15 +167,17 @@ function ensureProblemIdentityFields(problem,flight=null,context=null,t=simNow()
   if(!problem||!problem.type) return false;
   const primaryFlight=flight||problemPrimaryFlight(problem);
   const resolvedContext=context||problem.context||null;
-  const scope=problemScopeForRequest(problem.type,primaryFlight,resolvedContext);
+  const scope=problem.scope?.kind===problemScopeKind(problem.type)&&problem.scope.subjectId
+    ? problem.scope
+    : problemScopeForRequest(problem.type,primaryFlight,resolvedContext);
   const dedupeKey=problemDedupeKeyForRequest(problem.type,primaryFlight,{
     source:problem.source||'',
     sourceKey:problem.sourceKey||'',
     context:resolvedContext,
-    detectedAt:problem.detectedAt||t
+    detectedAt:problem.detectedAt||t,scope
   });
   const affectedFlightIds=problemAffectedFlightIdsForRequest(problem.type,primaryFlight,{
-    scope,context:resolvedContext,detectedAt:problem.detectedAt||t
+    scope,context:resolvedContext,detectedAt:problem.detectedAt||t,t
   });
   let changed=false;
   if(!problem.scope||problem.scope.kind!==scope.kind||problem.scope.subjectId!==scope.subjectId){
@@ -132,17 +185,25 @@ function ensureProblemIdentityFields(problem,flight=null,context=null,t=simNow()
   }
   if(dedupeKey&&problem.dedupeKey!==dedupeKey){ problem.dedupeKey=dedupeKey; changed=true; }
   const currentIds=problemAffectedFlightIds(problem);
-  const desiredIds=scope.kind==='network'
+  const desiredIds=scope.kind==='network'||problemAirportTiming(problem)
     ? affectedFlightIds
     : [...new Set([...currentIds,...affectedFlightIds])];
-  const current=currentIds.sort().join('|');
-  const next=desiredIds.sort().join('|');
+  const current=[...currentIds].sort().join('|');
+  const next=[...desiredIds].sort().join('|');
   if(current!==next){ problem.affectedFlightIds=desiredIds; changed=true; }
   if(!problem.airport){
     const airport=problemAirport(problem.type,primaryFlight,resolvedContext);
     if(airport){ problem.airport=airport; changed=true; }
   }
   return changed;
+}
+
+function refreshProblemAircraftContext(flight){
+  for(const problem of state.problems||[]){
+    if(problem.status!=='open') continue;
+    if(problem.scope?.kind==='flight'&&problem.flightId===flight.id) problem.aircraftId=flight.aircraftId;
+  }
+  invalidateOperationalIndex();
 }
 
 function problemCaseParentScore(candidate,type,flight,context,detectedAt,sourceKey){
@@ -271,8 +332,8 @@ function updateExistingProblemForRequest(problem,type,flight,{detectedAt,sourceK
     context,
     detectedAt
   });
-  const mergedAffected=[...new Set([...problemAffectedFlightIds(problem),...requestAffected])];
-  if(mergedAffected.sort().join('|')!==problemAffectedFlightIds(problem).sort().join('|')){
+  const mergedAffected=problemAirportTiming(problem)?requestAffected:[...new Set([...problemAffectedFlightIds(problem),...requestAffected])];
+  if([...mergedAffected].sort().join('|')!==problemAffectedFlightIds(problem).sort().join('|')){
     problem.affectedFlightIds=mergedAffected;
     changed=true;
   }

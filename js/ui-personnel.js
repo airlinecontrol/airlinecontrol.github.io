@@ -4,7 +4,7 @@ const personnelAssignmentUi={airport:'',flightId:'',mode:'replace',roles:[],sour
 function personnelFlightLabel(flight){
   const needs=personnelFlightVisibleNeeds(flight);
   const needLabel=Object.entries(needs).map(([role,count])=>`${count} ${PERSONNEL[role].label}`).join(', ');
-  return `${flight.id} · ${flight.from} → ${flightOperationalDestination(flight)} · ${shortDay(flightActualDeparture(flight))} ${shortClock(flightActualDeparture(flight))}${needLabel?` · needs ${needLabel}`:''}`;
+  return `${AeroUi.flightLabel(flight)}${needLabel?` · needs ${needLabel}`:''}`;
 }
 
 function personnelFlightVisibleNeeds(flight){
@@ -60,20 +60,17 @@ function crewAssignmentStatusCopy(record,now=simNow()){
 function personnelAssignmentReceipt(record,{compact=false}={}){
   const now=simNow(),copy=crewAssignmentStatusCopy(record,now);
   const pending=crewAssignmentPending(record);
+  const phaseStart=({requested:record.requestedAt,accepted:record.acceptedAt,reporting:record.acceptedAt,briefing:record.reportAt})[record.status]||record.requestedAt;
   const roles=Object.entries(record.roles).map(([role,n])=>`${n} ${PERSONNEL[role].label.toLowerCase()}`).join(' · ');
-  return `<div class="crew-assignment-receipt ${compact?'compact':''}" role="status" data-crew-assignment-receipt="${esc(record.id)}">
-    <button type="button" class="row-main-button" data-connection-flight="${esc(record.flightId)}"><b>${esc(record.flightId)} · ${esc(copy.label)}</b><span>${esc(roles)}</span></button>
-    <span>${esc(copy.detail||'')}</span>
-    ${pending?`<div class="progress-track"><span style="width:${formatPct(clamp((now-record.requestedAt)/Math.max(MIN,record.readyAt-record.requestedAt),0,1))}"></span></div>`:''}
-    <span>${pending?'Estimated ready':'Ready'} ${esc(formatTime(record.readyAt))} · ${money(record.cost)}</span>
-    ${pending?`<button type="button" class="desk-action-link" data-cancel-crew-assignment="${esc(record.id)}">Cancel request</button>`:
-      !compact?'<button type="button" class="desk-action-link" data-new-crew-assignment>New assignment</button>':''}
+  return `<div class="crew-assignment-receipt ${compact?'compact':''}" data-crew-assignment-receipt="${esc(record.id)}">
+    <button type="button" class="desk-action-link" data-connection-flight="${esc(record.flightId)}">${esc(record.flightId)}</button>
+    ${AeroUi.requestStatus({title:copy.label,detail:pending?roles:[roles,copy.detail].filter(Boolean).join(' · '),pending,startAt:phaseStart,endAt:copy.at,tone:pending?'':record.status==='failed'?'warning':'success',facts:[[pending?'Estimated ready':'Ready',formatTime(record.readyAt)],['Cost',money(record.cost)]],actions:pending?`<button type="button" class="desk-action-link" data-cancel-crew-assignment="${esc(record.id)}">Cancel request</button>`:!compact?'<button type="button" class="desk-action-link" data-new-crew-assignment>New assignment</button>':''})}
   </div>`;
 }
 
 function pendingCrewAssignmentsMarkup(){
   const records=crewAssignments().filter(crewAssignmentPending).sort((a,b)=>a.readyAt-b.readyAt);
-  return records.length?`<section class="desk-section crew-request-list"><h2>Assignment requests</h2>${records.map(record=>personnelAssignmentReceipt(record,{compact:true})).join('')}</section>`:'';
+  return records.length?`<section class="desk-section crew-request-list"><h2>Assignment requests</h2>${AeroUi.list(records,record=>personnelAssignmentReceipt(record,{compact:true}),{key:'crew-assignments'})}</section>`:'';
 }
 
 function personnelAssignmentPanelMarkup(airport=personnelAssignmentUi.airport){
@@ -121,7 +118,7 @@ function personnelAssignmentPanelMarkup(airport=personnelAssignmentUi.airport){
 
 function crewPoolQualificationMarkup(pool){
   if(!pool.qualifications.length) return '';
-  return `<details class="crew-pool-qualifications"><summary>Aircraft qualifications</summary>${pool.qualifications.map(item=>`<div><b>${esc(item.family)}</b><span>CPT ${item.captains} · FO ${item.firstOfficers}</span></div>`).join('')}</details>`;
+  return `<div class="crew-pool-qualifications">${pool.qualifications.map(item=>`<div><b>${esc(item.family)}</b><span>CPT ${item.captains} · FO ${item.firstOfficers}</span></div>`).join('')}</div>`;
 }
 
 function personnelPoolCardMarkup(code){
@@ -129,20 +126,20 @@ function personnelPoolCardMarkup(code){
   const active=personnelAssignmentUi.airport===code;
   const status=pool.summary;
   return `<article class="crew-pool-card ${active?'active':''}" data-crew-pool="${esc(code)}">
-    <header><div><b>${esc(code)} · ${esc(AIRPORTS[code]?.name||'Station')}</b><span>${status.committed} committed · ${status.onDuty} on duty${status.incoming?` · ${status.incoming} incoming`:''}${status.shortfall?` · ${status.shortfall} uncovered`:''}</span></div><button type="button" class="secondary-button" data-assign-crew-pool="${esc(code)}">Assign to flight</button></header>
+    <header><div><b>${esc(AeroUi.airportLabel(code))}</b>${status.shortfall?`<span class="ui-shortage">${status.shortfall} uncovered</span>`:''}</div><button type="button" class="secondary-button" data-assign-crew-pool="${esc(code)}">Assign to flight</button></header>
     <div class="crew-pool-role-grid">${CREW_ROLES.map(role=>{
       const item=pool.roles[role];
-      return `<div><span>${esc(PERSONNEL[role].label)}</span><b>${item.available} available</b><em>${item.total} at station</em></div>`;
+      return `<div><span>${esc(PERSONNEL[role].label)}</span><b>${item.available} available</b></div>`;
     }).join('')}</div>
     ${(status.reporting||status.resting)?`<div class="crew-pool-status">${status.reporting?`${status.reporting} reporting`:''}${status.reporting&&status.resting?' · ':''}${status.resting?`${status.resting} resting / unavailable`:''}</div>`:''}
-    ${crewPoolQualificationMarkup(pool)}
+    ${AeroUi.details(`crew-pool-${code}`,'Pool details',`<p>${[status.committed?`${status.committed} committed`:'',status.onDuty?`${status.onDuty} on duty`:'',status.incoming?`${status.incoming} incoming`:''].filter(Boolean).join(' · ')}</p><div class="ui-facts">${CREW_ROLES.map(role=>`<div><span>${esc(PERSONNEL[role].label)}</span><b>${pool.roles[role].total} at station</b></div>`).join('')}</div>${crewPoolQualificationMarkup(pool)}`)}
     ${personnelAssignmentPanelMarkup(code)}
   </article>`;
 }
 
 function personnelPoolsMarkup(){
   const codes=personnelPoolCodes();
-  return `${pendingCrewAssignmentsMarkup()}<section class="desk-section crew-pools"><h2>Available pools</h2>${codes.length?codes.map(personnelPoolCardMarkup).join(''):'<div class="empty-state">No crew pools are staffed.</div>'}</section>`;
+  return `${pendingCrewAssignmentsMarkup()}<section class="desk-section crew-pools">${codes.length?AeroUi.list(codes,personnelPoolCardMarkup,{key:'crew-pools'}):'<div class="empty-state">No crew pools are staffed.</div>'}</section>`;
 }
 
 function bindPersonnelAssignmentControls(root){

@@ -258,7 +258,7 @@ function createFlightRecord({aircraftId,from,to,departure,fare,serviceId=null,se
     handlingDelayCause:'',manualDelayMin:0,weatherDelayMin:0,liveWeatherDelayMin:0,weatherChecked:false,weatherCode:'',maintenanceDelayMin:0,maintenanceBlocked:false,
       positioningDelayMin:0,positioningBlocked:false,issueAcknowledgedAt:0,issueAcknowledgedKey:'',
       problemDelayMin:0,problemChecks:{},diversionAirport:'',operationalDurationMs:null,
-      enrouteDelayMin:0,propagatedDelayMin:0,slotDelayMin:0,turnaroundRecoveryMin:0,slotPriorityMin:0,
+      enrouteDelayMin:0,holdingDelayMin:0,holding:null,propagatedDelayMin:0,slotDelayMin:0,turnaroundRecoveryMin:0,slotPriorityMin:0,
       deicingCompletedAt:0,deicingHoldoverUntil:0,
       nightRestrictionDelayMin:0,nightRestrictionLabel:'',nightRestrictionConflictDelayMin:0,nightRestrictionConflictLabel:'',
     nightRecoveryDecision:'',nightRecoverySourceKey:'',nightRecoveryApprovedAt:0,
@@ -268,7 +268,7 @@ function createFlightRecord({aircraftId,from,to,departure,fare,serviceId=null,se
     connectionPax:0,connectionCriticalPax:0,connectionAtRiskPax:0,connectionMissedPax:0,
     passengerAccommodationArrangedAt:0,passengerRecoveryArrangedAt:0,passengerReleasedAt:0,recoveryCostBooked:0,cancellationCostBooked:'',
     weatherLiveChecks:{},weatherRouteHazard:'',weatherCause:null,networkConstraintLabel:'',networkConstraintIds:[],
-    routePlan:null,slotMissed:false,opsChecked:false,enrouteChecked:false,slotLogged:false
+    routePlan:null,slotMissed:false,opsChecked:false,enrouteChecked:false
   };
   if(window.AeroRoutePlanning?.ensureFlightRoutePlan) window.AeroRoutePlanning.ensureFlightRoutePlan(f,ac);
   state.flights.push(f);
@@ -340,8 +340,6 @@ function ensureRecurringFlights(){
         departure:returnDeparture,
         fare:svc.fares||svc.fare,serviceId:svc.id,serviceLeg:'return'
         });
-      }else{
-        logEvent(`${svc.id} rotation skipped: ${itinerary.reason}.`,svc.nextDeparture);
       }
 
       svc.lastGeneratedDeparture=svc.nextDeparture;
@@ -397,7 +395,6 @@ function scheduleFlight(){
     if(!itinerary.ok) return toast(aircraftItineraryFailureMessage(ac,itinerary,'flight'));
     const personnelRequests=requestPersonnelDeficitsForFlight(ac,departure,outbound.duration,from);
     const f=createFlightRecord({aircraftId:ac.id,from,to,departure,fare:fares});
-    logEvent(`${f.id} scheduled ${from} → ${to} with ${ac.tail}.`);
     selectedAircraftId=ac.id;
     AeroServices.commit();
     closeFlightPlanningWidget();
@@ -463,7 +460,6 @@ function scheduleFlight(){
   };
   state.services.push(svc);
   ensureRecurringFlights();
-  logEvent(`${svc.id} created: ${from} ↔ ${to}, ${rule}, ${ac.tail}.`);
   selectedAircraftId=ac.id;
   AeroServices.commit();
   closeFlightPlanningWidget();
@@ -499,6 +495,7 @@ function turnaroundCancellationTargets(f){
 }
 
 function applyFlightCancellation(flight,reason='',{preserveProblemId=''}={}){
+  if(!flight||flight.cancelled) return false;
   const now=simNow();
   if(!flightHasDeparted(flight,now)){
     flight.departureLogged=false;
@@ -522,16 +519,7 @@ function applyFlightCancellation(flight,reason='',{preserveProblemId=''}={}){
   flight.issueAcknowledgedAt=0;
   flight.issueAcknowledgedKey='';
   state.stats.cancelled+=1;
-  for(const problem of state.problems){
-    if(problem.flightId!==flight.id||problem.status!=='open') continue;
-    if(preserveProblemId&&problem.id===preserveProblemId) continue;
-    resolveProblemImpacts(problem,now,'handled');
-    problem.status='resolved';
-    problem.blocking=false;
-    problem.resolvedAt=now;
-    problem.outcome=`${flight.id} cancelled${reason?` · ${reason}`:''}.`;
-    if(typeof traceProblemTransition==='function') traceProblemTransition(problem,'closed',{reason:'flight_cancelled'});
-  }
+  reconcileProblemsAfterFlightRemoval([flight.id],now,{preserveProblemId});
 }
 
 function finishFlightCancellations(targets,message){
@@ -579,12 +567,7 @@ function cancelTurnaround(flightId,{skipConfirm=false,reason='Manual OCC turnaro
 
 function resolveRemovedScheduleArtifacts(flightIds,label,t=simNow()){
   const removedFlightIds=new Set(flightIds);
-  for(const problem of state.problems){
-    if(!removedFlightIds.has(problem.flightId)||problem.status!=='open') continue;
-    resolveProblemImpacts(problem,t,'handled');
-    problem.status='resolved'; problem.blocking=false; problem.resolvedAt=t;
-    problem.outcome=`${label} was removed from the programme.`;
-  }
+  reconcileProblemsAfterFlightRemoval(flightIds,t);
   for(const transfer of state.personnelTransfers||[]){
     if(removedFlightIds.has(transfer.flightId)&&!['completed','cancelled'].includes(transfer.status)){
       if(typeof cancelPersonnelTransfer==='function') cancelPersonnelTransfer(transfer,t,'Booked flight was removed from the schedule');
@@ -609,7 +592,6 @@ function removeServiceSchedule(serviceId){
   processCrewAssignments(t);
   processStationServices(t);
   if(selectedFlightId && !state.flights.some(f=>f.id===selectedFlightId)) selectedFlightId=null;
-  logEvent(`${serviceId} recurring schedule removed.`);
   AeroServices.commit(); requestUiRefresh('selects','schedule','left','desk','filter','map');
   toast(`${serviceId} removed. Unflown flights were removed.`);
   return true;
@@ -635,7 +617,6 @@ function removeStandaloneSchedule(flightId){
   resolveRemovedScheduleArtifacts([flight.id],flight.id,t);
   state.flights=state.flights.filter(f=>f.id!==flight.id);
   if(selectedFlightId===flight.id) selectedFlightId=null;
-  logEvent(`${flight.id} removed from the schedule.`);
   recalculateOperations();
   AeroServices.commit(); requestUiRefresh('selects','schedule','left','desk','filter','map');
   toast(`${flight.id} removed from the schedule.`);

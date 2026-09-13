@@ -123,34 +123,19 @@ window.AeroManagement = (() => {
 
   function weatherAt(airportCode,timestamp){
     if(window.AeroWeatherEngine?.weatherAt) return window.AeroWeatherEngine.weatherAt(airportCode,timestamp);
-    const profile=AIRPORT_WEATHER[airportCode]||{wind:16,risk:.2,climate:'temperate'};
+    const profile=AIRPORT_WEATHER[airportCode]||{wind:16};
     const period=Math.floor(timestamp/(6*HOUR));
-    const date=new Date(timestamp);
-    const month=date.getMonth();
-    const winter=[11,0,1].includes(month);
-    const summer=[5,6,7].includes(month);
-    const seasonalRisk=profile.climate==='continental'&&winter ? .08 :
-      profile.climate==='tropical'&&summer ? .09 :
-      profile.climate==='coastal'&&summer ? .06 :
-      profile.climate==='desert'&&summer ? .04 : 0;
-    const risk=clamp(profile.risk+seasonalRisk,.08,.42);
-    const eventRoll=stableUnit(`${airportCode}:${period}:event`);
     const windRoll=stableUnit(`${airportCode}:${period}:wind`);
-    const detailRoll=stableUnit(`${airportCode}:${period}:detail`);
-    const severe=eventRoll<risk*.12;
-    const caution=!severe&&eventRoll<risk;
-    const level=severe?'severe':caution?'caution':'normal';
-    const windKph=Math.round(profile.wind*(.65+windRoll*1.55)+(severe?25:caution?10:0));
-    const delayMin=severe?45+Math.round(detailRoll*45):caution?10+Math.round(detailRoll*20):0;
-    const conditions=severe
-      ? (profile.climate==='continental'&&winter?'Snow / low visibility':'Storm cells / low visibility')
-      : caution
-        ? (windKph>38?'Strong crosswind':'Reduced visibility / showers')
-        : 'Normal operations';
+    const windKph=Math.round(profile.wind*(.75+windRoll*.55));
+    const validFrom=period*6*HOUR,validUntil=(period+1)*6*HOUR;
     return {
-      airport:airportCode,level,label:level==='normal'?'Normal':level==='caution'?'Caution':'Severe',
-      windKph,delayMin,capacityFactor:severe?.55:caution?.78:1,conditions,
-      validFrom:period*6*HOUR,validUntil:(period+1)*6*HOUR
+      airport:airportCode,level:'normal',label:'Normal',type:'clear',icon:'CLR',
+      windKph,windDirection:Math.round(stableUnit(`${airportCode}:${period}:direction`)*36)*10%360,gustKph:windKph+4,
+      delayMin:0,capacityFactor:1,conditions:'Normal operations',visibilityKm:24,ceilingFt:9000,
+      weatherSystemId:'',nearbyCell:null,impactRadiusKm:0,
+      forecastAt:validFrom,validFrom,validUntil,
+      forecastDurationMin:Math.round((validUntil-validFrom)/MIN),
+      forecastRemainingMin:Math.round((validUntil-validFrom)/MIN)
     };
   }
 
@@ -160,7 +145,7 @@ window.AeroManagement = (() => {
     const cyclesSince=Math.max(0,(Number(aircraft.cycles)||0)-maintenance.lastCheckCycles);
     const progress=Math.max(hoursSince/CHECK_INTERVAL_HOURS,cyclesSince/CHECK_INTERVAL_CYCLES);
     const scheduled=maintenance.scheduled;
-    const active=Boolean(scheduled&&now>=scheduled.start&&now<scheduled.end);
+    const active=scheduled?.status==='active';
     const due=progress>=1;
     const grounding=progress>=1.15;
     return {
@@ -233,25 +218,71 @@ window.AeroManagement = (() => {
   function maintenancePlan(aircraft,start,airport,seats=100,options={}){
     const status=maintenanceStatus(aircraft,start);
     const profile=maintenanceWorkProfile(options.workType,aircraft,seats,status,options);
+    const inspection=['arrival_inspection','scheduled_check'].includes(profile.workType);
+    const repairsDefect=['urgent_repair','scheduled_check'].includes(profile.workType);
+    const melItems=profile.workType==='scheduled_check'?(aircraft.melItems||[]):profile.workType==='mel_rectification'?(options.melItems||[]):[];
     return {
       start,end:start+profile.durationHours*HOUR,airport,
       durationHours:profile.durationHours,cost:profile.cost,status:'scheduled',
       workType:profile.workType,label:profile.label,
+      coverage:{
+        melIds:melItems.filter(item=>['open','expired'].includes(item.status)).map(item=>item.id),
+        defect:repairsDefect&&aircraft.defectUntil?{until:aircraft.defectUntil,reason:aircraft.defectReason||''}:null,
+        inspection:inspection&&Boolean(aircraft.arrivalInspectionRequired),
+        inspectionVersion:aircraft.arrivalInspectionVersion||0
+      },
       resetsCheck:profile.resetsCheck,conditionGain:profile.conditionGain,transaction:profile.transaction
     };
   }
 
-  function processMaintenance(state,now,postTransaction){
+  function completeMaintenanceFindings(state,aircraft,job){
+    const coverage=job.coverage||{};
+    const coveredMel=new Set(coverage.melIds||[]);
+    for(const item of aircraft.melItems||[]){
+      if(coveredMel.has(item.id)&&['open','expired'].includes(item.status)){
+        item.status='cleared';item.clearedAt=job.end;
+      }
+    }
+    if(coverage.defect&&aircraft.defectUntil===coverage.defect.until&&(aircraft.defectReason||'')===coverage.defect.reason){
+      aircraft.defectUntil=0;
+      aircraft.defectReason='';
+    }
+    if(coverage.inspection&&(aircraft.arrivalInspectionVersion||0)===coverage.inspectionVersion){
+      aircraft.arrivalInspectionRequired=false;
+    }
+    const inspectedFlights=new Map((job.inspectionFlights||[]).map(item=>[item.id,item.version]));
+    for(const flight of state.flights||[]){
+      if(inspectedFlights.get(flight.id)===(flight.arrivalInspectionVersion||0)) flight.arrivalInspectionRequired=false;
+    }
+  }
+
+  function processMaintenance(state,now,postTransaction,availabilityForAircraft){
     let changed=false;
     for(const aircraft of state.aircraft||[]){
       const maintenance=ensureAircraftMaintenance(aircraft);
       const job=maintenance.scheduled;
       if(!job) continue;
-      if(now>=job.start&&job.status==='scheduled'){
-        job.status='active';
-        changed=true;
+      if(now>=job.start&&['scheduled','waiting','active'].includes(job.status)){
+        const availability=availabilityForAircraft(aircraft,job,now);
+        if(!availability.available){
+          const nextStart=Math.max(job.start,Number(availability.availableAt)||job.start);
+          if(job.status!=='waiting'||job.waitingReason!==availability.reason||job.start!==nextStart) changed=true;
+          job.status='waiting';
+          job.waitingReason=availability.reason;
+          job.start=nextStart;
+          job.end=nextStart+job.durationHours*HOUR;
+          continue;
+        }
+        if(job.status!=='active'){
+          job.startedAt=Math.max(job.start,Number(availability.availableAt)||now);
+          job.start=job.startedAt;
+          job.end=job.startedAt+job.durationHours*HOUR;
+          job.waitingReason='';
+          job.status='active';
+          changed=true;
+        }
       }
-      if(now>=job.end&&job.status!=='completed'){
+      if(now>=job.end&&job.status==='active'){
         const workType=maintenanceWorkType(job.workType);
         job.status='completed';
         if(job.resetsCheck!==false&&workType==='scheduled_check'){
@@ -260,11 +291,7 @@ window.AeroManagement = (() => {
         }
         maintenance.lastCompletedAt=job.end;
         aircraft.condition=clamp((Number(aircraft.condition)||0)+(Number(job.conditionGain)||2),0,100);
-        if(['urgent_repair','arrival_inspection'].includes(workType)){
-          aircraft.defectUntil=0;
-          aircraft.defectReason='';
-          aircraft.arrivalInspectionRequired=false;
-        }
+        completeMaintenanceFindings(state,aircraft,job);
         state.stats.scheduledMaintenanceCosts+=(Number(job.cost)||0);
         if(job.cost) postTransaction(-job.cost,job.transaction||MAINTENANCE_WORK_LABELS[workType],`${aircraft.tail} ${String(job.label||MAINTENANCE_WORK_LABELS[workType]).toLowerCase()}`,aircraft.id);
         maintenance.scheduled=null;

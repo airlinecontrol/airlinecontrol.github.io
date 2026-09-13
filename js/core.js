@@ -558,7 +558,6 @@ function processPersonnelTransfers(t=simNow()){
         continue;
       }
       transfer.status='in_transit';
-      logEvent(`${transfer.id}: ${transfer.amount} ${PERSONNEL[transfer.role].label.toLowerCase()} departed ${transfer.from}.`,transfer.departure);
       changed=true;
     }
     if(transfer.status==='in_transit'&&t>=transfer.arrival){
@@ -568,7 +567,6 @@ function processPersonnelTransfers(t=simNow()){
       changeStaff(arrivalAirport,transfer.role,transfer.amount);
       for(const [family,count] of Object.entries(transfer.qualifications||{})) changeQualification(arrivalAirport,transfer.role,family,count);
       transfer.status='completed'; transfer.completedAt=transfer.arrival; changed=true;
-      logEvent(`${transfer.id}: ${transfer.amount} ${PERSONNEL[transfer.role].label.toLowerCase()} arrived at ${arrivalAirport}.`);
     }
   }
   if(changed&&typeof reconcileCrewResourceProblems==='function'){
@@ -628,6 +626,7 @@ function newState(){
     recoveryCostEvents:[],
     passengerRecoveries:[],
     crewRecoveries:[],
+    derivedProblemObservations:{},
     crewAssignments:[],
     stationServiceRequests:[],
     nextStationServiceRequest:1,
@@ -818,8 +817,9 @@ function migrateState(parsed){
     if(!ac.cabin) ac.cabin=defaultCabin(ac.model);
   }
   for(const f of parsed.flights){
-    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','problemDelayMin','enrouteDelayMin','enrouteRecoveryMin','enrouteRecoveryCost','enrouteRecoveryFuelPenaltyGal','liveWeatherDelayMin','propagatedDelayMin','slotDelayMin','turnaroundRecoveryMin','slotPriorityMin','nightRestrictionDelayMin','nightRestrictionConflictDelayMin','taxiOutDelayMin','taxiInDelayMin','deicingCompletedAt','deicingHoldoverUntil','nightRecoveryApprovedAt','problemHoldStartedAt','problemHoldReleasedAt','positioningHoldStartedAt','positioningHoldReleasedAt','staffingHoldStartedAt','staffingHoldReleasedAt','maintenanceHoldStartedAt','maintenanceHoldReleasedAt'])
+    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','problemDelayMin','enrouteDelayMin','holdingDelayMin','enrouteRecoveryMin','enrouteRecoveryCost','enrouteRecoveryFuelPenaltyGal','liveWeatherDelayMin','propagatedDelayMin','slotDelayMin','turnaroundRecoveryMin','slotPriorityMin','nightRestrictionDelayMin','nightRestrictionConflictDelayMin','taxiOutDelayMin','taxiInDelayMin','deicingCompletedAt','deicingHoldoverUntil','nightRecoveryApprovedAt','problemHoldStartedAt','problemHoldReleasedAt','positioningHoldStartedAt','positioningHoldReleasedAt','staffingHoldStartedAt','staffingHoldReleasedAt','maintenanceHoldStartedAt','maintenanceHoldReleasedAt'])
       if(f[k]===undefined) f[k]=0;
+    if(!f.holding || typeof f.holding!=='object') f.holding=null;
     if(f.enrouteRecoveryPlan===undefined) f.enrouteRecoveryPlan='';
     if(f.enrouteRecoveryCause===undefined) f.enrouteRecoveryCause='';
     if(!f.enrouteRecoveryRequest || typeof f.enrouteRecoveryRequest!=='object') f.enrouteRecoveryRequest=null;
@@ -868,7 +868,6 @@ function migrateState(parsed){
     if(f.weatherRouteHazard===undefined) f.weatherRouteHazard='';
     if(f.weatherCause===undefined) f.weatherCause=null;
     if(!f.routePlan || typeof f.routePlan!=='object') f.routePlan=null;
-    if(f.slotLogged===undefined) f.slotLogged=false;
     if(f.baseCosts===undefined) f.baseCosts=f.costs||0;
     if(f.fueled===undefined) f.fueled=Boolean(f.settled||f.departureLogged);
     if(f.fuelGallons===undefined) f.fuelGallons=0;
@@ -933,20 +932,6 @@ const SPLIT_KEY='aerosim_center_split_pct';
 const LEFT_SIDEBAR_SPLIT_KEY='aerosim_left_sidebar_width';
 const RIGHT_SIDEBAR_SPLIT_KEY='aerosim_right_sidebar_width';
 const WORKSPACE_UI_KEY='aerosim_occ_ui_v1';
-const WORKSPACE_WIDGETS={
-  'context-workbench':{views:['occ'],defaultOpen:true},
-  'dispatch-control':{views:['occ'],defaultOpen:false},
-  'crew-control':{views:['occ'],defaultOpen:false},
-  'maintenance-control':{views:['occ'],defaultOpen:false},
-  'station-operations':{views:['occ'],defaultOpen:false},
-  'flight-operations':{views:['occ'],defaultOpen:true},
-  'flight-planning':{views:['occ'],defaultOpen:false},
-  'my-aircraft':{views:['occ'],defaultOpen:true},
-  'management-cycle':{views:['occ'],defaultOpen:false},
-  'network-support':{views:['occ'],defaultOpen:false},
-  weather:{views:['occ'],defaultOpen:false},
-  'personnel-relocation':{views:['occ'],defaultOpen:false}
-};
 function loadWorkspaceUi(){
   try{
     const parsed=JSON.parse(localStorage.getItem(WORKSPACE_UI_KEY)||'{}');

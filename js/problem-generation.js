@@ -19,6 +19,52 @@ const GROUND_DELAY_CAUSES=[
   {label:'Ramp sequencing delay',weight:.8}
 ];
 
+const GENERATED_TIMED_EVENT_PROFILES={
+  destination_closure_ground:{
+    airport:flight=>flightOperationalDestination(flight),
+    scenarios:[
+      {reason:'Runway inspection after an operational report',duration:[45,90],delay:[45,90]},
+      {reason:'Disabled aircraft removal from the movement area',duration:[90,210],delay:[60,120]},
+      {reason:'Airport emergency-response restriction',duration:[60,150],delay:[45,105]},
+      {reason:'Temporary airport security restriction',duration:[75,180],delay:[60,120]}
+    ]
+  },
+  fuel_supplier_outage:{
+    airport:flight=>flight.from,
+    scenarios:[
+      {reason:'Fuel-truck fleet shortage',duration:[45,90],delay:[45,75]},
+      {reason:'Supplier hydrant pump outage',duration:[90,180],delay:[55,95]},
+      {reason:'Fuel farm delivery interruption',duration:[120,300],delay:[70,120]},
+      {reason:'Airport fuel provider staffing gap',duration:[60,150],delay:[45,90]}
+    ]
+  }
+};
+
+function generatedRange(seed,range){
+  const [low,high]=range;
+  return Math.round(low+(high-low)*OperationalIntelligence.stableUnit(seed));
+}
+
+function generatedTimedEventContext(type,flight,t){
+  const profile=GENERATED_TIMED_EVENT_PROFILES[type];
+  if(!profile) return null;
+  const scenarioRoll=OperationalIntelligence.stableUnit(`${flight.id}:${type}:scenario`);
+  const scenario=profile.scenarios[Math.min(profile.scenarios.length-1,Math.floor(scenarioRoll*profile.scenarios.length))];
+  const durationMin=generatedRange(`${flight.id}:${type}:duration`,scenario.duration);
+  const delayMin=generatedRange(`${flight.id}:${type}:delay`,scenario.delay);
+  return {
+    sourceId:flight.id,
+    airport:profile.airport(flight),
+    reason:scenario.reason,
+    delayMin,
+    active:true,
+    timeBasis:'modeled_temporary_event',
+    activeFrom:t,
+    activeUntil:t+durationMin*MIN,
+    expectedClearAt:t+durationMin*MIN
+  };
+}
+
 function chooseGroundDelayCause(f){
   const options=GROUND_DELAY_CAUSES.filter(item=>!item.passengerOnly||f.flightType!=='ferry');
   let roll=simulationRandom(`ground-delay-cause:${f.id}`)*options.reduce((total,item)=>total+item.weight,0);
@@ -56,18 +102,9 @@ function maybeGenerateOperationalEvent(f,t){
 }
 
 function generatedOperationalEventContext(type,flight,t=simNow()){
+  const timed=generatedTimedEventContext(type,flight,t);
+  if(timed) return timed;
   const roll=OperationalIntelligence.stableUnit(`${flight.id}:${type}:context`);
-  if(type==='fuel_supplier_outage'){
-    const reasons=['Fuel-truck fleet shortage','Supplier hydrant pump outage','Fuel farm delivery interruption','Airport fuel provider staffing gap'];
-    const reason=reasons[Math.min(reasons.length-1,Math.floor(roll*reasons.length))];
-    return {
-      sourceId:flight.id,
-      airport:flight.from,
-      reason,
-      delayMin:45+Math.round(roll*45),
-      active:true
-    };
-  }
   if(type==='crew_report_delay'){
     const roles=['captains','firstOfficers','cabinCrew'];
     const reasons=['Crew transport delay','Security access delay','Late crew hotel shuttle','Crew briefing package reissue'];
@@ -125,7 +162,6 @@ function maybeGeneratePreDepartureIssue(f,t){
     const cause=chooseGroundDelayCause(f);
     f.handlingDelayMin+=delay;
     f.handlingDelayCause=cause;
-    logEvent(`${f.id}: ${cause.toLowerCase()} +${delay} min at ${f.from}.`);
   }
   return true;
 }
@@ -161,19 +197,24 @@ function maybeApplyLiveWeatherImpact(f,t){
   if(!flightIsAirborne(f,t)||!state.ops.automaticDisruptions) return false;
   f.weatherLiveChecks??={};
   const period=Math.floor(t/(30*MIN));
-  if(f.weatherLiveChecks.period===period) return false;
-  f.weatherLiveChecks.period=period;
-  let changed=false;
   const destination=flightOperationalDestination(f);
-  const destinationWeather=Management.weatherAt(destination,t+45*MIN);
+  const arrivalAt=flightActualArrival(f);
+  const arrivalKey=`${destination}:${Math.floor(arrivalAt/MIN)}`;
+  if(f.weatherLiveChecks.period===period&&f.weatherLiveChecks.arrivalKey===arrivalKey) return false;
+  f.weatherLiveChecks.period=period;
+  f.weatherLiveChecks.arrivalKey=arrivalKey;
+  let changed=false;
+  const destinationWeather=Management.weatherAt(destination,arrivalAt);
   const closureActive=destinationWeather.level==='severe'&&destinationWeather.capacityFactor<.7;
   if(closureActive){
-    const source=weatherSourceRecord('live_destination_forecast','Destination forecast',{weather:destinationWeather,timestamp:t+45*MIN});
+    const source=weatherSourceRecord('live_destination_forecast','Destination forecast',{weather:destinationWeather,timestamp:arrivalAt});
     const type=f.diversionAirport?'diversion_airport_unavailable':'destination_closure';
-    const destinationKey=`weather-destination:${type}:${f.id}:${destination}`;
+    const weatherSystemId=destinationWeather.weatherSystemId||`forecast-${Math.floor(arrivalAt/(6*HOUR))}`;
+    const destinationKey=`weather:${type}:${destination}:${weatherSystemId}`;
     const problem=createProblem(type,f,{detectedAt:t,source:'weather',sourceKey:destinationKey,context:{
       airport:destination,conditions:destinationWeather.conditions,capacityFactor:destinationWeather.capacityFactor,delayMin:destinationWeather.delayMin,
-      forecastAt:t+45*MIN,weatherSource:source,weatherSummary:weatherSourceText(source),
+      forecastAt:arrivalAt,forecastFrom:destinationWeather.validFrom,forecastUntil:destinationWeather.validUntil,weatherSystemId,
+      weatherSource:source,weatherSummary:weatherSourceText(source),
       reason:f.diversionAirport?`${destination} weather deteriorated after diversion selection`:'Destination airport closed by weather'
     }});
     if(problem){ problem.airport=destination; changed=true; }
@@ -200,7 +241,6 @@ function maybeApplyLiveWeatherImpact(f,t){
     appendFlightWeatherCause(f,source,t);
     f.weatherLiveChecks.routeApplied=true;
     f.weatherRouteHazard=weatherSourceText(source);
-    logEvent(`${f.id}: route weather avoidance adds about ${delay} min.`);
     changed=true;
   }
   return changed;

@@ -24,10 +24,27 @@
     const station=w.AeroManagement.weatherAt('FRA',now);
     assert(Number.isFinite(station.windKph)&&Number.isFinite(station.visibilityKm)&&Number.isFinite(station.ceilingFt),'airport weather is missing dispatch details');
     assert(['normal','caution','severe'].includes(station.level),'airport weather level is invalid');
-    assert(station.impactRadiusKm>=30,'airport weather impact radius is missing');
+    assert(station.validUntil>station.forecastAt&&station.forecastRemainingMin>0,'airport weather is missing a forecast duration');
+    assert(station.level==='normal'||station.weatherSystemId,'adverse airport weather exists without a shared weather system');
     const sampleCell=Array.from({length:12},(_,index)=>w.AeroWeatherEngine.weatherCells(now+index*3*60*60_000)).flat().find(cell=>cell.polygon?.length>=8);
     assert(sampleCell,'weather cells do not expose real polygon geometry');
+    assert(sampleCell.activeUntil>sampleCell.activeFrom,'weather system does not expose a persistent forecast window');
+    const airports=w.eval(`Object.entries(AIRPORTS).map(([code,airport])=>({code,lat:airport.lat,lon:airport.lon}))`);
+    let sharedAirportWeather=null;
+    for(let index=0;index<56&&!sharedAirportWeather;index++){
+      const at=now+index*6*60*60_000;
+      for(const cell of w.AeroWeatherEngine.weatherCells(at)){
+        const covered=airports.filter(airport=>w.AeroWeatherEngine.pointInPolygon(airport,cell.polygon));
+        if(covered.length<2) continue;
+        const observations=covered.map(airport=>w.AeroManagement.weatherAt(airport.code,at));
+        const matching=observations.filter(weather=>weather.weatherSystemId===cell.id);
+        if(matching.length>=2){ sharedAirportWeather=matching; break; }
+      }
+    }
+    assert(sharedAirportWeather,'nearby airports never shared the same regional weather system');
+    assert(sharedAirportWeather.every(weather=>weather.type===sharedAirportWeather[0].type),'one shared weather system produced unrelated airport conditions');
     assert(d.querySelector('#map.maplibregl-map canvas'),'MapLibre map canvas was not rendered');
+    assert(w.eval(`!map.getLayer('airport-weather-fill')`),'synthetic airport-centered weather polygons are still rendered');
 
     const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
     const flight=w.createFlightRecord({

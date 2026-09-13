@@ -87,4 +87,23 @@ assert.ok(technicalOutcome?.severityLabel && technicalOutcome?.decision, 'techni
 assert.notEqual(technicalOutcome.id, 'return_origin', 'late-flight technical assessment must not select return to origin');
 assert.equal(model.requiredResponseForType('crew_sick'), null, 'crew sick call should not wait for a second crew report');
 
+const now=Date.UTC(2026,8,13,12,0,0);
+const weatherProjection=model.timeProjectionForProblem({
+  type:'destination_closure',detectedAt:now,
+  context:{forecastFrom:now-30*60_000,forecastUntil:now+90*60_000}
+},now);
+assert.equal(weatherProjection?.kind,'forecast','weather problem should expose a forecast recovery outlook');
+assert.equal(weatherProjection?.remainingMin,90,'weather recovery outlook has the wrong remaining duration');
+const temporaryClosure={type:'destination_closure',detectedAt:now,context:{activeFrom:now,activeUntil:now+60_000}};
+assert.equal(model.timeWindowForProblem(temporaryClosure)?.endAt,now+60_000,'arrival exposure must use the same finite window as recovery outlook');
+assert.equal(model.timeProjectionForProblem(temporaryClosure,now+60_000),null,'expired closure must not show a future recovery outlook');
+assert.equal(model.timeProjectionForProblem({
+  type:'crew_sick',detectedAt:now,
+  context:{readyAt:now+60*60_000,activeUntil:now+24*60*60_000}
+},now),null,'state-driven crew problem must not expose a recovery outlook');
+assert.equal(model.timeProjectionForProblem({
+  type:'mel_defect',detectedAt:now,
+  context:{readyAt:now+3*60*60_000}
+},now),null,'resource-dependent technical problem must not expose a recovery outlook');
+
 console.log('problem model smoke tests passed');

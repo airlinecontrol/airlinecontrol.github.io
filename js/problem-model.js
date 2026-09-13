@@ -44,12 +44,15 @@
     },
     destination_closure_ground:{
       title:'Destination closure',severity:'critical',decisionMin:35,scope:'airport',phase:'ground',airportRole:'destination',
+      airportTiming:'arrival',airborneDefaultStrategy:'divert',
       summary:'The destination is unavailable before departure and needs an OCC operating decision.',
       recommendations:['delay','alternate','cancel'],
       resolution:'Hold the departure until acceptable, change the operating plan, or cancel before departure.'
     },
     destination_closure:{
       title:'Destination closure',severity:'critical',decisionMin:20,scope:'airport',phase:'airborne',airportRole:'destination',allowAirborne:true,airborneOnly:true,
+      airportTiming:'arrival',
+      holdingPolicy:'short_recovery',holdingBasis:'arrival',
       defaultStrategy:'divert',
       summary:'The destination airport became unavailable while the flight is airborne.',
       recommendations:['alternate','handling','passengers','crewImpact'],
@@ -118,6 +121,7 @@
     },
     network_convective_weather:{
       title:'Convective weather corridor',severity:'critical',decisionMin:25,scope:'network',phase:'any',allowAirborne:true,
+      holdingPolicy:'short_recovery',holdingBasis:'current',
       defaultStrategy:'network_avoidance',
       summary:'A severe convective weather corridor affects multiple planned or airborne routings.',
       recommendations:['network','delay'],
@@ -212,6 +216,7 @@
     },
     destination_below_minima:{
       title:'Destination below landing minima',severity:'critical',decisionMin:15,scope:'flight',phase:'airborne',airportRole:'destination',allowAirborne:true,airborneOnly:true,
+      holdingPolicy:'short_recovery',holdingBasis:'arrival',
       defaultStrategy:'divert',
       summary:'Forecast arrival weather is below practical landing minima.',
       recommendations:['alternate','network','handling'],
@@ -271,7 +276,7 @@
     atc_restriction:'ATC flow restrictions are tracked as airport-flow causes instead of standalone problems.',
     gate_conflict:'Gate and stand pressure is tracked as station-readiness warnings unless it creates a stronger operational disruption.',
     baggage_loading_issue:'Load-control and baggage trouble is tracked as station-readiness delay context unless a security or cancellation decision is required.',
-    fueling_issue:'Routine fuel uplift constraints are tracked as station-readiness warnings; supplier outages remain problems.',
+    fueling_issue:'Routine fuel uplift is flight status information; supplier outages remain problems.',
     airport_capacity_reduction:'Airport flow restrictions are tracked as warnings unless they escalate into a ground stop or another OCC decision case.',
     slot_miss_risk:'Slot risk is tracked on the schedule and as linked disruption context instead of as a standalone problem.',
     aircraft_out_of_position:'Projected aircraft positioning is tracked as a warning until an actual diversion misposition needs recovery.',
@@ -383,12 +388,90 @@
     };
     return {
       mode,
+      airborneMode:definition.airborneDefaultStrategy||mode,
       label:labels[mode]||'Safest operational outcome',
       minimumVisibleMin:10,
       responseReviewMin:10,
       summary:definition.phase==='ground'
         ? 'If the current actual departure passes without a workable recovery, the affected unflown flight is cancelled.'
         : 'If OCC does not respond, the safest available flight-deck outcome is applied.'
+    };
+  }
+
+  function activeWindow(problem,context,label){
+    const endAt=Number(context.activeUntil)||Number(context.expectedClearAt)||0;
+    if(!endAt) return null;
+    return {
+      kind:context.timeBasis==='modeled_temporary_event'?'modeled':'forecast',
+      label,
+      startAt:Number(context.activeFrom)||Number(problem.detectedAt)||0,
+      endAt
+    };
+  }
+
+  function forecastWindow(problem,context,label){
+    const endAt=Number(context.forecastUntil)||0;
+    if(!endAt) return null;
+    return {
+      kind:'forecast',label,
+      startAt:Number(context.forecastFrom)||Number(problem.detectedAt)||0,
+      endAt
+    };
+  }
+
+  function weatherProjection(label){
+    return (problem,context)=>forecastWindow(problem,context,label);
+  }
+
+  function temporaryOrWeatherProjection(label){
+    return (problem,context)=>forecastWindow(problem,context,label)||activeWindow(problem,context,label);
+  }
+
+  const TIME_PROJECTION_RULES={
+    destination_closure:temporaryOrWeatherProjection('Destination restriction'),
+    destination_closure_ground:temporaryOrWeatherProjection('Destination restriction'),
+    destination_below_minima:weatherProjection('Landing-weather restriction'),
+    diversion_airport_unavailable:(problem,context)=>{
+      if(!context.weatherBlocked||context.handlingBlocked) return null;
+      return forecastWindow(problem,context,'Diversion-airport weather restriction');
+    },
+    fuel_supplier_outage:(problem,context)=>activeWindow(problem,context,'Fuel-supply outage'),
+    atc_ground_stop:(problem,context)=>context.timeBasis==='weather_forecast'
+      ? activeWindow(problem,context,'Weather-driven ground stop')
+      : null,
+    network_airspace_closure:(problem,context)=>activeWindow(problem,context,'Airspace restriction'),
+    network_convective_weather:(problem,context)=>activeWindow(problem,context,'Convective weather corridor'),
+    night_curfew_conflict:(problem,context)=>{
+      const phaseEnds=(context.curfewPhases||[]).map(item=>Number(item.nextOpenAt)||0).filter(Boolean);
+      const endAt=Number(context.nextDeparture)||Math.max(0,...phaseEnds);
+      return endAt?{kind:'fixed',label:'Earliest curfew-clear departure',startAt:problem.detectedAt,endAt}:null;
+    },
+    arrival_curfew_coordination:(problem,context)=>{
+      const endAt=Number(context.nextOpenAt)||0;
+      return endAt?{kind:'fixed',label:'Destination curfew window',startAt:problem.detectedAt,endAt}:null;
+    }
+  };
+
+  function timeWindowForProblem(problem){
+    const resolver=TIME_PROJECTION_RULES[problem?.type];
+    return resolver?resolver(problem,problem.context||{}):null;
+  }
+
+  function timeProjectionForProblem(problem,now=Date.now()){
+    const projection=timeWindowForProblem(problem);
+    if(!projection) return null;
+    const endAt=Number(projection.endAt)||0;
+    const fallbackStart=Number(problem.detectedAt)||now;
+    const startAt=Math.min(endAt,Number(projection.startAt)||fallbackStart);
+    if(!endAt||endAt<=startAt||endAt<=now) return null;
+    const durationMs=Math.max(1,endAt-startAt);
+    return {
+      ...projection,
+      timeBased:true,
+      startAt,endAt,
+      durationMin:Math.max(1,Math.ceil(durationMs/60_000)),
+      remainingMin:Math.max(1,Math.ceil((endAt-now)/60_000)),
+      progress:Math.max(0,Math.min(1,(now-startAt)/durationMs))
     };
   }
 
@@ -408,6 +491,8 @@
       allowAirborne:Boolean(def.allowAirborne),
       airborneOnly:Boolean(def.airborneOnly),
       arrivalInspectionOnClose:Boolean(def.arrivalInspectionOnClose),
+      holdingPolicy:def.holdingPolicy||'',
+      holdingBasis:def.holdingBasis||'',
       requiredResponse:requiredResponseForType(type),
       defaultPolicy:defaultPolicyForType(type),
       recommendations:recommendationsForType(type)
@@ -464,7 +549,8 @@
     derivedProblemTypes,isDerivedType,titleForType,summaryForType,severityForType,decisionMinutesForType,
     requiredResponseForType,responseDelayMinutesForProblem,responseOutcomeForProblem,
     arrivalInspectionOnClose,defaultPolicyForType,
-    recommendationsForType,recommendationsForProblem,factsForProblem,resolutionTextForProblem
+    recommendationsForType,recommendationsForProblem,factsForProblem,resolutionTextForProblem,
+    timeWindowForProblem,timeProjectionForProblem
   };
   global.AeroProblemModel=ProblemModel;
 

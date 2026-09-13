@@ -33,6 +33,15 @@ function incidentDefaultCountdown(consequence){
   </section>`;
 }
 
+function incidentRecoveryOutlook(outlook){
+  if(!outlook?.timeBased) return '';
+  return `<section class="incident-recovery-outlook ${esc(outlook.kind||'forecast')}" data-problem-recovery-outlook data-recovery-start="${Number(outlook.startAt)||0}" data-recovery-end="${Number(outlook.endAt)||0}">
+    <div><b>Recovery outlook</b><span data-recovery-outlook-remaining>${esc(outlook.remainingLabel||'')}</span></div>
+    <p>${esc(outlook.label||'Temporary operational restriction')}</p>
+    <div class="progress-track" role="progressbar" aria-label="Projected disruption duration" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round((Number(outlook.progress)||0)*100)}"><span style="width:${formatPct(Number(outlook.progress)||0)}"></span></div>
+  </section>`;
+}
+
 function incidentCrewAbsences(absences=[]){
   if(!absences.length) return '';
   return `<section class="incident-crew-absence"><span>Unavailable crew</span>${absences.map(item=>`<div><b>${Number(item.count)||1} ${esc(PERSONNEL[item.role]?.label||item.role)}</b><small>${esc([item.family,item.until?`unavailable until ${formatTime(item.until)}`:''].filter(Boolean).join(' · '))}</small></div>`).join('')}</section>`;
@@ -48,7 +57,8 @@ function incidentCard(incident){
       <div><b>${esc(incident.title)}</b><span>${esc(incident.summary)}</span></div>
       <em>${esc(incident.status)}</em>
     </header>
-    ${incident.scope?`<span class="incident-attention-scope">${esc(incident.scope)}</span>`:''}
+    ${incident.scope&&(incident.scopeKind!=='flight'||incident.affectedCount!==1)?`<span class="incident-attention-scope">${esc(incident.scope)}</span>`:''}
+    ${incidentRecoveryOutlook(incident.recoveryOutlook)}
     ${incidentRequiredResponse(incident.requiredResponse)}
     ${incidentDefaultCountdown(incident.defaultConsequence)}
     ${incidentCrewAbsences(incident.crewAbsences)}
@@ -58,6 +68,18 @@ function incidentCard(incident){
 
 function refreshRequiredResponseProgress(root=document){
   const now=typeof simNow==='function'?simNow():Date.now();
+  root.querySelectorAll('[data-problem-recovery-outlook]').forEach(section=>{
+    const start=Number(section.dataset.recoveryStart)||now;
+    const end=Math.max(start+1,Number(section.dataset.recoveryEnd)||start+1);
+    const progress=Math.max(0,Math.min(1,(now-start)/(end-start)));
+    const remaining=Math.max(0,end-now);
+    const track=section.querySelector('.progress-track');
+    const bar=track?.querySelector('span');
+    if(bar) bar.style.width=`${Math.round(progress*100)}%`;
+    if(track) track.setAttribute('aria-valuenow',String(Math.round(progress*100)));
+    const label=section.querySelector('[data-recovery-outlook-remaining]');
+    if(label) label.textContent=remaining?`${formatDuration(Math.max(60_000,remaining))} remaining`:'Forecast window ended';
+  });
   root.querySelectorAll('[data-required-response-progress]').forEach(section=>{
     const start=Number(section.dataset.responseStart)||now;
     const end=Math.max(start+1,Number(section.dataset.responseEnd)||start+1);
@@ -116,11 +138,9 @@ function warningGroupsMarkup(warnings){
     .sort((a,b)=>warningLevelRank(a[1][0]?.level)-warningLevelRank(b[1][0]?.level)||b[1].length-a[1].length||a[0].localeCompare(b[0]))
     .map(([name,items])=>{
       const critical=items.filter(item=>item.level==='critical').length;
-      const shown=items.slice(0,10),hidden=items.slice(10,30);
       return `<section class="warning-group-card ${critical?'critical':''}">
         <header><div><b>${esc(name)}</b><span>${critical?`${critical} critical · `:''}${items.length} warning${items.length===1?'':'s'}</span></div></header>
-        ${shown.map(warningRow).join('')}
-        ${hidden.length?`<details class="warning-group-more"><summary>Show ${items.length-shown.length} more</summary>${hidden.map(warningRow).join('')}${items.length>shown.length+hidden.length?`<p>${items.length-shown.length-hidden.length} more not shown.</p>`:''}</details>`:''}
+        ${AeroUi.list(items,warningRow,{key:`warnings-${name}`})}
       </section>`;
     })
     .join('');
