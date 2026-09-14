@@ -49,13 +49,8 @@
 .ui-select input[type="search"]{height:28px;min-height:28px;padding:3px 7px;font-size:var(--ui-meta);border-radius:4px;background:transparent;color:var(--text);border:1px solid #29404b}
 .ui-select-result{color:var(--ui-label);font-size:var(--ui-small)}
 .ui-select-result[hidden]{display:none}
-.crew-pool-role-grid :is(span,b){white-space:normal;overflow:visible;text-overflow:clip}
-.crew-pool-status,.crew-pool-qualifications{color:var(--ui-label)}
-.crew-pool-card .crew-pool-status,.crew-pool-card header .secondary-button,.dispatch-overview-aircraft-row .secondary-button.compact{font-size:var(--ui-meta)}
+.dispatch-overview-aircraft-row .secondary-button.compact{font-size:var(--ui-meta)}
 .occ-management-host .form-grid.compact-form label{font-size:var(--ui-meta)}
-.crew-pool-card .ui-shortage{color:var(--warn)}
-.crew-pool-card>header{flex-wrap:wrap}
-.crew-assignment-receipt.compact{padding:0;background:transparent}
 .crew-assignment-receipt{gap:2px}
 .station-service-form,.station-receipt,.station-overview,.personnel-form{gap:9px}
 .station-request-row{grid-template-columns:minmax(0,1fr);gap:3px}

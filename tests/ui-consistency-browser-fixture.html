@@ -44,9 +44,11 @@
 
     // Expanded pool information survives dirty rendering.
     await clickTab('personnel:overview');
-    const details=d.querySelector('[data-ui-details="crew-pool-FRA"]');assert(details,'Pool details missing');
-    details.open=true;await wait(30);w.refreshPersonnelRail(true,true);await wait(30);
-    assert(d.querySelector('[data-ui-details="crew-pool-FRA"]').open,'Pool details collapsed on refresh');
+    const poolToggle=d.querySelector('[data-toggle-crew-pool="FRA"]');assert(poolToggle,'Pool details missing');
+    poolToggle.click();await wait(30);w.refreshPersonnelRail(true,true);await wait(30);
+    assert(d.querySelector('[data-toggle-crew-pool="FRA"]').getAttribute('aria-expanded')==='true'&&!d.querySelector('[data-crew-pool="FRA"] .crew-pool-details').hidden,'Pool details collapsed on refresh');
+    d.querySelector('[data-toggle-crew-pool="FRA"]').click();w.refreshPersonnelRail(true,true);
+    assert(d.querySelector('[data-crew-pool="FRA"] .crew-pool-details').hidden,'Pool details did not stay collapsed');
 
     // Every formerly capped work list exposes all items without changing operational data.
     const host=d.createElement('div');host.id='presentation-contract';d.body.append(host);
@@ -56,10 +58,12 @@
       [()=>w.passengerRecoveryDeskMarkup(exposures),'.passenger-recovery-row'],
       [()=>w.crewAccommodationMarkup(exposures),'.crew-accommodation-row'],
       [()=>w.incidentsWarningsDeskMarkup([],warnings),'.warning-row'],
-      [()=>w.networkConstraintsMarkup(exposures.map((_,i)=>({id:`test-network-${i}`,activeFrom:w.simNow(),activeUntil:w.simNow()+60*MIN,label:`Area ${i}`,reason:'Capacity'}))),'.desk-list-row']
+      [()=>w.networkConstraintsMarkup(exposures.map((_,i)=>({id:`test-network-${i}`,activeFrom:w.simNow(),activeUntil:w.simNow()+60*MIN,label:`Area ${i}`,reason:'Capacity'}))),'.desk-list-row'],
+      [()=>w.AeroUi.list(exposures,item=>`<tr class="pool-test-row"><td>${item.flightId}</td></tr>`,{key:'pool-table-contract',wrap:rows=>`<table><tbody>${rows}</tbody></table>`}),'.pool-test-row']
     ];
     for(const [render,selector] of views){
       host.innerHTML=render();assert(host.querySelectorAll(selector).length===10,`Initial list is not ten rows: ${selector}`);
+      assert(!host.querySelector('table [data-ui-more]'),'Pagination controls were inserted into a table');
       for(let n=0;n<2;n++){host.querySelector('[data-ui-more]').click();host.innerHTML=render();}
       assert(host.querySelectorAll(selector).length===27,`List silently lost items: ${selector}`);
       assert(!host.querySelector('[data-ui-more]'),'Finished list still claims hidden work');

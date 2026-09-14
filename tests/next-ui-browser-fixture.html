@@ -778,7 +778,8 @@
     d.querySelector('[data-desk-panel="personnel:overview"]').click(); await wait(80);
     assert(d.querySelector('[data-rail-widget="personnel"] .desk-action-tab.active')?.textContent.includes('Pools'),'personnel pools tab is not active after selecting it');
     const fraPool=d.querySelector('[data-rail-widget="personnel"] [data-crew-pool="FRA"]');
-    assert(fraPool?.textContent.includes('available')&&fraPool.textContent.includes('at station'),'personnel pool does not distinguish assignable crew from station headcount');
+    assert(fraPool?.closest('table').caption.textContent==='Available now','personnel pool counts are not labelled as available now');
+    assert(fraPool.querySelector('.crew-pool-details').hidden&&fraPool.querySelector('.crew-pool-qualifications').textContent.includes('at station'),'station qualification totals should only appear in the collapsed detail');
     assert(fraPool.querySelector('[data-assign-crew-pool="FRA"]'),'crew pool is missing its assignment action');
     assert(fraPool.querySelector('.crew-pool-qualifications')?.textContent.includes('Airbus A320 family'),'crew pool does not show aircraft-family qualifications');
     fraPool.querySelector('[data-assign-crew-pool="FRA"]').click();await wait(80);

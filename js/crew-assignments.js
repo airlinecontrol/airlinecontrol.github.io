@@ -171,10 +171,10 @@ function crewReservationCredit(id,role,family=''){
   return record.allocations.filter(item=>item.role===role&&item.sourceType==='station').reduce((sum,item)=>sum+(family?(item.qualifications[family]||0):item.amount),0);
 }
 
-function crewAssignmentRequestRoles(flight,mode,selectedRoles){
-  const requirement=crewRequirementForFlight(flight);
-  const roles=mode==='full'?CREW_ROLES:mode==='augment'?CREW_ROLES:selectedRoles;
+function crewAssignmentRequestRoles(flight,mode,selectedRoles,{augmented=false}={}){
   const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
+  const requirement=crewRequirementForFlight(flight,aircraft,{augmented:flight.crewAugmented||(mode==='full'&&augmented)});
+  const roles=mode==='full'||mode==='augment'?CREW_ROLES:selectedRoles;
   const {departure,duration}=staffingEvaluationWindow(flight);
   const deficits=mode==='augment'&&flight.crewAugmented?personnelDeficitsForFlight(aircraft,departure,duration,flight.from,flight.id,true,flight.flightType):[];
   const operationalNeeds=crewAssignmentNeedsForFlight(flight);
@@ -219,7 +219,7 @@ function crewAssignmentDutyAssessment(flight,roles,reportAt,readyAt,{full=false,
   const roleDuties=CREW_ROLES.filter(role=>crewRequirementForFlight(flight)[role]>0).map(role=>{
     const replaced=full||Boolean(roles[role]);
     const prior=old.roleDuties?.[role]?.dutyStart||old.dutyStart;
-    const start=augment?Math.min(prior,reportAt):replaced?reportAt:prior;
+    const start=augment&&!full?Math.min(prior,reportAt):replaced?reportAt:prior;
     const maxHours=augment?base.maxHours:replaced?base.maxHours:(old.roleDuties?.[role]?.maxHours||old.maxHours);
     const dutyHours=(arrival+30*MIN-start)/HOUR;
     return {role,dutyStart:start,dutyEnd:arrival+30*MIN,dutyHours,maxHours,legal:dutyHours<=maxHours};
@@ -228,27 +228,51 @@ function crewAssignmentDutyAssessment(flight,roles,reportAt,readyAt,{full=false,
     reason:roleDuties.filter(item=>!item.legal).map(item=>`${PERSONNEL[item.role].label}: ${item.dutyHours.toFixed(1)}h / ${item.maxHours.toFixed(1)}h`).join(' · ')};
 }
 
-function crewAssignmentPreview(flightId,{mode='reserve',roles=['captains'],source='reserve',record=null}={}){
+function crewAssignmentPreview(flightId,{mode='reserve',roles=['captains'],source='reserve',augmented=mode==='augment',record=null}={}){
   const t=simNow(),flight=state.flights.find(item=>item.id===flightId);
   let blocker=crewGroundActionBlocker(flight,t);
   if(blocker) return {flight,blocker,roles:{},availability:[],cost:0};
   if(!CREW_ASSIGNMENT_MODES[mode]) blocker='Choose a crew assignment action.';
   if(record&&(record.family!==crewRecoveryFlightFamily(flight)||record.airport!==flight.from)) blocker='The aircraft qualification or departure station changed. Make a new crew request.';
   if(crewAssignments().some(item=>item.flightId===flightId&&crewAssignmentPending(item)&&item.id!==record?.id)) blocker='A crew request is already in progress for this flight.';
-  const required=record?.roles||crewAssignmentRequestRoles(flight,mode,roles);
+  const required=record?.roles||crewAssignmentRequestRoles(flight,mode,roles,{augmented});
   if(!Object.keys(required).length) blocker=mode==='augment'?'No missing augmented crew complement.':'Select at least one required crew role.';
-  if(mode==='augment'&&flight.flightType==='ferry') blocker='This ferry does not need augmented crew.';
+  if(augmented&&flight.flightType==='ferry') blocker='This ferry does not need augmented crew.';
   const availability=Object.entries(required).map(([role,amount])=>({role,required:amount,...crewSourceAvailability(flight,source,role,{excludeId:record?.id,t})}));
   const unavailable=availability.filter(item=>item.amount<item.required);
   if(unavailable.length) blocker=unavailable.map(item=>`${PERSONNEL[item.role].label}: ${item.amount}/${item.required}. ${item.reason||''}`).join(' · ');
   const sourceReadyAt=Math.max(t,...availability.map(item=>item.readyAt));
   const timing=record?{acceptedAt:record.acceptedAt,reportAt:record.reportAt,briefingMin:record.briefingMin,readyAt:record.readyAt}
     :crewAssignmentTiming(flight,mode,source,t,sourceReadyAt);
-  const duty=crewAssignmentDutyAssessment(flight,required,timing.reportAt,timing.readyAt,{full:mode==='full',augment:mode==='augment'});
-  if(!duty.legal) blocker=`Crew duty would be illegal: ${duty.reason}. Retime, replace more roles, or revise the flight in Dispatch.`;
+  const duty=crewAssignmentDutyAssessment(flight,required,timing.reportAt,timing.readyAt,{full:mode==='full',augment:augmented});
+  if(!duty.legal) blocker=`Crew duty would be illegal: ${duty.reason}. Retime or revise the flight in Dispatch.`;
   const cost=crewAssignmentCost(required);
-  return {flight,mode,source,roles:required,availability,sourceReadyAt,...timing,duty,cost,blocker,
+  return {flight,mode,source,augmented,roles:required,availability,sourceReadyAt,...timing,duty,cost,blocker,
     delayMin:Math.max(0,Math.ceil((timing.readyAt-flightActualDeparture(flight))/MIN))};
+}
+
+function crewAssignmentPlan(flightId){
+  const flight=state.flights.find(item=>item.id===flightId);
+  if(crewGroundActionBlocker(flight)) return crewAssignmentPreview(flightId,{mode:'full',source:'local'});
+  const roles=Object.keys(crewAssignmentNeedsForFlight(flight));
+  const candidates=crewAssignmentSourceOptions(flight).map(({id:source})=>{
+    const preview=(mode,augmented=mode==='augment')=>crewAssignmentPreview(flightId,{mode,roles,source,augmented});
+    let plan=preview(roles.length?'replace':'full');
+    // Replace an exhausted crew before considering additional relief positions.
+    if(!plan.duty.legal&&roles.length) plan=preview('full');
+    if(!plan.duty.legal&&!flight.crewAugmented&&flight.flightType!=='ferry'){
+      const relief=preview(roles.length?'full':'augment',true);
+      if(relief.duty.legal) plan=relief;
+    }
+    return plan;
+  });
+  return candidates.filter(plan=>!plan.blocker).sort((a,b)=>a.readyAt-b.readyAt||a.cost-b.cost)[0]||candidates[0];
+}
+
+function requestCrewForFlight(flightId){
+  const plan=crewAssignmentPlan(flightId);
+  if(plan.blocker){toast(plan.blocker);return null;}
+  return requestCrewAssignment(flightId,{mode:plan.mode,roles:Object.keys(plan.roles),source:plan.source,augmented:plan.augmented});
 }
 
 function crewAssignmentAllocate(preview){
@@ -266,7 +290,7 @@ function requestCrewAssignment(flightId,options={}){
   if(preview.blocker){ toast(preview.blocker); return null; }
   const t=simNow();
   const record={id:`CA${state.nextCrewAssignment++}`,flightId,flightIds:preview.duty.flightIds,airport:preview.flight.from,
-    family:crewRecoveryFlightFamily(preview.flight),mode:preview.mode,source:preview.source,roles:preview.roles,
+    family:crewRecoveryFlightFamily(preview.flight),mode:preview.mode,source:preview.source,augmented:preview.augmented,roles:preview.roles,
     allocations:crewAssignmentAllocate(preview),status:'requested',requestedAt:t,updatedAt:t,
     acceptedAt:preview.acceptedAt,reportAt:preview.reportAt,briefingMin:preview.briefingMin,readyAt:preview.readyAt,
     assignedAt:0,departedAt:0,returnedAt:0,restUntil:0,cost:preview.cost,outcome:''};
@@ -327,7 +351,7 @@ function installCrewAssignment(record,t){
     for(const role of Object.keys(record.roles)){
       item.crewRoleSwaps[role]={role,assignmentId:record.id,at:record.assignedAt,reportAt:record.reportAt,count:record.roles[role],reason:CREW_ASSIGNMENT_MODES[record.mode]};
     }
-    if(record.mode==='augment') item.crewAugmented=true;
+    if(record.mode==='augment'||record.augmented) item.crewAugmented=true;
   }
   flight.crewSwappedAt=record.assignedAt;
   flight.crewAssignmentReadyAt=Math.max(flight.crewAssignmentReadyAt||0,record.readyAt);
@@ -353,7 +377,7 @@ function processCrewAssignments(t=simNow()){
       const source=crewAssignmentSourceReady(record,t);
       if(source.failed){ finishCrewAssignmentRequest(record,'failed',source.failed,t); changed=true; continue; }
       if(t>=record.readyAt&&source.ready){
-        const preview=crewAssignmentPreview(flight.id,{mode:record.mode,roles:Object.keys(record.roles),source:record.source,record});
+        const preview=crewAssignmentPreview(flight.id,{mode:record.mode,roles:Object.keys(record.roles),source:record.source,augmented:record.augmented,record});
         if(preview.blocker){ finishCrewAssignmentRequest(record,'failed',preview.blocker,t); changed=true; continue; }
         installCrewAssignment(record,t);
       }else if(t>=record.reportAt&&source.ready) record.status='briefing';

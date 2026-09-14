@@ -3,10 +3,10 @@
   const expandedLists=new Map();
   const openDetails=new Set();
 
-  function list(items,render,{key,limit=10}={}){
+  function list(items,render,{key,limit=10,wrap=content=>content}={}){
     const count=Math.max(limit,expandedLists.get(key)||limit);
     const remaining=Math.max(0,items.length-count);
-    return items.slice(0,count).map(render).join('')+
+    return wrap(items.slice(0,count).map(render).join(''))+
       (remaining?`<button type="button" class="desk-action-link ui-list-more" data-ui-more="${esc(key)}" data-ui-limit="${limit}">Show ${Math.min(limit,remaining)} more <span>(${remaining} remaining)</span></button>`:'')+
       (count>limit?`<button type="button" class="desk-action-link ui-list-less" data-ui-less="${esc(key)}">Show fewer</button>`:'');
   }

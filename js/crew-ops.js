@@ -50,7 +50,7 @@ function ensurePlannedCrewAugmentation(){
   const processed=new Set();
   for(const flight of state.flights){
     if(flight.cancelled||flight.departureLogged||flight.flightType==='ferry'||processed.has(flight.id)) continue;
-    if(crewAssignments().some(item=>item.flightIds.includes(flight.id)&&crewAssignmentPending(item)&&item.mode==='augment')) continue;
+    if(crewAssignments().some(item=>item.flightIds.includes(flight.id)&&crewAssignmentPending(item)&&(item.mode==='augment'||item.augmented))) continue;
     const normal=plannedCrewDutyAssessmentForFlight(flight,{augmented:false});
     if(!normal?.target) continue;
     normal.flights.forEach(item=>processed.add(item.id));
@@ -397,9 +397,9 @@ function flightCrewReleaseAirport(f){
   return flightOperationalDestination(f);
 }
 
-function crewRequirementForFlight(flight,aircraft=null){
+function crewRequirementForFlight(flight,aircraft=null,{augmented=flight.crewAugmented}={}){
   const ac=aircraft||state.aircraft.find(item=>item.id===flight.aircraftId);
-  const multiplier=flight.crewAugmented?2:1;
+  const multiplier=augmented?2:1;
   return {
     captains:multiplier,
     firstOfficers:multiplier,

@@ -106,9 +106,8 @@
     const flightSelect=d.querySelector('[data-crew-assignment-flight]');
     flightSelect.value=ret.id;flightSelect.dispatchEvent(new w.Event('change',{bubbles:true}));
     await wait(80);
-    const mode=d.querySelector('[data-crew-assignment-mode]');
-    assert(mode,'personnel widget does not expose crew assignment: '+d.querySelector('.crew-pool-assignment')?.textContent);
-    mode.value='full';mode.dispatchEvent(new w.Event('change',{bubbles:true}));
+    assert(!d.querySelector('[data-crew-assignment-mode]'),'Personnel still requires an assignment-mode selection');
+    assert(d.querySelector('.crew-assignment-facts').textContent.includes('Full crew'),'Personnel did not preview a fresh full crew for a staffed flight');
     assert(!d.querySelector('[data-request-crew-assignment]').disabled,'full swap should be available with local LHR reserves: '+d.querySelector('[data-crew-assignment-blocker]')?.textContent);
     d.querySelector('[data-request-crew-assignment]').click();
     const request=w.state.crewAssignments.at(-1);

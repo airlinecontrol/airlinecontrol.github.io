@@ -233,12 +233,27 @@
     ac.location='AMS';
     w.settleSelectedFlight(another.id);
     w.setDeskPanel('personnel','overview',{toggle:false});w.refreshPersonnelRail(true,true);
+    const poolTable=d.querySelector('.crew-pool-table');
+    assert(poolTable?.caption.textContent==='Available now','Compact pool table is missing its count definition');
+    assert([...poolTable.tHead.rows[0].cells].map(cell=>cell.textContent).join('|')==='Airport|Captain|F/O|Cabin|Actions','Pool headers changed');
+    const poolRow=d.querySelector('[data-crew-pool="FRA"] .crew-pool-row');
+    const pool=w.crewPoolSnapshot('FRA');
+    for(const role of ['captains','firstOfficers','cabinCrew']){
+      assert(Number(poolRow.querySelector(`[data-crew-pool-role="${role}"]`).textContent)===pool.roles[role].available,`Pool table shows total instead of available ${role}`);
+    }
+    assert(poolRow.getBoundingClientRect().height<=42,'Pool overview is no longer a compact row');
+    assert(!/committed|on duty|uncovered|resting|reporting/i.test(poolRow.textContent),'Internal staffing accounting leaked into the pool overview');
+    assert(d.querySelector('[data-crew-pool="FRA"] .crew-pool-details').hidden,'Qualifications should start collapsed');
     const poolButton=d.querySelector('[data-assign-crew-pool="FRA"]');
     assert(poolButton,'FRA crew pool is missing its assignment action');
     poolButton.click();await wait(30);
     assert([...d.querySelector('[data-crew-assignment-flight]').options].some(option=>option.value===flight.id),'Future FRA departure disappeared because its aircraft is currently elsewhere');
     choose('[data-crew-assignment-flight]',flight.id);
     assert(w.eval('selectedFlightId')===another.id,'Personnel selection changed Dispatch selection');
+    assert(!d.querySelector('.crew-pool-assignment .ui-details, [data-crew-assignment-mode], [data-crew-assignment-role], [data-crew-assignment-source]'),'Assignment still exposes internal mode, role or source controls');
+    assert(d.querySelectorAll('.crew-pool-assignment select').length===1,'Assign crew should require only a flight selection');
+    assert(d.querySelector('.crew-assignment-facts').textContent.includes('Full crew'),'Fresh full crew is not explained in the preview');
+    assert(d.querySelector('[data-request-crew-assignment]').textContent==='Assign crew','Assignment action has the wrong label');
     const nativeSelect=d.querySelector('[data-crew-assignment-flight]');nativeSelect.focus();
     w.refreshPersonnelRail(true);
     assert(d.querySelector('[data-crew-assignment-flight]')===nativeSelect,'Background refresh replaced focused select');
@@ -246,10 +261,14 @@
     await wait(30);
     d.querySelector('[data-request-crew-assignment]').click();
     const uiRecord=s.crewAssignments.at(-1);
-    assert(uiRecord,'UI did not submit a reserve request');
+    assert(uiRecord?.mode==='full','Staffed flight did not request a fresh full crew');
     w.refreshPersonnelRail(true,true);
     assert(d.querySelector('[data-crew-assignment-receipt]')?.textContent.includes('Awaiting crew response'),'Pending receipt missing');
+    assert(d.querySelectorAll(`[data-crew-assignment-receipt="${uiRecord.id}"]`).length===1,'Pending receipt duplicated inside and below the assignment form');
     assert(!d.querySelector('[data-request-crew-assignment]'),'Pending form offered duplicate request');
+    d.querySelector('[data-close-crew-pool]').click();
+    assert(d.querySelector('.crew-assignment-receipt.compact [role="progressbar"]'),'Closing the form hid the pending response timer');
+    d.querySelector('[data-assign-crew-pool="FRA"]').click();
     const serialized=JSON.stringify(s);
     const restored=w.migrateState(JSON.parse(serialized));
     assert(restored.crewAssignments.at(-1).readyAt===uiRecord.readyAt,'Reload changed assignment clock');
@@ -259,7 +278,94 @@
     const section=d.querySelector('#personnelRailList');
     assert(section.scrollWidth<=section.clientWidth+2,'Personnel form overflows sidebar');
 
-    result.textContent='PASS\ncrew assignments: roles, responses, reservations, positioning, rest, cancellation, lifecycle, persistence, stable controls';
+    // Sick-call needs are automatic; qualifications still gate the actual assignment.
+    ({flight,family}=setup());
+    const uiSick=w.createProblem('crew_sick',flight,{training:true,detectedAt:base});
+    w.settleSelectedFlight(flight.id);w.refreshPersonnelRail(true,true);
+    d.querySelector('[data-assign-crew-pool="FRA"]').click();
+    assert(d.querySelector('.crew-assignment-facts dt').textContent==='Assigning','Sick-call assignment did not show its required roles');
+    assert(w.crewAssignmentPlan(flight.id).roles[uiSick.affectedRole]===1,'Sick crew role was not automatically selected');
+    assert(!d.querySelector('[data-crew-assignment-role]'),'Sick-call form exposes redundant manual role selection');
+    const pilot=uiSick.affectedRole==='cabinCrew'?'captains':uiSick.affectedRole;
+    const qualification=s.personnel.qualifications.FRA[pilot][family];
+    s.personnel.qualifications.FRA[pilot][family]=0;w.refreshPersonnelRail(true,true);
+    if(uiSick.affectedRole!=='cabinCrew'){
+      assert(d.querySelector('[data-crew-assignment-blocker]')&&d.querySelector('[data-request-crew-assignment]').disabled,'Wrong-family pool offered an assignment');
+    }
+    s.personnel.qualifications.FRA[pilot][family]=qualification;w.refreshPersonnelRail(true,true);
+    d.querySelector('[data-request-crew-assignment]').click();
+    const compactRecord=s.crewAssignments.at(-1);assert(compactRecord,'Automatic sick-role assignment was not submitted');
+    assert(Object.keys(compactRecord.roles).filter(role=>compactRecord.roles[role]>0).join()===uiSick.affectedRole,'Sick-call request replaced unaffected roles');
+    d.querySelector('[data-close-crew-pool]').click();
+    d.querySelector(`[data-cancel-crew-assignment="${compactRecord.id}"]`).click();
+    assert(compactRecord.status==='cancelled'&&!d.querySelector(`[data-crew-assignment-receipt="${compactRecord.id}"]`),'Compact request cancellation failed to clear its receipt');
+
+    // One entry point selects a concrete, resource-checked plan without changing state on preview.
+    ({flight}=setup({flightType:'ferry'}));
+    const beforePlan=JSON.stringify(s);
+    const ferryPlan=w.crewAssignmentPlan(flight.id);
+    assert(ferryPlan.mode==='full'&&!ferryPlan.roles.cabinCrew&&!ferryPlan.blocker,'Automatic ferry assignment requested cabin crew');
+    assert(JSON.stringify(s)===beforePlan,'Reading the assignment plan modified the simulation');
+    const autoFerry=w.requestCrewForFlight(flight.id);
+    assert(autoFerry?.status==='requested'&&autoFerry.cost===ferryPlan.cost,'Automatic request did not preserve preview and response timing');
+    assert(!w.requestCrewForFlight(flight.id),'Automatic assignment allowed a duplicate request');
+
+    ({flight,family}=setup({captains:1}));
+    w.standDownCrew(flight.id,['captains'],'sick');
+    assert(w.crewAssignmentPlan(flight.id).blocker&&!w.requestCrewForFlight(flight.id),'Missing crew was manufactured by automatic assignment');
+    const arriving={id:'PT-AUTO',from:'AMS',to:'FRA',role:'captains',amount:1,qualifications:{[family]:1},method:'external',status:'in_transit',originDebited:true,departure:base-MIN,arrival:base+40*MIN};
+    s.personnelTransfers.push(arriving);
+    const incomingPlan=w.crewAssignmentPlan(flight.id);
+    assert(incomingPlan.source==='transfer:PT-AUTO'&&!incomingPlan.blocker,'Automatic assignment ignored a suitable incoming crew source');
+    const autoIncoming=w.requestCrewForFlight(flight.id);
+    assert(autoIncoming?.readyAt>arriving.arrival&&autoIncoming.roles.captains===1,'Incoming crew skipped arrival or briefing time');
+    advance(autoIncoming.readyAt);
+    assert(autoIncoming.status==='assigned'&&arriving.status==='completed','Automatic incoming assignment failed after physical arrival');
+
+    ({flight}=setup({model:'A330-900',to:'JFK',captains:6,firstOfficers:6,cabinCrew:48}));
+    flight.arrival=flight.departure+13*HOUR;w.recalculateOperations();
+    const extraPlan=w.crewAssignmentPlan(flight.id);
+    assert(extraPlan.mode==='augment'&&extraPlan.duty.legal&&!extraPlan.blocker,'Long duty did not select additional crew automatically');
+    const autoExtra=w.requestCrewForFlight(flight.id);
+    assert(autoExtra&&!flight.crewAugmented,'Extra crew was applied before the response completed');
+    advance(autoExtra.readyAt);
+    assert(autoExtra.status==='assigned'&&flight.crewAugmented&&w.crewDutyForFlight(flight).legal,'Automatic relief crew did not restore legal duty');
+
+    ({flight}=setup({model:'A330-900',to:'JFK',captains:6,firstOfficers:6,cabinCrew:48}));
+    flight.arrival=flight.departure+13*HOUR;w.recalculateOperations();
+    w.standDownCrew(flight.id,['captains'],'sick');
+    const combinedPlan=w.crewAssignmentPlan(flight.id);
+    assert(combinedPlan.mode==='full'&&combinedPlan.augmented&&combinedPlan.roles.captains===2&&!combinedPlan.blocker,'Sick crew plus a long duty did not produce a complete legal complement');
+    const combined=w.requestCrewForFlight(flight.id);
+    w.ensurePlannedCrewAugmentation();
+    assert(combined&&!flight.crewAugmented,'Scheduled augmentation bypassed the pending combined assignment');
+    assert(w.migrateState(JSON.parse(JSON.stringify(s))).crewAssignments.at(-1).augmented,'Reload lost the requested crew configuration');
+    advance(combined.readyAt);
+    assert(combined.status==='assigned'&&flight.crewAugmented&&w.crewFlightCoverageStatus(flight).ready,'Combined assignment failed to restore full coverage');
+    assert(w.assignedCrewRoleCount(flight,'captains')===2,'Combined assignment silently reused the sick captain');
+    assert(w.crewDutyForFlight(flight).roleDuties.captains.dutyStart===combined.reportAt,'Fresh full crew retained the old duty clock');
+    flight.arrival=flight.departure+22*HOUR;w.recalculateOperations();
+    assert(w.crewAssignmentPlan(flight.id).blocker&&!w.requestCrewForFlight(flight.id),'Automatic assignment bypassed an impossible duty limit');
+
+    // Paging away from an open pool must not hide its outstanding request.
+    ({flight}=setup());
+    const pagedRequest=request(flight,{mode:'replace',roles:['captains'],source:'local'});
+    const fraStaff=s.personnel.assignments.FRA;
+    const otherAirports=w.eval('Object.keys(AIRPORTS)').filter(code=>code!=='FRA').slice(0,13);
+    s.personnel.assignments=Object.fromEntries(otherAirports.map(code=>[code,{captains:1,firstOfficers:1,cabinCrew:4}]));
+    s.personnel.assignments.FRA=fraStaff;s.home=otherAirports[0];
+    w.eval('selectedFlightId=null');
+    w.eval(`Object.assign(personnelAssignmentUi,{airport:'FRA',flightId:'${flight.id}',requestId:'${pagedRequest.id}',newRequest:false})`);
+    w.refreshPersonnelRail(true,true);
+    assert(d.querySelectorAll('.crew-pool-row').length===10&&!d.querySelector('[data-crew-pool="FRA"]'),'Pool list did not limit its initial rows');
+    assert(d.querySelector(`[data-crew-assignment-receipt="${pagedRequest.id}"]`),'Hidden pool also hid the pending assignment');
+    d.querySelector('#personnelRailList [data-ui-more="crew-pools"]').click();w.refreshPersonnelRail(true,true);
+    assert(d.querySelectorAll('.crew-pool-row').length===14&&d.querySelector('[data-crew-pool="FRA"]'),'Show more did not reveal all pools');
+    assert(d.querySelectorAll(`[data-crew-assignment-receipt="${pagedRequest.id}"]`).length===1,'Expanded list duplicated the assignment receipt');
+    d.querySelector('#personnelRailList [data-ui-less="crew-pools"]').click();w.refreshPersonnelRail(true,true);
+    assert(d.querySelectorAll('.crew-pool-row').length===10&&d.querySelector(`[data-crew-assignment-receipt="${pagedRequest.id}"]`),'Show fewer hid the pending assignment');
+
+    result.textContent='PASS\ncrew assignments: roles, responses, reservations, positioning, rest, cancellation, lifecycle, persistence, compact pools and stable controls';
   }catch(error){result.textContent='FAIL\n'+(error.stack||error);}
 })();
 </script>
