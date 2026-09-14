@@ -1,0 +1,121 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Airline OCC regional airports browser fixture</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result'),frame=document.getElementById('game');
+  const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+  const MIN=60_000,HOUR=60*MIN;
+  const routes={FDH:'FRA',PAD:'FRA',GRZ:'VIE',BOO:'OSL',AVL:'ATL',BGR:'BOS',BLI:'SEA',
+    CJC:'SCL',ZCO:'SCL',USM:'BKK',LPT:'BKK',MYJ:'HND',KCZ:'HND',CFS:'SYD',DBO:'SYD',ZQN:'AKL',
+    PIT:'JFK',RIC:'IAD',CHS:'ATL',ALB:'JFK',YVR:'SEA',YYC:'YVR',YHZ:'BOS',BDA:'BOS',
+    HAM:'FRA',BER:'FRA',BRS:'LHR',EDI:'LHR',BGO:'OSL',SVG:'OSL',PEK:'HGH',SZX:'HKG',
+    HGH:'PVG',XMN:'CAN',KIX:'HND',FUK:'KIX',CNX:'BKK',HKT:'BKK',CLE:'ORD',CMH:'ORD',
+    CVG:'ATL',IND:'ORD',MCI:'DFW',STL:'ORD',MKE:'ORD',MEM:'ATL',SDF:'ATL',JAX:'ATL',
+    PNS:'ATL',PWM:'BOS',BUF:'JFK',SYR:'JFK',SMF:'SFO',RNO:'SFO',BOI:'SEA',GEG:'SEA',
+    YUL:'YYZ',YOW:'YYZ',YQB:'YYZ',YWG:'MSP',YEG:'YYC',YYJ:'YVR',MTY:'DFW',GDL:'MEX',CUN:'MIA',SJD:'GDL'};
+  // UTC offsets for January and July 2026; independent of the catalog under test.
+  const offsets={FDH:[1,2],PAD:[1,2],GRZ:[1,2],BOO:[1,2],AVL:[-5,-4],BGR:[-5,-4],BLI:[-8,-7],
+    CJC:[-3,-4],ZCO:[-3,-4],USM:[7,7],LPT:[7,7],MYJ:[9,9],KCZ:[9,9],CFS:[11,10],DBO:[11,10],ZQN:[13,12],
+    PIT:[-5,-4],RIC:[-5,-4],CHS:[-5,-4],ALB:[-5,-4],YVR:[-8,-7],YYC:[-7,-6],YHZ:[-4,-3],BDA:[-4,-3],
+    HAM:[1,2],BER:[1,2],BRS:[0,1],EDI:[0,1],BGO:[1,2],SVG:[1,2],PEK:[8,8],SZX:[8,8],
+    HGH:[8,8],XMN:[8,8],KIX:[9,9],FUK:[9,9],CNX:[7,7],HKT:[7,7],CLE:[-5,-4],CMH:[-5,-4],
+    CVG:[-5,-4],IND:[-5,-4],MCI:[-6,-5],STL:[-6,-5],MKE:[-6,-5],MEM:[-6,-5],SDF:[-5,-4],JAX:[-5,-4],
+    PNS:[-6,-5],PWM:[-5,-4],BUF:[-5,-4],SYR:[-5,-4],SMF:[-8,-7],RNO:[-8,-7],BOI:[-7,-6],GEG:[-8,-7],
+    YUL:[-5,-4],YOW:[-5,-4],YQB:[-5,-4],YWG:[-6,-5],YEG:[-7,-6],YYJ:[-8,-7],
+    MTY:[-6,-6],GDL:[-6,-6],CUN:[-5,-5],SJD:[-7,-7]};
+  const closedWindows={FDH:['22:00','06:00'],GRZ:['23:30','06:00'],USM:['22:00','06:00'],
+    LPT:['19:30','07:30'],MYJ:['22:00','07:00'],KCZ:['21:00','07:00'],ZQN:['22:00','07:00'],
+    BDA:['23:00','07:00'],HAM:['23:00','06:00'],BER:['23:30','05:30'],FUK:['22:00','07:00'],SJD:['21:00','07:00']};
+  const restrictedWindows={YVR:['00:00','06:00','noise'],YUL:['00:00','07:00','noise'],BRS:['23:30','06:00','quota']};
+  const clockMinutes=value=>Number(value.slice(0,2))*60+Number(value.slice(3));
+  try{
+    localStorage.removeItem('aerosim_mvp_v6');
+    localStorage.removeItem('aerosim_occ_ui_v1');
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=regional-airports&cache='+Date.now();
+    await loaded;
+    const w=frame.contentWindow,d=frame.contentDocument;
+    w.resetLocalSave();
+    w.setSimulationPaused(true);
+    w.eval('state.ops.automaticDisruptions=false; state.aircraft=[]; state.flights=[]; state.problems=[];');
+    const catalogs=w.eval('({airports:AIRPORTS,markets:AIRPORT_MARKETS,ops:AIRPORT_OPS,costs:AIRPORT_COSTS,night:AIRPORT_NIGHT_RULES})');
+    assert(w.validateAirportCatalogs(),'airport catalog validation failed');
+    assert(w.AeroWeatherEngine,'complete weather profiles failed to initialize');
+    let previewAircraft;
+    for(const code of Object.keys(routes)){
+      const {airports,markets,ops,costs,night}=catalogs;
+      assert(airports[code]?.iata===code,`${code}: missing or mismatched IATA code`);
+      assert(Number.isFinite(airports[code].lat)&&Math.abs(airports[code].lat)<=90,`${code}: invalid latitude`);
+      assert(Number.isFinite(airports[code].lon)&&Math.abs(airports[code].lon)<=180,`${code}: invalid longitude`);
+      for(const key of ['size','business','tourism','wealth','hub']){
+        assert(Number.isFinite(markets[code][key])&&markets[code][key]>=0&&markets[code][key]<=1,`${code}: invalid ${key}`);
+      }
+      assert(['summer','winter','spring'].includes(markets[code].season),`${code}: unsupported demand season`);
+      assert(ops[code].slotIntervalMin>0&&ops[code].graceMin>0,`${code}: missing slot behavior`);
+      assert(Object.values(costs[code]).every(value=>Number.isFinite(value)&&value>0),`${code}: invalid costs`);
+      for(const id of ['origin','destination','managementAircraftDelivery','personnelAirport','transferPersonnelFrom','transferPersonnelTo','homeBaseSelect']){
+        assert(d.querySelector(`#${id} option[value="${code}"]`),`${code}: absent from ${id}`);
+      }
+      for(const [index,month] of [0,6].entries()){
+        const localMidnight=Date.UTC(2026,month,15)-offsets[code][index]*HOUR;
+        assert(w.localTimeParts(night[code].timeZone,localMidnight).hour===0,`${code}: wrong seasonal timezone`);
+        const weather=w.AeroManagement.weatherAt(code,localMidnight+12*HOUR);
+        assert(weather.airport===code&&Number.isFinite(weather.windKph)&&Number.isFinite(weather.delayMin),`${code}: missing weather`);
+        assert(weather.capacityFactor>0&&weather.capacityFactor<=1&&weather.validUntil>weather.validFrom,`${code}: invalid forecast`);
+        const window=closedWindows[code];
+        if(window){
+          assert(night[code].mode==='curfew'&&night[code].start===window[0]&&night[code].end===window[1],`${code}: wrong operating window`);
+          const closes=localMidnight+clockMinutes(window[0])*MIN,opens=localMidnight+clockMinutes(window[1])*MIN;
+          assert(w.airportNightStatus(code,closes-MIN).status==='open',`${code}: closed before normal end of operations`);
+          assert(w.airportNightStatus(code,closes).status==='closed',`${code}: closing boundary not enforced`);
+          assert(w.airportNightStatus(code,opens-MIN).status==='closed',`${code}: opened before normal start of operations`);
+          assert(w.airportNightStatus(code,opens).status==='open',`${code}: opening boundary not respected`);
+        }else if(restrictedWindows[code]){
+          const [start,end,mode]=restrictedWindows[code];
+          assert(night[code].mode===mode&&night[code].start===start&&night[code].end===end,`${code}: wrong night restriction`);
+          const begins=localMidnight+clockMinutes(start)*MIN,ends=localMidnight+clockMinutes(end)*MIN;
+          assert(w.airportNightStatus(code,begins-MIN).status==='open',`${code}: restricted too early`);
+          assert(w.airportNightStatus(code,begins).status==='restricted',`${code}: restriction must not be a hard closure`);
+          assert(w.airportNightStatus(code,ends-MIN).status==='restricted',`${code}: restriction ended too early`);
+          assert(w.airportNightStatus(code,ends).status==='open',`${code}: restriction did not end`);
+        }else{
+          for(let hour=0;hour<24;hour+=3) assert(w.airportNightStatus(code,localMidnight+hour*HOUR).status==='open',`${code}: invented nightly closure`);
+        }
+      }
+      const ac=w.assignRequestedAircraft('Dornier 328-100',w.defaultCabin('Dornier 328-100'),code);
+      if(code==='FDH') previewAircraft=ac;
+      const departure=w.simNow()+HOUR;
+      for(const [from,to] of [[code,routes[code]],[routes[code],code]]){
+        const quote=w.estimateFlight(from,to,ac,{economy:100,business:250,first:400},{departure});
+        assert(quote.rangeOk&&quote.duration>0&&quote.costs>0&&Number.isFinite(quote.profit),`${code}: regional route cannot be estimated`);
+        assert(quote.demand.market.totalDaily>0,`${code}: missing route demand`);
+      }
+      const flight=w.createFlightRecord({aircraftId:ac.id,from:code,to:routes[code],departure,fare:100});
+      const route=w.AeroRoutePlanning.activeRevision(flight.routePlan);
+      assert(route.from===code&&route.to===routes[code]&&route.waypoints.length>=2,`${code}: missing waypoint route`);
+      const provider=w.stationProviderProfile(code,'station');
+      assert(Number.isFinite(provider.capacity)&&Number.isFinite(provider.score),`${code}: invalid station resources`);
+    }
+    const flight={from:'PAD',to:'LPT',departure:Date.parse('2026-07-15T10:00:00Z'),arrival:Date.parse('2026-07-15T13:00:00Z')};
+    const restriction=w.flightNightRestriction(flight);
+    assert(restriction.closures.some(item=>item.airport==='LPT'&&item.phase==='arrival'),'arrival closure not fed into flight restriction logic');
+    assert(restriction.nextDeparture>flight.departure,'no feasible timing calculated after destination opening');
+    w.refreshAircraftSelect(true);
+    d.getElementById('aircraft').value=previewAircraft.id;
+    d.getElementById('origin').value='FDH';
+    d.getElementById('destination').value='GRZ';
+    w.refreshSchedulePreview();
+    assert(d.querySelector('#schedulePreview .route-preview-endpoint.origin text')?.textContent.trim()==='FDH','new origin missing from planning preview');
+    assert(d.querySelector('#schedulePreview .route-preview-endpoint.destination text')?.textContent.trim()==='GRZ','new destination missing from planning preview');
+    d.getElementById('origin').value='PIT';
+    d.getElementById('destination').value='BDA';
+    w.refreshSchedulePreview();
+    assert(d.querySelector('#schedulePreview .route-preview-endpoint.origin text')?.textContent.trim()==='PIT','North American origin missing from planning preview');
+    assert(d.querySelector('#schedulePreview .route-preview-endpoint.destination text')?.textContent.trim()==='BDA','Bermuda destination missing from planning preview');
+    result.textContent=`PASS\n${Object.keys(routes).length} added airports: catalogs, selectors, routes, costs, weather, resources and seasonal night boundaries`;
+  }catch(error){result.textContent='FAIL\n'+(error.stack||error);}
+})();
+</script>

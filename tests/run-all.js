@@ -11,6 +11,7 @@ const nodeTests = [
   'tests/operational-intelligence-smoke.js'
 ];
 const browserFixtures = [
+  'tests/regional-airports-browser-fixture.html',
   'tests/lifecycle-integrity-browser-fixture.html',
   'tests/operational-consistency-browser-fixture.html',
   'tests/problem-scopes-browser-fixture.html',
