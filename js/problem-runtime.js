@@ -131,6 +131,7 @@ function problemDefaultEntry(problem,flight,t=simNow(),{create=false}={}){
 }
 
 function problemDefaultConsequence(problem,t=simNow()){
+  if(!defaultPolicyForProblem(problem)) return null;
   const unattended=problemDefaultState(problem,t);
   const entries=problemAffectedFlightsForRuntime(problem,t)
     .filter(flight=>!flight.cancelled&&!flight.settled&&!flightHasCompleted(flight,t))
@@ -214,7 +215,7 @@ function applyProblemDefault(problem,flight,entry,t=simNow()){
 }
 
 function processProblemDefaults(problem,t=simNow()){
-  if(!problem||problem.status!=='open') return false;
+  if(!problem||problem.status!=='open'||!defaultPolicyForProblem(problem)) return false;
   const affectedFlights=problemAffectedFlightsForRuntime(problem,t);
   const affectedIds=new Set(affectedFlights.map(flight=>flight.id));
   let exposureChanged=false;
@@ -450,6 +451,11 @@ function problemShouldClose(problem,t=simNow()){
     return {reason:'flight_cancelled',outcome:`${flight.id} is cancelled.`};
   }
   const model=AeroProblemModel.problemModel(problem.type);
+  const clearance=AeroProblemModel.definitionForType(problem.type)?.stationClearance;
+  if(clearance){
+    const window=AeroProblemModel.timeWindowForProblem(problem);
+    return window&&t>=window.endAt?{reason:'station_clearance',outcome:clearance.outcome}:null;
+  }
   if(model?.airborneOnly&&!flightIsAirborne(flight,t)){
     if(flightActualArrival(flight)<=t||flight.settled||statusOfFlight(flight,t)==='arrived'){
       applyArrivalInspectionFollowUp(problem,flight);
@@ -500,6 +506,7 @@ function refreshProblem(problem,t=simNow()){
   if(!problem||problem.status!=='open') return false;
   let changed=refreshRequiredProblemResponse(problem,t);
   const flight=problemPrimaryFlightForRuntime(problem);
+  changed=ensureStationProblemClearance(problem,flight)||changed;
   if(typeof ensureProblemIdentityFields==='function'){
     changed=ensureProblemIdentityFields(problem,flight,problem.context,t)||changed;
   }

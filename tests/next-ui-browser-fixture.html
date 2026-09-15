@@ -88,7 +88,7 @@
     const heldFlight=w.createFlightRecord({aircraftId:heldAc.id,from:'JFK',to:'FRA',departure:heldNow+2*60*60_000,fare:{economy:140,business:360,first:700}});
     heldFlight.actualDeparture=heldNow+7*60*60_000;
     heldFlight.actualArrival=heldNow+15*60*60_000;
-    const heldProblem=w.createProblem('security_screening',heldFlight,{training:true,detectedAt:heldNow,context:{sourceId:heldFlight.id}});
+    const heldProblem=w.createProblem('crew_fatigue_report',heldFlight,{training:true,detectedAt:heldNow,context:{sourceId:heldFlight.id}});
     heldProblem.severity='';
     heldProblem.deadline=heldNow+30*60_000;
     assert(w.problemIsActionable(heldProblem,heldNow),'open blocking problem should require operational attention');

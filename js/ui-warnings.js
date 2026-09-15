@@ -35,9 +35,9 @@ function incidentDefaultCountdown(consequence){
 
 function incidentRecoveryOutlook(outlook){
   if(!outlook?.timeBased) return '';
-  return `<section class="incident-recovery-outlook ${esc(outlook.kind||'forecast')}" data-problem-recovery-outlook data-recovery-start="${Number(outlook.startAt)||0}" data-recovery-end="${Number(outlook.endAt)||0}">
-    <div><b>Recovery outlook</b><span data-recovery-outlook-remaining>${esc(outlook.remainingLabel||'')}</span></div>
-    <p>${esc(outlook.label||'Temporary operational restriction')}</p>
+  return `<section class="incident-recovery-outlook ${esc(outlook.kind||'forecast')}" data-problem-recovery-outlook data-recovery-start="${Number(outlook.startAt)||0}" data-recovery-end="${Number(outlook.endAt)||0}" data-recovery-ended-label="${outlook.kind==='station'?'Clearance due':'Forecast window ended'}">
+    <div><b>${esc(outlook.heading||'Recovery outlook')}</b><span data-recovery-outlook-remaining>${esc(outlook.remainingLabel||'')}</span></div>
+    <p>${esc(outlook.clearanceLabel||outlook.label||'Temporary operational restriction')}</p>
     <div class="progress-track" role="progressbar" aria-label="Projected disruption duration" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round((Number(outlook.progress)||0)*100)}"><span style="width:${formatPct(Number(outlook.progress)||0)}"></span></div>
   </section>`;
 }
@@ -52,7 +52,8 @@ function incidentCard(incident){
   const hidden=incident.flights.slice(3);
   const overflow=Math.max(hidden.length,incident.affectedCount-visible.length);
   const unknownOverflow=Math.max(0,overflow-hidden.length);
-  return `<article class="desk-list-row warning-row critical incident-attention-card" data-critical-incident="${esc(incident.id)}">
+  const severity=incident.severity||'critical';
+  return `<article class="desk-list-row warning-row ${esc(severity)} incident-attention-card" data-${severity==='critical'?'critical':'warning'}-incident="${esc(incident.id)}">
     <header class="incident-attention-header">
       <div><b>${esc(incident.title)}</b><span>${esc(incident.summary)}</span></div>
       <em>${esc(incident.status)}</em>
@@ -78,7 +79,7 @@ function refreshRequiredResponseProgress(root=document){
     if(bar) bar.style.width=`${Math.round(progress*100)}%`;
     if(track) track.setAttribute('aria-valuenow',String(Math.round(progress*100)));
     const label=section.querySelector('[data-recovery-outlook-remaining]');
-    if(label) label.textContent=remaining?`${formatDuration(Math.max(60_000,remaining))} remaining`:'Forecast window ended';
+    if(label) label.textContent=remaining?`${formatDuration(Math.max(60_000,remaining))} remaining`:(section.dataset.recoveryEndedLabel||'Forecast window ended');
   });
   root.querySelectorAll('[data-required-response-progress]').forEach(section=>{
     const start=Number(section.dataset.responseStart)||now;
@@ -130,8 +131,8 @@ function warningRow(warning){
   </div>`;
 }
 
-function warningGroupsMarkup(warnings){
-  if(!warnings.length) return '';
+function warningGroupsMarkup(warnings,incidents=[]){
+  if(!warnings.length&&!incidents.length) return '';
   const byGroup=new Map();
   for(const warning of warnings) mapPush(byGroup,warning.group||'Other warnings',warning);
   const groups=[...byGroup.entries()]
@@ -145,8 +146,8 @@ function warningGroupsMarkup(warnings){
     })
     .join('');
   return `<section class="attention-feed-section warning-feed">
-    <header class="attention-feed-heading"><h2>Warnings</h2><span>${warnings.length}</span></header>
-    <div class="warning-group-section">${groups}</div>
+    <header class="attention-feed-heading"><h2>Warnings</h2><span>${warnings.length+incidents.length}</span></header>
+    <div class="warning-group-section">${incidents.map(incidentCard).join('')}${groups}</div>
   </section>`;
 }
 
@@ -154,7 +155,7 @@ function incidentsWarningsDeskMarkup(incidents,warnings){
   if(!incidents.length&&!warnings.length){
     return '<div class="occ-clear-state"><b>Operation normal</b><span>No incidents or derived warnings require attention.</span></div>';
   }
-  return `${criticalIncidentsMarkup(incidents)}${warningGroupsMarkup(warnings)}`;
+  return `${criticalIncidentsMarkup(incidents.filter(incident=>incident.severity!=='warning'))}${warningGroupsMarkup(warnings,incidents.filter(incident=>incident.severity==='warning'))}`;
 }
 
   global.AeroWarningUi={incidentsWarningsDeskMarkup,refreshRequiredResponseProgress};

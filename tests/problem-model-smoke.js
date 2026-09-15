@@ -57,6 +57,9 @@ assert.equal(defaultPolicy.minimumVisibleMin, 10);
 assert.match(defaultPolicy.summary, /safest available flight-deck outcome/i);
 assert.equal(model.defaultPolicyForType('crew_sick').mode, 'cancel_at_departure');
 assert.equal(model.defaultPolicyForType('network_airspace_closure').mode, 'network_avoidance');
+assert.equal(model.defaultPolicyForType('security_screening'), null, 'routine station work must not auto-cancel flights');
+assert.equal(model.severityForType('security_screening'), 'warning');
+assert.ok(model.recommendationsForType('security_screening').every(item => item.desk === 'dispatch'), 'security work must not recommend a nonexistent manual station action');
 
 const recommendations = model.recommendationsForProblem({ type: 'destination_closure', flightId: 'AS1' });
 assert.ok(recommendations.some(item => item.desk === 'dispatch'), 'destination closure should point to Dispatch');
@@ -88,6 +91,13 @@ assert.notEqual(technicalOutcome.id, 'return_origin', 'late-flight technical ass
 assert.equal(model.requiredResponseForType('crew_sick'), null, 'crew sick call should not wait for a second crew report');
 
 const now=Date.UTC(2026,8,13,12,0,0);
+const securityProblem={type:'security_screening',detectedAt:now,context:{activeFrom:now,activeUntil:now+30*60_000}};
+const clearance=model.timeProjectionForProblem(securityProblem,now+15*60_000);
+assert.equal(clearance?.heading,'Estimated clearance');
+assert.equal(clearance?.kind,'station');
+assert.equal(clearance?.remainingMin,15);
+assert.equal(clearance?.progress,.5);
+assert.equal(model.timeProjectionForProblem(securityProblem,now+30*60_000),null,'completed station work must not project a future clearance');
 const weatherProjection=model.timeProjectionForProblem({
   type:'destination_closure',detectedAt:now,
   context:{forecastFrom:now-30*60_000,forecastUntil:now+90*60_000}

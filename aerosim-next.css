@@ -1964,6 +1964,10 @@ body,
   color:#8298a2!important;
   font-size:9px!important;
 }
+.incident-attention-card.warning .incident-attention-header>em{
+  background:#3b3521;
+  color:#dbc782;
+}
 .incident-required-response{
   margin-top:8px;
   padding:8px;

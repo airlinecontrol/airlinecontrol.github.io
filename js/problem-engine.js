@@ -323,7 +323,31 @@ function startRequiredProblemResponse(problem,requestedAt=simNow()){
   return true;
 }
 
+function ensureStationProblemClearance(problem,flight){
+  const definition=AeroProblemModel.definitionForType(problem?.type);
+  if(!definition?.stationClearance||!flight||problem.status!=='open') return false;
+  let changed=false;
+  if(!AeroProblemModel.timeWindowForProblem(problem)?.endAt){
+    const context=generatedTimedEventContext(problem.type,flight,problem.detectedAt);
+    if(!context) return false;
+    problem.context={...problem.context,...context};
+    changed=true;
+  }
+  if(problem.severity!==definition.severity){
+    problem.severity=definition.severity;
+    changed=true;
+  }
+  const readyAt=AeroProblemModel.timeWindowForProblem(problem).endAt;
+  // Retain the clearance floor after the problem closes, so projected times cannot jump back.
+  if(!flight.cancelled&&!flightHasDeparted(flight)&&readyAt>(Number(flight.stationClearanceReadyAt)||0)){
+    flight.stationClearanceReadyAt=readyAt;
+    changed=true;
+  }
+  return changed;
+}
+
 function updateExistingProblemForRequest(problem,type,flight,{detectedAt,sourceKey,context,source}){
+  if(AeroProblemModel.definitionForType(type)?.stationClearance&&problem.context) context=problem.context;
   const previousContext=JSON.stringify(problem.context||null);
   const nextContext=JSON.stringify(context||problem.context||null);
   let changed=false;
@@ -417,6 +441,7 @@ function openProblemCase({type,flight,training=false,detectedAt=simNow(),source=
     problem.affectedCrew=absences.map(item=>({role:item.role,count:item.amount,family:item.family,until:item.until,flightIds:[...item.flightIds]}));
   }
   if(typeof traceProblemTransition==='function') traceProblemTransition(problem,'opened',{deadline,detectedAt,source,scope,reason:context?.reason||context?.trigger||''});
+  ensureStationProblemClearance(problem,flight);
   startRequiredProblemResponse(problem,detectedAt);
   if(typeof processProblemDefaults==='function') processProblemDefaults(problem,detectedAt);
   if(state.problems.length>250){

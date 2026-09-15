@@ -703,7 +703,7 @@ function recalculateOperations(){
     f.airportDelayMin=Number(f.airportDelayMin)||0;
     f.airspaceDelayMin=Number(f.airspaceDelayMin)||0;
     f.taxiOutDelayMin=0; f.taxiInDelayMin=0; f.taxiDelayCauses=[];
-    f.stationServiceDelayMin=0; f.stationArrivalDelayMin=0;
+    f.stationServiceDelayMin=0; f.stationArrivalDelayMin=0; f.stationClearanceDelayMin=0;
     f.nightRestrictionDelayMin=0; f.nightRestrictionLabel='';
     f.nightRestrictionConflictDelayMin=0; f.nightRestrictionConflictLabel='';
     f.propagatedDelayMin=0; f.slotDelayMin=0; f.slotMissed=false;
@@ -746,6 +746,9 @@ function recalculateOperations(){
       const stationReady=Math.max(stationDepartureReadyAt(f),prev&&flightOperationalDestination(prev)===f.from?stationPostflightReadyAt(prev):0);
       f.stationServiceDelayMin=Math.max(0,Math.ceil((stationReady-ready)/MIN));
       ready=Math.max(ready,stationReady);
+      const clearanceReady=Number(f.stationClearanceReadyAt)||0;
+      f.stationClearanceDelayMin=Math.max(0,Math.ceil((clearanceReady-ready)/MIN));
+      ready=Math.max(ready,clearanceReady);
       if(groundPhase.readyAt>baseReady){
         f.propagatedDelayMin=Math.ceil((groundPhase.readyAt-baseReady)/MIN);
       }
@@ -976,6 +979,7 @@ function slotMissContextForFlight(flight,previous=null){
   }
   addSlotCause(causes,'Handling delay',flight.handlingDelayMin,flight.handlingDelayCause||'Ground handling not complete');
   addSlotCause(causes,'Station service delivery',flight.stationServiceDelayMin,'Confirmed handling service must finish before departure');
+  addSlotCause(causes,'Station clearance',flight.stationClearanceDelayMin,'Station security, baggage, and manifest checks must finish before departure');
   addSlotCause(causes,'Arrival handler readiness',flight.stationArrivalDelayMin,'Aircraft waits on the ground for the confirmed arrival handler');
   addSlotCause(causes,'Technical delay',flight.technicalDelayMin,'Aircraft technical work before departure readiness');
   addSlotCause(causes,'Personnel shortfall',flight.staffingDelayMin,flight.staffingShortage||'Required crew or station personnel not ready');

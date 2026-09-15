@@ -17,6 +17,7 @@ const browserFixtures = [
   'tests/problem-scopes-browser-fixture.html',
   'tests/destination-closure-browser-fixture.html',
   'tests/problem-response-browser-fixture.html',
+  'tests/station-clearance-browser-fixture.html',
   'tests/problem-defaults-browser-fixture.html',
   'tests/network-problems-browser-fixture.html',
   'tests/next-ui-browser-fixture.html',

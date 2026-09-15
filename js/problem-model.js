@@ -141,10 +141,11 @@
       resolution:'Coordinate acceptance, diversion, or return support for the airborne flight.'
     },
     security_screening:{
-      title:'Security offload / manifest issue',severity:'critical',decisionMin:25,scope:'flight',phase:'ground',
-      summary:'A security irregularity requires passenger, baggage, manifest, or departure coordination.',
-      recommendations:['handling','delay','cancel'],
-      resolution:'Complete security/station coordination, retime, or cancel.'
+      title:'Security offload / manifest issue',severity:'warning',scope:'flight',phase:'ground',
+      stationClearance:{label:'Security and manifest checks',outcome:'Station staff confirmed security, baggage, and manifest clearance.'},
+      summary:'Station staff are completing security, baggage, and manifest checks. Departure awaits clearance.',
+      recommendations:['delay','cancel'],
+      resolution:'Station staff clear the departure block when checks finish. Use Dispatch to manage the resulting delay or cancel.'
     },
     bird_strike:{
       title:'Suspected bird strike',severity:'critical',decisionMin:18,scope:'flight',phase:'airborne',allowAirborne:true,airborneOnly:true,arrivalInspectionOnClose:true,
@@ -373,7 +374,7 @@
   function airportRoleForType(type){ return definitionForType(type)?.airportRole||(phaseForType(type)==='airborne'?'destination':'origin'); }
   function defaultPolicyForType(type){
     const definition=definitionForType(type);
-    if(!definition||isRetiredType(type)) return null;
+    if(!definition||isRetiredType(type)||definition.stationClearance) return null;
     const mode=definition.defaultStrategy||(
       definition.phase==='ground'?'cancel_at_departure':
       definition.scope==='network'?'network_avoidance':'flight_deck_safe'
@@ -453,6 +454,11 @@
   };
 
   function timeWindowForProblem(problem){
+    const clearance=definitionForType(problem?.type)?.stationClearance;
+    if(clearance){
+      const window=activeWindow(problem,problem.context||{},clearance.label);
+      return window?{...window,kind:'station',heading:'Estimated clearance'}:null;
+    }
     const resolver=TIME_PROJECTION_RULES[problem?.type];
     return resolver?resolver(problem,problem.context||{}):null;
   }
@@ -467,6 +473,7 @@
     const durationMs=Math.max(1,endAt-startAt);
     return {
       ...projection,
+      heading:projection.heading||'Recovery outlook',
       timeBased:true,
       startAt,endAt,
       durationMin:Math.max(1,Math.ceil(durationMs/60_000)),

@@ -20,6 +20,14 @@ const GROUND_DELAY_CAUSES=[
 ];
 
 const GENERATED_TIMED_EVENT_PROFILES={
+  security_screening:{
+    airport:flight=>flight.from,
+    scenarios:[
+      {reason:'Passenger offload and manifest reconciliation',duration:[15,30]},
+      {reason:'Checked-baggage location, offload, and reconciliation',duration:[25,50]},
+      {reason:'Departure document and security reconciliation',duration:[15,35]}
+    ]
+  },
   destination_closure_ground:{
     airport:flight=>flightOperationalDestination(flight),
     scenarios:[
@@ -51,7 +59,7 @@ function generatedTimedEventContext(type,flight,t){
   const scenarioRoll=OperationalIntelligence.stableUnit(`${flight.id}:${type}:scenario`);
   const scenario=profile.scenarios[Math.min(profile.scenarios.length-1,Math.floor(scenarioRoll*profile.scenarios.length))];
   const durationMin=generatedRange(`${flight.id}:${type}:duration`,scenario.duration);
-  const delayMin=generatedRange(`${flight.id}:${type}:delay`,scenario.delay);
+  const delayMin=scenario.delay?generatedRange(`${flight.id}:${type}:delay`,scenario.delay):0;
   return {
     sourceId:flight.id,
     airport:profile.airport(flight),

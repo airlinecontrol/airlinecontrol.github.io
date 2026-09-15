@@ -1097,6 +1097,7 @@ function problemHasVisibleWork(problem){
 
 function problemIsActionable(problem,now=simNow()){
   if(!problemHasVisibleWork(problem)) return false;
+  if(AeroProblemModel.definitionForType(problem.type)?.stationClearance) return false;
   const flight=problemFlight(problem);
   if(problem?.blocking&&problemHasVisibleWork(problem)) return true;
   if(!flight) return problem.severity==='critical'||(problem.deadline||0)<=now;
@@ -1929,6 +1930,7 @@ function incidentAttentionRecoveryOutlook(problems,now=simNow()){
   if(!projection) return null;
   return {
     ...projection,
+    clearanceLabel:projection.kind==='station'?`${formatTime(projection.endAt)} · ${projection.label}`:'',
     remainingLabel:`${formatDuration(Math.max(MIN,projection.endAt-now))} remaining`
   };
 }
@@ -1950,17 +1952,19 @@ function incidentAttentionCards(groups,now=simNow()){
     const linkedEffects=Math.max(0,group.problems.length-1);
     const blocking=group.problems.some(problem=>problem.blocking);
     const actionable=group.problems.some(problem=>problemNeedsUserAction(problem,now));
+    const stationManaged=group.problems.every(problem=>AeroProblemModel.definitionForType(problem.type)?.stationClearance);
     const requiredResponse=incidentAttentionRequiredResponse(group.problems,now);
     const recoveryOutlook=incidentAttentionRecoveryOutlook(group.problems,now);
     const defaultConsequence=incidentAttentionDefaultConsequence(group.problems,now);
     const crewAbsences=[...new Map(group.problems.flatMap(problem=>crewAbsencesForProblem(problem)).map(item=>[item.id,item])).values()];
     return {
       id:group.id,
+      severity:group.problems.some(problem=>AeroProblemModel.severityForType(problem.type)==='critical')?'critical':'warning',
       title:copy.title,
       summary:[copy.summary,linkedEffects?`${linkedEffects} linked operational effect${linkedEffects===1?'':'s'}`:''].filter(Boolean).join(' · '),
       scope:problemProblemScopeLabel(root,rootFlight,aircraft,affectedCount),
       scopeKind:root.scope?.kind,
-      status:requiredResponse?.status==='pending'?`Waiting ${requiredResponse.ownerLabel.toLowerCase()}`:blocking?'Blocking':actionable?'Action':'Monitor',
+      status:stationManaged?'Station work':requiredResponse?.status==='pending'?`Waiting ${requiredResponse.ownerLabel.toLowerCase()}`:blocking?'Blocking':actionable?'Action':'Monitor',
       affectedCount,
       requiredResponse,
       recoveryOutlook,

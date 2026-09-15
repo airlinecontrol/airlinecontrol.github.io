@@ -28,7 +28,7 @@
       aircraftId:aircraft.id,from:'FRA',to:'LHR',departure,
       fare:{economy:140,business:360,first:700}
     });
-    const groundProblem=w.createProblem('security_screening',flight,{training:true,detectedAt:initial,sourceKey:'fixture:ground-default'});
+    const groundProblem=w.createProblem('crew_sick',flight,{training:true,detectedAt:initial,sourceKey:'fixture:ground-default'});
     assert(groundProblem?.unattended?.flights?.[flight.id],'ground problem did not create a per-flight default record');
     assert(groundProblem.unattended.flights[flight.id].mode==='cancel_at_departure','ground problem has the wrong default mode');
     assert(groundProblem.unattended.flights[flight.id].deadline===departure,'ground cancellation is not aligned with departure');
@@ -55,7 +55,7 @@
     const responseAircraft=w.assignRequestedAircraft('E190',w.defaultCabin('E190'),'FRA');
     const responseDeparture=responseBase+30*60_000;
     const responseFlight=w.createFlightRecord({aircraftId:responseAircraft.id,from:'FRA',to:'AMS',departure:responseDeparture,fare:{economy:120,business:290,first:550}});
-    const responseProblem=w.createProblem('security_screening',responseFlight,{training:true,detectedAt:responseBase,sourceKey:'fixture:pending-response'});
+    const responseProblem=w.createProblem('crew_sick',responseFlight,{training:true,detectedAt:responseBase,sourceKey:'fixture:pending-response'});
     responseFlight.dispatchRouteRequest={status:'pending',label:'ATC route response',requestedAt:responseBase,respondsAt:responseDeparture+20*60_000};
     setNow(responseDeparture+60_000);
     w.processProblems(w.simNow());
