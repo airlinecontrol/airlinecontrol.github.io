@@ -39,6 +39,11 @@ const map = new maplibregl.Map({
 });
 
 map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'top-left');
+// Camera padding keeps the geographic focus in the uncovered workspace.
+AeroMapWorkspace.onResize(padding=>{
+  map.resize();
+  map.jumpTo({padding});
+});
 
 let mapReady=false;
 window.__aeroMapReady=false;

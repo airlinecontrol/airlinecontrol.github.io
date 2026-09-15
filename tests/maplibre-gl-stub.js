@@ -28,8 +28,13 @@
     }
     addControl(){}
     resize(){}
-    jumpTo(payload){ this.center=payload.center; this.zoom=payload.zoom; }
+    jumpTo(payload){
+      if(payload.center!==undefined)this.center=payload.center;
+      if(payload.zoom!==undefined)this.zoom=payload.zoom;
+      if(payload.padding!==undefined)this.padding=payload.padding;
+    }
     easeTo(payload){ this.jumpTo(payload); }
+    getPadding(){ return this.padding||{top:0,left:0,right:0,bottom:0}; }
     fitBounds(bounds,options){ this.bounds=bounds; this.fitOptions=options; }
     getCanvas(){ return this.canvas; }
     addSource(id,source){ this.sources.set(id,{...source,setData(data){ this.data=data; }}); }

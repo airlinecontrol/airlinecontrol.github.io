@@ -69,6 +69,8 @@
     assert(!d.querySelector('[data-workspace="management"]'),'Planning & resources still appears in the top bar');
     assert(d.querySelector('[data-training-problem]'),'training problem control is missing');
     assert(d.querySelector('#left-rail-splitter')&&d.querySelector('#right-rail-splitter'),'side rail resize handles are missing');
+    // Preserve the classic layout contract alongside the separate map-workspace fixture.
+    w.eval('AeroMapWorkspace').setLayout('classic');
     w.eval(`applyRailWidths({left:360,right:390},{persist:true})`);
     await wait(80);
     const shellColumns=getComputedStyle(d.querySelector('#operationsView')).gridTemplateColumns;

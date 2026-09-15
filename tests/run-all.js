@@ -21,6 +21,7 @@ const browserFixtures = [
   'tests/problem-defaults-browser-fixture.html',
   'tests/network-problems-browser-fixture.html',
   'tests/next-ui-browser-fixture.html',
+  'tests/map-workspace-browser-fixture.html',
   'tests/ui-consistency-browser-fixture.html',
   'tests/warnings-browser-fixture.html',
   'tests/weather-engine-browser-fixture.html',
