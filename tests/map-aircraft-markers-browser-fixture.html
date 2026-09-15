@@ -47,6 +47,9 @@
     w.updateMapData();
     for(let i=0;i<30&&d.querySelectorAll('.plane-shell').length<4;i++) await wait(100);
     assert(d.querySelector('#map.maplibregl-map'),'MapLibre map did not initialize');
+    assert(w.eval(`map.getPaintProperty('background','background-color')==='#202224'`),'lighter land background is not applied');
+    assert(w.eval(`map.getPaintProperty('water','fill-color')==='#303337'`),'lighter water color is not applied');
+    assert(w.getComputedStyle(d.querySelector('#map')).filter==='none','Map brightness must not filter operational overlays');
     assert(w.eval(`map.getLayoutProperty('place_state','visibility')==='none'`),'state labels are still visible on the basemap');
     assert(w.eval(`map.getLayoutProperty('place_city','visibility')!=='none'`),'city labels should remain visible on the basemap');
     const markers=[...d.querySelectorAll('.plane-shell')];

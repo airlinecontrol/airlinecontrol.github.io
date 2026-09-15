@@ -110,9 +110,18 @@ function airportMapTooltip(airport,t=simNow()){
   return `${airportNightTooltip(airport)}\nWeather: ${weather.conditions} · capacity ${Math.round(weather.capacityFactor*100)}%\nForecast for ${remaining}${system}`;
 }
 
-function simplifyBaseMapLabels(){
+function applyBasemapStyle(){
   for(const id of HIDDEN_BASEMAP_LABEL_LAYERS){
     if(layerExists(id)) map.setLayoutProperty(id,'visibility','none');
+  }
+  // Lift the basemap's dark surfaces without filtering operational overlays or markers.
+  for(const [id,property,color] of [
+    ['background','background-color','#202224'],
+    ['water','fill-color','#303337'],
+    ['waterway','line-color','#303337'],
+    ['landuse_residential','fill-color','#26282a']
+  ]){
+    if(layerExists(id)) map.setPaintProperty(id,property,color);
   }
 }
 
@@ -594,7 +603,7 @@ map.setView=function(center,zoom,options={}){
 map.on('load', () => {
   mapReady=true;
   window.__aeroMapReady=true;
-  simplifyBaseMapLabels();
+  applyBasemapStyle();
   initialiseMapLayers();
   createAirportMarkers();
   updateMapData();

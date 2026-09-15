@@ -8,6 +8,9 @@
       this.options=options;
       this.sources=new Map();
       this.layers=new Map();
+      for(const [id,type] of [['background','background'],['water','fill'],['waterway','line'],['landuse_residential','fill']]){
+        this.layers.set(id,{id,type,paint:{}});
+      }
       for(const id of ['road_oneway','road_oneway_opposite','highway_name_other','highway_name_motorway','place_other','place_suburb','place_village','place_town','place_state','place_city']){
         this.layers.set(id,{id,type:'symbol',layout:{visibility:'visible'}});
       }
@@ -47,6 +50,13 @@
     }
     getLayoutProperty(id,key){
       return this.layers.get(id)?.layout?.[key];
+    }
+    setPaintProperty(id,key,value){
+      const layer=this.layers.get(id);
+      if(layer) layer.paint={...(layer.paint||{}),[key]:value};
+    }
+    getPaintProperty(id,key){
+      return this.layers.get(id)?.paint?.[key];
     }
     on(type,layerOrHandler,handler){
       const callback=handler||layerOrHandler;
