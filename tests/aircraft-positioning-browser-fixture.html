@@ -1,0 +1,101 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Aircraft positioning consistency</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result'),frame=document.getElementById('game');
+  const assert=(ok,message)=>{if(!ok)throw new Error(message);};
+  try{
+    localStorage.clear();
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=aircraft-positioning';await loaded;
+    const w=frame.contentWindow,MIN=60000,now=Date.UTC(2026,8,21,12),failures=[];
+    let ac;
+    function reset(){
+      w.eval(`state=newState();state.clock={simBase:${now},realBase:Date.now(),speed:0,paused:true};state.ops.automaticDisruptions=false;invalidateOperationalIndex();`);
+      ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    }
+    function leg(from,to,offset,duration=60){
+      const f=w.createFlightRecord({aircraftId:ac.id,from,to,departure:now+offset*MIN,fare:{economy:120,business:300,first:0}});
+      f.arrival=f.departure+duration*MIN;f.actualDeparture=f.departure;f.actualArrival=f.arrival;
+      w.invalidateOperationalIndex();return f;
+    }
+    function check(name,run){reset();try{run();}catch(error){failures.push(`${name}: ${error.message}`);}}
+
+    check('Overdue unflown sector remains at its actual origin',()=>{
+      const overdue=leg('FRA','AMS',-120),later=leg('FRA','LHR',120);
+      overdue.positioningBlocked=true;
+      assert(!w.aircraftOutOfPositionContextForFlight(overdue,now)?.active,'Later flight destination was used as the overdue flight location');
+      w.updatePositioningConstraints(now);
+      assert(!overdue.positioningBlocked,'Stale positioning block was never cleared');
+      assert(later.positioningBlocked,'The still-unflown first sector vanished from the rotation');
+    });
+    check('Warning and constraint skip an impossible earlier sector consistently',()=>{
+      const blocked=leg('LHR','CDG',30),reachable=leg('FRA','AMS',120),target=leg('AMS','FRA',240);
+      w.updatePositioningConstraints(now);
+      assert(blocked.positioningBlocked&&!reachable.positioningBlocked&&!target.positioningBlocked,'Constraint sequence is wrong');
+      assert(w.aircraftRotationProjectionBeforeFlight(target,now).location==='AMS','Warning projection stopped at an unrelated blocked sector');
+    });
+    check('Recorded arrival counts before settlement writes the aircraft station',()=>{
+      const inbound=leg('FRA','AMS',-90),target=leg('AMS','FRA',60);
+      inbound.departureLogged=true;w.invalidateOperationalIndex();
+      w.updatePositioningConstraints(now);
+      assert(!target.positioningBlocked,'An arrived aircraft was still considered at its old origin');
+    });
+    check('Delayed inbound projects its destination, not its current origin',()=>{
+      const inbound=leg('FRA','AMS',-60,120),target=leg('AMS','FRA',160);
+      inbound.departureLogged=true;w.invalidateOperationalIndex();
+      w.updatePositioningConstraints(now);
+      assert(!target.positioningBlocked,'Airborne inbound was considered misplaced');
+      assert(w.aircraftRotationProjectionBeforeFlight(target,now).availableAt>=inbound.actualArrival,'Inbound availability ignored arrival time');
+    });
+    check('Departed flights cannot retain a ground positioning warning',()=>{
+      const flying=leg('FRA','AMS',-30,120);flying.departureLogged=true;flying.positioningBlocked=true;
+      leg('AMS','LHR',180);w.invalidateOperationalIndex();
+      assert(!w.aircraftOutOfPositionContextForFlight(flying,now)?.active,'Airborne flight received an out-of-position warning');
+    });
+    check('Cancelled flights never move the projected aircraft',()=>{
+      const cancelled=leg('FRA','AMS',30),target=leg('FRA','LHR',180);
+      cancelled.cancelled=true;w.invalidateOperationalIndex();w.updatePositioningConstraints(now);
+      assert(!target.positioningBlocked&&w.aircraftRotationProjectionBeforeFlight(target,now).location==='FRA','Cancelled sector changed the aircraft station');
+    });
+    check('Recovery ferry clears a real diversion mismatch',()=>{
+      const inbound=leg('FRA','LHR',-180);inbound.diversionAirport='AMS';inbound.departureLogged=true;inbound.settled=true;ac.location='AMS';
+      const target=leg('LHR','FRA',240);w.updatePositioningConstraints(now);
+      assert(target.positioningBlocked&&w.aircraftMispositionAfterDiversionContextForFlight(target,now)?.active,'Genuine diversion mismatch was hidden');
+      const problem=w.createProblem('aircraft_misposition_after_diversion',target,{training:true,detectedAt:now,context:w.aircraftMispositionAfterDiversionContextForFlight(target,now)});
+      assert(problem?.status==='open','Genuine diversion mismatch did not create a problem');
+      const ferry=leg('AMS','LHR',60);ferry.flightType='ferry';
+      w.updatePositioningConstraints(now);
+      assert(!target.positioningBlocked&&!w.aircraftMispositionAfterDiversionContextForFlight(target,now)?.active,'Planned recovery ferry was ignored');
+      w.refreshProblem(problem,now);
+      assert(problem.status==='resolved'&&!target.cancelled,'Recovered flight retained a blocking diversion problem');
+      ferry.cancelled=true;w.invalidateOperationalIndex();w.updatePositioningConstraints(now);
+      assert(target.positioningBlocked&&w.aircraftMispositionAfterDiversionContextForFlight(target,now)?.active,'Cancelled ferry still cleared the mismatch');
+    });
+    check('Successful positioning recovery clears the retained warning immediately',()=>{
+      const target=leg('AMS','FRA',120);w.updatePositioningConstraints(now);
+      const warning={id:`aircraft-position:${target.id}`,type:'aircraft_out_of_position',flightId:target.id,aircraftId:ac.id,level:'critical',title:'Aircraft position at risk',detail:'Expected FRA, required AMS',sortAt:target.departure};
+      w.stabilizeOperationWarnings([warning],now);
+      ac.location='AMS';w.invalidateOperationalIndex();w.updatePositioningConstraints(now+MIN);
+      assert(!target.positioningBlocked,'Recovered positioning block remained');
+      assert(!w.stabilizeOperationWarnings([],now+MIN).some(item=>item.id===warning.id),'Recovered warning lingered in the clearance grace period');
+    });
+    check('Repeated positioning reads do not mutate flights or published times',()=>{
+      leg('FRA','AMS',60);const target=leg('AMS','FRA',180);
+      w.updatePositioningConstraints(now);
+      const before=JSON.stringify(w.eval('state.flights'));
+      for(let i=0;i<5;i++){
+        w.aircraftRotationProjectionBeforeFlight(target,now);
+        w.aircraftOutOfPositionContextForFlight(target,now);
+        assert(!w.updatePositioningConstraints(now),'Stable projection changed on a repeated pass');
+      }
+      assert(JSON.stringify(w.eval('state.flights'))===before,'Position reads changed operational state');
+    });
+    assert(!failures.length,failures.join('\n'));
+    result.textContent='PASS aircraft positioning: stale flights, arrivals, delays, cancellations, ferry recovery, warning clearance, stable projections';
+  }catch(error){result.textContent='FAIL\n'+(error.stack||error);}
+})();
+</script>

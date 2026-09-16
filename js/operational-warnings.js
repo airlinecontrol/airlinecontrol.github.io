@@ -28,12 +28,13 @@ function warningStableKey(warning){
   return String(warning?.id||'');
 }
 
-function warningMemoryStillRelevant(warning){
+function warningMemoryStillRelevant(warning,now=simNow()){
   if(!warning) return false;
   if(warning.type==='fuel_uplift_warning') return false;
   if(warning.flightId){
     const flight=state.flights.find(item=>item.id===warning.flightId);
     if(!flight||flight.cancelled||flight.settled) return false;
+    if(warning.type==='aircraft_out_of_position'&&!aircraftOutOfPositionContextForFlight(flight,now)?.active) return false;
     if(warning.type==='holding_fuel_decision'&&!window.AeroHolding?.holdingIsActive?.(flight)) return false;
     const superseders=WARNING_SUPERSEDING_PROBLEMS[warning.type];
     if(superseders&&openProblemsForFlight(warning.flightId).some(problem=>superseders.has(problem.type))) return false;
@@ -81,7 +82,7 @@ function stabilizeOperationWarnings(rawWarnings,now=simNow()){
     if(activeKeys.has(key)) continue;
     const previous=memory[key];
     if(!previous) continue;
-    if(!warningMemoryStillRelevant(previous)){
+    if(!warningMemoryStillRelevant(previous,now)){
       delete memory[key];
       changed=true;
       continue;

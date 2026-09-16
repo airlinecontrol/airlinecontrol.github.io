@@ -26,6 +26,7 @@ const browserFixtures = [
   'tests/warnings-browser-fixture.html',
   'tests/weather-engine-browser-fixture.html',
   'tests/ferry-planning-browser-fixture.html',
+  'tests/aircraft-positioning-browser-fixture.html',
   'tests/flight-retention-browser-fixture.html',
   'tests/route-planning-browser-fixture.html',
   'tests/holding-browser-fixture.html',
