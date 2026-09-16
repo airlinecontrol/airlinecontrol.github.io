@@ -45,10 +45,6 @@
 .ui-request-status p{margin:0;color:var(--ui-label);overflow-wrap:anywhere}
 .ui-request-status .progress-track{margin:0;height:4px}
 .ui-request-status .form-actions{margin:2px 0 0}
-.ui-select{display:grid;gap:4px;min-width:0;width:100%}
-.ui-select input[type="search"]{height:28px;min-height:28px;padding:3px 7px;font-size:var(--ui-meta);border-radius:4px;background:transparent;color:var(--text);border:1px solid #29404b}
-.ui-select-result{color:var(--ui-label);font-size:var(--ui-small)}
-.ui-select-result[hidden]{display:none}
 .dispatch-overview-aircraft-row .secondary-button.compact{font-size:var(--ui-meta)}
 .occ-management-host .form-grid.compact-form label{font-size:var(--ui-meta)}
 .crew-assignment-receipt{gap:2px}

@@ -1,5 +1,7 @@
 /* Schedule timeline rendering, markers, and schedule board interactions. */
 
+const scheduleDateFormatter=new Intl.DateTimeFormat('en-GB',{day:'2-digit',month:'short'});
+
 function scheduleWindow(){
   const now=simNow(),anchor=new Date(now); anchor.setMinutes(0,0,0);
   const start=anchor.getTime()+scheduleWindowOffsetHours*HOUR;
@@ -531,7 +533,9 @@ function refreshScheduleTimeline(force=false){
   }
   renderScheduleConnectionOverlay(board,schedulePassengerConnectionPairs(operationalRelevant,focusIds,now));
   updateScheduleNowLine();
-  document.getElementById('schedule-window-label').textContent=`${shortDay(start)} ${shortClock(start)}  →  ${shortDay(end)} ${shortClock(end)}`;
+  const rangeLabel=document.getElementById('schedule-window-label');
+  rangeLabel.textContent=`${scheduleDateFormatter.format(start)} ${shortClock(start)} → ${scheduleDateFormatter.format(end)} ${shortClock(end)}`;
+  rangeLabel.title=`${shortDay(start)} ${shortClock(start)} → ${shortDay(end)} ${shortClock(end)}`;
 }
 function updateScheduleNowLine(){
   const {start,end,now}=scheduleWindow(),x=(now-start)/HOUR*(scheduleRangeHours===24?84:48),visible=now>=start&&now<=end;

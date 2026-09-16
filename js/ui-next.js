@@ -496,8 +496,8 @@ function renderOperationFilterBar(force=false){
   if(!force&&signature===lastOperationFilterSignature) return;
   if(activeFormControlWithin(root)||activeEmbeddedManagementControl()) return;
   lastOperationFilterSignature=signature;
-  root.innerHTML=`<div class="filter-title"><span>Filters</span><b>${matched.length}/${base.length} flights</b></div>
-    <label class="filter-control airport-filter"><span>Airport</span><select data-operation-filter-airport>
+  root.innerHTML=`<div class="filter-title"><b>${matched.length}/${base.length} flights</b></div>
+    <label class="filter-control airport-filter"><select data-operation-filter-airport aria-label="Filter by airport">
       <option value="">Add airport</option>
       ${airports.filter(code=>!selectedAirports.includes(code)).map(code=>`<option value="${esc(code)}">${esc(code)} · ${esc(AIRPORTS[code]?.name||'Airport')}</option>`).join('')}
     </select></label>

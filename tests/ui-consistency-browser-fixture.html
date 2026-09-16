@@ -17,6 +17,12 @@
     const aircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
     const flight=w.createFlightRecord({aircraftId:aircraft.id,from:'FRA',to:'LHR',departure:w.simNow()+150*MIN,fare:{economy:140,business:360,first:700}});
     w.settleSelectedFlight(flight.id);w.refreshAll();await wait(100);
+    const background=selector=>w.getComputedStyle(d.querySelector(selector)).backgroundColor.match(/\d+/g).map(Number);
+    for(const selector of ['.topbar','.occ-board-widget','.left-list-card','.schedule-toolbar']){
+      const [r,g,b]=background(selector);
+      assert(r===g&&g===b,`Main surface has a colour cast: ${selector}`);
+    }
+    assert(background('.occ-board-widget')[0]<background('.topbar')[0],'Widgets no longer contrast with the shell');
     const clickTab=async key=>{const tab=d.querySelector(`[data-desk-panel="${key}"]`);assert(tab,`Missing tab ${key}`);tab.click();w.flushUiDirty();await wait(30);};
 
     // Clicking an active tab must preserve its actual controls, not just its selected styling.
@@ -26,16 +32,15 @@
     assert(d.querySelector('#destination')===destination,'Active tab recreated the form');
     assert(d.querySelector('[data-desk-panel="corporate:planning"]').getAttribute('aria-selected')==='true','Active tab was closed');
     assert(!d.querySelector('[data-close-desk-panel]'),'Tab content still has a duplicate panel-close control');
-    const search=destination.closest('.ui-select')?.querySelector('input[type="search"]');
-    assert(search,'Long airport list has no search');
-    const original=destination.value;search.focus();search.value='JFK';search.dispatchEvent(new w.Event('input',{bubbles:true}));
+    assert(!d.querySelector('.ui-select,input[type="search"]'),'Dropdown search fields are still present');
+    const optionCount=destination.options.length;
+    assert(optionCount>13,'Airport dropdown does not cover long option lists');
+    destination.focus();destination.value='JFK';destination.dispatchEvent(new w.Event('change',{bubbles:true}));
     w.refreshAll();await wait(80);
-    assert(d.activeElement===search&&d.querySelector('#destination')===destination,'Refresh replaced a focused search or combobox');
-    assert(destination.value===original,'Filtering changed the selected airport');
-    assert([...destination.options].filter(option=>!option.hidden).every(option=>option.selected||option.textContent.includes('JFK')),'Airport search did not filter options');
-    search.value='not-an-airport';search.dispatchEvent(new w.Event('input',{bubbles:true}));
-    assert(destination.value===original&&search.parentElement.textContent.includes('No matches'),'No-match search lost the selected airport');
-    search.blur();
+    assert(d.activeElement===destination&&d.querySelector('#destination')===destination,'Refresh replaced a focused dropdown');
+    assert(destination.value==='JFK','Refresh changed the selected airport');
+    assert(destination.options.length===optionCount&&[...destination.options].every(option=>!option.hidden),'Dropdown options were removed or hidden');
+    destination.blur();
     const tab=d.querySelector('[data-desk-panel="corporate:planning"]');tab.focus();
     tab.dispatchEvent(new w.KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));await wait(50);
     assert(d.activeElement?.dataset.deskPanel==='corporate:aircraft','Arrow-key tab navigation did not retain focus');

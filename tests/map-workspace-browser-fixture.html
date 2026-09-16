@@ -20,6 +20,16 @@
     w.settleSelectedFlight(flight.id);w.refreshAll();await wait(150);
     const rect=selector=>d.querySelector(selector).getBoundingClientRect();
     const close=(a,b)=>Math.abs(a-b)<2;
+    function toolbarGeometry(){
+      const bar=rect('.schedule-toolbar'),controls=rect('.schedule-view-controls');
+      const range=rect('#schedule-window-label'),filters=rect('#operationFilterBar');
+      assert(bar.height<=40,'Schedule toolbar is no longer a single compact row');
+      assert(close(range.top+range.height/2,filters.top+filters.height/2)&&close(range.top+range.height/2,controls.top+controls.height/2),'Date range, filters, and view controls are not on the same row');
+      assert(controls.right<=bar.right&&controls.left>=bar.left,'View controls are outside the toolbar');
+      assert(!d.querySelector('.schedule-legend')&&!d.querySelector('.schedule-toolbar h2,.schedule-toolbar>div>b'),'Schedule heading or legend is still present');
+      assert(!d.querySelector('#scheduleCollapseBtn').textContent.trim(),'Collapse control still shows the Schedule heading');
+      assert(d.querySelector('.schedule-toolbar-scroll').scrollWidth>=d.querySelector('.schedule-toolbar-scroll').clientWidth,'Toolbar scroll region is invalid');
+    }
     function geometry(){
       const shell=rect('#operationsView'),map=rect('#map-pane'),dock=rect('#map-schedule-dock');
       assert(close(map.width,shell.width)&&close(map.height,shell.height),'Map does not fill workspace');
@@ -36,7 +46,7 @@
       for(const selector of ['#left-rail-splitter','#right-rail-splitter']){
         assert(close(rect(selector).bottom,shell.bottom-12),'Side resize handle does not span full height');
       }
-      for(const control of d.querySelectorAll('#map-schedule-dock .schedule-toolbar>button,#map-schedule-dock .schedule-toolbar>select,#scheduleCollapseBtn')){
+      for(const control of d.querySelectorAll('.schedule-view-controls>button,.schedule-view-controls>select,#scheduleCollapseBtn')){
         const box=control.getBoundingClientRect();
         assert(box.left>=dock.left&&box.right<=dock.right,'Schedule control spills into side panel');
       }
@@ -45,6 +55,7 @@
       const point={x:(rect('.operations-rail').right+rect('.context-rail').left)/2,y:map.top+110};
       assert(d.elementFromPoint(point.x,point.y)?.closest('#map-pane'),'An invisible overlay blocks map input');
       assert(rect('#schedule-scroll').height>0,'Schedule has no usable scrolling area');
+      toolbarGeometry();
     }
     assert(d.body.classList.contains('map-workspace'),'Map workspace is not the default');
     geometry();
@@ -54,11 +65,22 @@
     const toggle=d.querySelector('#workspaceLayoutBtn');
     toggle.click();await wait(80);
     assert(!d.querySelector('#map-schedule-dock')&&!d.body.classList.contains('map-workspace'),'Classic layout was not restored');
-    assert(d.querySelector('#schedule-pane>.schedule-toolbar'),'Classic schedule toolbar is misplaced');
+    assert(d.querySelector('#center-workspace>.schedule-toolbar #operationFilterBar'),'Classic merged schedule toolbar is misplaced');
+    toolbarGeometry();
     assert(d.querySelector('#destination')===destination&&destination.value==='JFK','Layout change replaced or reset a form');
     toggle.click();await wait(80);geometry();
     assert(JSON.stringify(s)===stateBefore&&w.eval('selectedFlightId')===selected,'Layout switch changed gameplay or selection');
     assert(d.querySelector('#destination')===destination,'Map layout recreated the planner');
+
+    const originalOffset=w.eval('scheduleWindowOffsetHours');
+    d.querySelector('#scheduleNextBtn').click();w.flushUiDirty();await wait(30);
+    assert(w.eval('scheduleWindowOffsetHours')===originalOffset+12,'Next 12 hours control stopped working');
+    d.querySelector('#schedulePrevBtn').click();w.flushUiDirty();await wait(30);
+    assert(w.eval('scheduleWindowOffsetHours')===originalOffset,'Previous 12 hours control stopped working');
+    const rangeSelect=d.querySelector('#scheduleRange');
+    rangeSelect.value='48';rangeSelect.dispatchEvent(new w.Event('change',{bubbles:true}));w.flushUiDirty();await wait(30);
+    assert(w.scheduleWindow().end-w.scheduleWindow().start===48*3600000,'Range selector no longer changes the window');
+    rangeSelect.value='24';rangeSelect.dispatchEvent(new w.Event('change',{bubbles:true}));w.flushUiDirty();
 
     d.querySelector('#scheduleCollapseBtn').click();await wait(80);
     assert(close(rect('#map-schedule-dock').height,rect('#map-schedule-dock .schedule-toolbar').height)&&rect('#schedule-scroll').height===0,'Schedule did not collapse to toolbar');
@@ -83,6 +105,7 @@
         assert(!d.querySelector('#map-schedule-dock'),'Small screen retained schedule dock');
         assert(d.querySelector('#center-workspace>#schedule-pane'),'Small-screen schedule is detached');
         assert(d.documentElement.scrollWidth<=width+2,'Small screen overflows horizontally');
+        toolbarGeometry();
       }else geometry();
     }
     assert(d.querySelector('#destination')===destination&&destination.value==='JFK','Responsive changes replaced planner controls');

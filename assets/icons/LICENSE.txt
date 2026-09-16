@@ -1,4 +1,4 @@
-Lucide icons: panels-top-left, maximize, minimize
+Lucide icons: panels-top-left, maximize, minimize, chevron-down, chevron-left, chevron-right
 Source: https://github.com/lucide-icons/lucide
 
 ISC License
@@ -17,7 +17,7 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-Maximize and minimize are derived from Feather:
+Maximize, minimize, and the chevron icons are derived from Feather:
 
 The MIT License (MIT)
 

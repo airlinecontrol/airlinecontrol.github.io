@@ -70,24 +70,6 @@
         if(tab.tabIndex===0)panel.setAttribute('aria-labelledby',tab.id);
       });
     });
-    root.querySelectorAll('select').forEach(select=>{
-      if(select.closest('.ui-select')||select.options.length<13) return;
-      const label=select.getAttribute('aria-label')||[...(select.labels?.[0]?.childNodes||[])].filter(n=>n.nodeType===Node.TEXT_NODE).map(n=>n.textContent).join('').trim()||'options';
-      const wrapper=document.createElement('div');wrapper.className='ui-select';
-      const search=document.createElement('input');search.type='search';search.placeholder=`Search ${label.toLowerCase()}`;
-      search.setAttribute('aria-label',`Search ${label.toLowerCase()}`);search.autocomplete='off';
-      const message=document.createElement('span');message.className='ui-select-result';message.hidden=true;message.setAttribute('role','status');
-      select.before(wrapper);wrapper.append(search,select,message);
-      search.addEventListener('input',()=>{
-        const query=search.value.trim().toLocaleLowerCase();let matches=0;
-        [...select.options].forEach(option=>{
-          const match=option.textContent.toLocaleLowerCase().includes(query);
-          option.hidden=!match&&!option.selected;
-          if(match) matches++;
-        });
-        message.hidden=!query;message.textContent=matches?`${matches} matches`:'No matches. Current selection unchanged.';
-      });
-    });
   }
 
   function install(){

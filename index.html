@@ -9,9 +9,9 @@
   <link rel="icon" href="assets/favicon-16.png" sizes="16x16" type="image/png" />
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-  <link rel="stylesheet" href="aerosim-next.css?v=1.8.91" />
-  <link rel="stylesheet" href="ui-components.css?v=1.0.3" />
-  <link rel="stylesheet" href="map-workspace.css?v=1.0.2" />
+  <link rel="stylesheet" href="aerosim-next.css?v=1.8.93" />
+  <link rel="stylesheet" href="ui-components.css?v=1.0.4" />
+  <link rel="stylesheet" href="map-workspace.css?v=1.0.3" />
 </head>
 <body>
 <div id="app">
@@ -72,19 +72,22 @@
         <div id="toast" class="toast" role="status" aria-live="polite"></div>
       </div>
       <div id="workspace-splitter" role="separator" aria-orientation="horizontal" aria-label="Resize map and schedule" tabindex="0"></div>
-      <section id="operationFilterBar" class="operation-filter-bar" aria-label="Operations filters"></section>
-      <section id="weatherStrip" class="weather-strip" aria-label="Airport weather"></section>
-      <div id="schedule-pane">
-        <div class="schedule-toolbar">
-          <div><b>Schedule</b><span id="schedule-window-label"></span></div>
-          <div class="schedule-legend"><span><i></i>slot</span><span><i class="risk"></i>risk</span><span><i class="missed"></i>missed</span><span><i class="new"></i>new</span></div>
+      <div class="schedule-toolbar" aria-label="Schedule controls">
+        <button id="scheduleCollapseBtn" class="small-button schedule-icon-button" type="button" title="Collapse schedule" aria-label="Collapse schedule" aria-expanded="true" aria-controls="schedule-pane weatherStrip"><img src="assets/icons/chevron-down.svg" alt="" class="workspace-icon" /></button>
+        <div class="schedule-toolbar-scroll" tabindex="0" role="group" aria-label="Date range and flight filters">
+          <span id="schedule-window-label" class="schedule-range-label"></span>
+          <section id="operationFilterBar" class="operation-filter-bar" aria-label="Operations filters"></section>
           <div id="scheduleAlerts" class="schedule-alerts" aria-live="polite"></div>
-          <div class="toolbar-spacer"></div>
-          <button id="schedulePrevBtn" class="small-button" type="button">← 12h</button>
+        </div>
+        <div class="schedule-view-controls">
+          <button id="schedulePrevBtn" class="small-button schedule-icon-button" type="button" title="Previous 12 hours" aria-label="Previous 12 hours"><img src="assets/icons/chevron-left.svg" alt="" class="workspace-icon" /></button>
           <button id="scheduleNowBtn" class="small-button" type="button">Now</button>
-          <button id="scheduleNextBtn" class="small-button" type="button">12h →</button>
+          <button id="scheduleNextBtn" class="small-button schedule-icon-button" type="button" title="Next 12 hours" aria-label="Next 12 hours"><img src="assets/icons/chevron-right.svg" alt="" class="workspace-icon" /></button>
           <select id="scheduleRange" aria-label="Schedule range"><option value="24">24 hours</option><option value="48">48 hours</option></select>
         </div>
+      </div>
+      <section id="weatherStrip" class="weather-strip" aria-label="Airport weather"></section>
+      <div id="schedule-pane">
         <div id="schedule-scroll"><div id="schedule-board"></div></div>
       </div>
     </section>
@@ -204,14 +207,14 @@
 <script src="js/problem-generation.js?v=1.0.10"></script>
 <script src="js/problem-resources.js?v=14.2.26"></script>
 <script src="js/operational-warnings.js?v=1.0.7"></script>
-<script src="js/ui-components.js?v=1.0.3"></script>
+<script src="js/ui-components.js?v=1.0.4"></script>
 <script src="js/ui-warnings.js?v=1.1.8"></script>
 <script src="js/ui-crew-duty.js?v=1.0.0"></script>
-<script src="js/ui-schedule.js?v=1.0.11"></script>
+<script src="js/ui-schedule.js?v=1.0.12"></script>
 <script src="js/ui-personnel.js?v=1.1.5"></script>
 <script src="js/ui-station-services.js?v=1.0.2"></script>
-<script src="js/ui-next.js?v=1.10.152"></script>
-<script src="js/ui-map-workspace.js?v=1.0.1"></script>
+<script src="js/ui-next.js?v=1.10.153"></script>
+<script src="js/ui-map-workspace.js?v=1.0.2"></script>
 <script src="js/map.js?v=15.0.16"></script>
 </body>
 </html>

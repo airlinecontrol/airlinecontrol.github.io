@@ -4,9 +4,7 @@ const AeroMapWorkspace=(()=>{
   const shell=document.getElementById('operationsView');
   const center=document.getElementById('center-workspace');
   const pane=document.getElementById('schedule-pane');
-  const toolbar=pane.querySelector('.schedule-toolbar');
-  const title=toolbar.querySelector('b');
-  const filters=document.getElementById('operationFilterBar');
+  const toolbar=document.querySelector('.schedule-toolbar');
   const weather=document.getElementById('weatherStrip');
   const left=document.querySelector('.operations-rail'),right=document.querySelector('.context-rail');
   const compact=window.matchMedia('(max-width:900px)');
@@ -36,9 +34,7 @@ const AeroMapWorkspace=(()=>{
   splitter.id='map-schedule-splitter';splitter.tabIndex=0;
   splitter.setAttribute('role','separator');splitter.setAttribute('aria-orientation','horizontal');
   splitter.setAttribute('aria-label','Resize schedule');splitter.setAttribute('aria-controls','map-schedule-dock');
-  const collapse=document.createElement('button');
-  collapse.id='scheduleCollapseBtn';collapse.type='button';collapse.textContent='Schedule';
-  collapse.setAttribute('aria-controls','schedule-pane operationFilterBar weatherStrip');
+  const collapse=document.getElementById('scheduleCollapseBtn');
 
   function heightBounds(){
     const maximum=Math.max(160,Math.min(shell.clientHeight*.65,shell.clientHeight-180));
@@ -47,7 +43,7 @@ const AeroMapWorkspace=(()=>{
   function updateHeight(){
     const bounds=heightBounds();
     const expanded=Math.round(Math.min(bounds.max,Math.max(bounds.min,height||shell.clientHeight*.34)));
-    const actual=collapsed?toolbar.offsetHeight||46:expanded;
+    const actual=collapsed?toolbar.offsetHeight||38:expanded;
     shell.style.setProperty('--map-dock-height',`${actual}px`);
     splitter.setAttribute('aria-valuemin',String(Math.round(bounds.min)));
     splitter.setAttribute('aria-valuemax',String(Math.round(bounds.max)));
@@ -91,6 +87,7 @@ const AeroMapWorkspace=(()=>{
     document.body.classList.toggle('schedule-dock-collapsed',active&&collapsed);
     collapse.setAttribute('aria-expanded',String(!collapsed));
     collapse.title=collapsed?'Expand schedule':'Collapse schedule';
+    collapse.setAttribute('aria-label',collapse.title);
     queueGeometry();
   }
   function applyLayout(){
@@ -98,13 +95,10 @@ const AeroMapWorkspace=(()=>{
     if(next!==active){
       active=next;
       if(active){
-        title.replaceWith(collapse);
-        dock.append(splitter,toolbar,filters,weather,pane);
+        dock.append(splitter,toolbar,weather,pane);
         shell.append(dock);
       }else{
-        collapse.replaceWith(title);
-        pane.prepend(toolbar);
-        center.append(filters,weather,pane);
+        center.append(toolbar,weather,pane);
         dock.remove();
       }
     }
