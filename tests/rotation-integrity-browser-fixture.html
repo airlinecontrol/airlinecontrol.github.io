@@ -1,0 +1,132 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Aircraft rotation integrity</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result'),frame=document.getElementById('game');
+  const assert=(ok,message)=>{if(!ok)throw new Error(message);};
+  const MIN=60000,now=Date.UTC(2026,8,18,15,32),failures=[];
+  let w,ac;
+  function reset(){
+    w.eval(`state=newState();state.clock={simBase:${now},realBase:Date.now(),speed:0,paused:true};state.ops.automaticDisruptions=false;selectedFlightId=null;selectedAircraftId=null;invalidateOperationalIndex();`);
+    ac=w.assignRequestedAircraft('E190',w.defaultCabin('E190'),'ATL');
+    for(const airport of ['ATL','MCO']){
+      for(const role of w.eval('Object.keys(PERSONNEL)'))w.changeStaff(airport,role,100);
+      for(const role of ['captains','firstOfficers'])w.changeQualification(airport,role,w.AeroManagement.aircraftFamily(ac.model),100);
+    }
+  }
+  function leg(from,to,offset,serviceLeg,aircraft=ac){
+    const f=w.createFlightRecord({aircraftId:aircraft.id,from,to,departure:now+offset*MIN,fare:140,serviceId:serviceLeg?'SCH_TEST':null,serviceLeg});
+    f.arrival=f.departure+83*MIN;return f;
+  }
+  function check(name,run){reset();try{run();}catch(error){failures.push(name+': '+error.message);}}
+  function service(){w.eval(`state.services.push({id:'SCH_TEST',active:false,removedOccurrences:[]})`);}
+  try{
+    localStorage.clear();
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=rotation-integrity';await loaded;w=frame.contentWindow;
+    check('Return cannot depart ahead of a blocked outbound',()=>{
+      const out=leg('ATL','MCO',-150,'outbound'),back=leg('MCO','ATL',-22,'return');
+      w.changeStaff('ATL','captains',-w.staffAt('ATL','captains'));
+      w.recalculateOperations();w.updateStaffingConstraints(now);w.updatePositioningConstraints(now);w.recalculateOperations();
+      assert(out.staffingBlocked,'Test outbound was not held for crew');
+      w.processFlightLifecycleTransitions(now);
+      assert(!out.departureLogged&&!back.departureLogged,'Return departed even though the aircraft never flew outbound');
+    });
+    check('Arrival and minimum ground time must actually elapse',()=>{
+      const inbound=leg('ATL','MCO',-50,'outbound'),back=leg('MCO','ATL',10,'return');
+      inbound.departureLogged=true;inbound.actualDeparture=inbound.departure;inbound.actualArrival=now+33*MIN;
+      w.invalidateOperationalIndex();
+      assert(w.departureGroundBlockersForFlight(back).some(item=>item.type==='aircraft_availability'),'Aircraft in operation was not a departure blocker');
+      w.eval(`state.clock.simBase=${now+34*MIN}`);
+      assert(w.departureGroundBlockersForFlight(back).some(item=>item.type==='aircraft_availability'),'Turnaround time was not protected after arrival');
+      w.eval(`state.clock.simBase=${now+80*MIN}`);
+      assert(!w.departureGroundBlockersForFlight(back).some(item=>item.type==='aircraft_availability'),'Aircraft did not become available after arrival and minimum turn');
+    });
+    check('Actual movement anchors pending projections even out of planned order',()=>{
+      const out=leg('ATL','MCO',-150,'outbound'),back=leg('MCO','ATL',-22,'return');
+      out.manualDelayMin=170;back.departureLogged=true;back.actualDeparture=back.departure;back.actualArrival=back.arrival;
+      w.recalculateOperations();
+      const earliest=w.flightActualArrival(back)+w.minimumTurnMinutes(ac,'ATL')*MIN;
+      assert(w.flightActualDeparture(out)>=earliest,'Pending outbound overlaps the recorded return');
+      assert(!w.returnReusesOutboundCrew(back),'Recorded return still borrows crew from a future outbound');
+      const times=JSON.stringify([out.actualDeparture,out.actualArrival,back.actualDeparture,back.actualArrival]);
+      w.recalculateOperations();
+      assert(times===JSON.stringify([out.actualDeparture,out.actualArrival,back.actualDeparture,back.actualArrival]),'Repeated calculation changed a stable rotation');
+      w.refreshScheduleTimeline(true);
+      assert(!frame.contentDocument.querySelector('.connection-label.short-turn'),'Corrected actual order retained a false short-turn connector');
+    });
+    check('Actual overlaps warn even when the next leg has departed',()=>{
+      const out=leg('ATL','MCO',-150,'outbound'),back=leg('MCO','ATL',-22,'return');
+      out.actualDeparture=now+18*MIN;out.actualArrival=now+101*MIN;
+      back.departureLogged=true;back.actualDeparture=back.departure;back.actualArrival=back.arrival;
+      w.invalidateOperationalIndex();
+      const warnings=w.operationWarnings(now).filter(item=>item.type==='aircraft_overlap');
+      assert(warnings.length===1&&warnings[0].level==='critical','Actual overlap was not reported independently of planned turn');
+      assert(warnings[0].detail.includes(out.id)&&warnings[0].detail.includes(back.id),'Overlap warning does not identify both flights');
+      w.refreshScheduleTimeline(true);
+      assert(frame.contentDocument.querySelector('.connection-label.short-turn')?.textContent.includes('overlap'),'Schedule did not mark the overlapping connector');
+    });
+    check('Actual short turns are detected independently of flight phase',()=>{
+      const inbound=leg('ATL','MCO',-120,'outbound'),back=leg('MCO','ATL',8,'return');
+      inbound.departureLogged=true;inbound.actualDeparture=inbound.departure;inbound.actualArrival=now-2*MIN;
+      back.departureLogged=true;back.actualDeparture=now+8*MIN;back.actualArrival=now+91*MIN;
+      w.invalidateOperationalIndex();
+      const warnings=w.operationWarnings(now).filter(item=>item.type==='short_turn');
+      assert(warnings.some(item=>item.detail.includes('actual')),'Actual short turn was ignored because the planned gap was legal');
+    });
+    check('Cancelled and planned ghost intervals do not create actual overlaps',()=>{
+      const a=leg('ATL','MCO',60),b=leg('ATL','MCO',60);
+      a.cancelled=true;b.actualDeparture=now+180*MIN;b.actualArrival=now+263*MIN;
+      w.invalidateOperationalIndex();
+      assert(!w.operationWarnings(now).some(item=>item.type==='aircraft_overlap'),'Cancelled or ghost interval created an overlap');
+    });
+    check('Nested actual intervals remain visible as separate conflicts',()=>{
+      const long=leg('ATL','MCO',60),a=leg('ATL','MCO',90),b=leg('ATL','MCO',120);
+      long.actualArrival=now+300*MIN;a.actualArrival=now+100*MIN;b.actualArrival=now+135*MIN;
+      const conflicts=w.aircraftTimingConflicts([long,a,b],ac);
+      assert(conflicts.length===2&&conflicts.every(item=>item.previous.id===long.id),'Nested flights concealed an overlap');
+      assert(conflicts[0].overlapMin===10&&conflicts[1].overlapMin===15,'Overlap duration did not use the intersection of occupied intervals');
+    });
+    check('Recovery ferry works past an impossible earlier sector',()=>{
+      leg('MCO','ATL',-180);
+      const ferry=leg('ATL','MCO',-10);ferry.flightType='ferry';
+      w.invalidateOperationalIndex();
+      assert(w.aircraftDepartureAvailabilityForFlight(ferry,now).ready,'Unreachable earlier flight prevented a valid positioning ferry');
+    });
+    for(const removedLeg of ['outbound','return'])check('Deleting '+removedLeg+' preserves rotation boundaries',()=>{
+      service();
+      const first=leg('ATL','MCO',60,'outbound'),back=leg('MCO','ATL',190,'return');
+      const next=leg('ATL','MCO',1500,'outbound'),nextBack=leg('MCO','ATL',1630,'return');
+      const removed=removedLeg==='return'?back:next;
+      w.applyFlightCancellation(removed,'Fixture cancellation');w.recalculateOperations();
+      const survivor=removedLeg==='return'?first:nextBack;
+      const before=JSON.stringify(w.crewDutyForFlight(survivor));
+      assert(removedLeg==='return'?!w.rotationForFlight(first).returnFlight:!w.rotationForFlight(nextBack).outbound,'Cancellation already paired across rotations');
+      w.removeCancelledFlight(removed.id,{skipConfirm:true});
+      assert(removedLeg==='return'?!w.rotationForFlight(first).returnFlight:!w.rotationForFlight(nextBack).outbound,'Deletion paired across rotations');
+      w.rebuildCrewDuties();
+      assert(before===JSON.stringify(w.crewDutyForFlight(survivor)),'Deleting an already cancelled flight changed crew duty');
+      w.eval('state=migrateState(JSON.parse(JSON.stringify(state)));invalidateOperationalIndex()');
+      const reloaded=w.eval(`state.flights.find(item=>item.id===${JSON.stringify(survivor.id)})`);
+      assert(removedLeg==='return'?!w.rotationForFlight(reloaded).returnFlight:!w.rotationForFlight(reloaded).outbound,'Reload lost the removed rotation boundary');
+    });
+    check('Deletion does not recalculate or shift other rows',()=>{
+      const cancelled=leg('ATL','MCO',60);w.applyFlightCancellation(cancelled,'Fixture cancellation');
+      const other=w.assignRequestedAircraft('E190',w.defaultCabin('E190'),'ATL');
+      const future=leg('ATL','MCO',350,null,other);future.manualDelayMin=25;
+      w.recalculateOperations();
+      const before=JSON.stringify([future.actualDeparture,future.actualArrival,w.crewDutyForFlight(future)]);
+      let calls=0;const original=w.recalculateOperations;
+      w.recalculateOperations=function(...args){calls++;return original(...args);};
+      try{w.removeCancelledFlight(cancelled.id,{skipConfirm:true});}finally{w.recalculateOperations=original;}
+      assert(!calls,'Removing a cancelled record recalculated the entire network');
+      assert(before===JSON.stringify([future.actualDeparture,future.actualArrival,w.crewDutyForFlight(future)]),'Unrelated flight changed after deletion');
+    });
+    assert(!failures.length,failures.join('\n'));
+    result.textContent='PASS rotation integrity: departures, actual conflicts, crew pairing, deletion and reload';
+  }catch(error){result.textContent='FAIL\n'+(error.stack||error);}
+})();
+</script>

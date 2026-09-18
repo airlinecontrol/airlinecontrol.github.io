@@ -1,8 +1,9 @@
 /* Crew duty, staffing, crew swaps, and disrupted crew recovery. */
 
-function rotationUsesThroughCrew(flight){
-  const rotation=rotationForFlight(flight);
+function rotationUsesThroughCrew(flight,rotation=rotationForFlight(flight)){
   if(!rotation.outbound||!rotation.returnFlight) return false;
+  if(flightOperationalDestination(rotation.outbound)!==rotation.returnFlight.from||
+    flightActualDeparture(rotation.returnFlight)<flightActualArrival(rotation.outbound)) return false;
   if(rotation.outbound.crewDutySplit||rotation.returnFlight.crewDutySplit) return false;
   return OperationalIntelligence.crewDutyAssessment({
     departure:flightActualDeparture(rotation.outbound),arrival:flightActualArrival(rotation.returnFlight),sectors:2,
@@ -12,7 +13,7 @@ function rotationUsesThroughCrew(flight){
 
 function inferredCrewDutyForFlight(flight){
   const rotation=rotationForFlight(flight);
-  if(rotationUsesThroughCrew(flight)){
+  if(rotationUsesThroughCrew(flight,rotation)){
     return OperationalIntelligence.crewDutyAssessment({
       departure:flightActualDeparture(rotation.outbound),arrival:flightActualArrival(rotation.returnFlight),sectors:2,
       augmented:Boolean(rotation.outbound.crewAugmented)
@@ -27,7 +28,7 @@ function inferredCrewDutyForFlight(flight){
 function plannedCrewDutyAssessmentForFlight(flight,{augmented=false}={}){
   if(!flight||flight.flightType==='ferry') return null;
   const rotation=rotationForFlight(flight);
-  if(rotationUsesThroughCrew(flight)&&rotation.outbound&&rotation.returnFlight){
+  if(rotationUsesThroughCrew(flight,rotation)&&rotation.outbound&&rotation.returnFlight){
     return {
       target:rotation.outbound,
       flights:[rotation.outbound,rotation.returnFlight],
@@ -75,10 +76,8 @@ function crewDutyForFlight(flight){
 function crewDiversionDisplacementFlight(f){
   if(f?.diversionAirport&&f.diversionAirport!==f.to) return f;
   if(!(f?.serviceId&&f.serviceLeg==='outbound')) return null;
-  const returnFlight=state.flights
-    .filter(other=>!other.cancelled&&other.serviceId===f.serviceId&&other.serviceLeg==='return'&&other.departure>f.departure)
-    .sort((a,b)=>a.departure-b.departure)[0];
-  if(returnFlight&&returnReusesOutboundCrew(returnFlight)&&returnFlight.diversionAirport&&returnFlight.diversionAirport!==returnFlight.to) return returnFlight;
+  const returnFlight=throughCrewReturnForFlight(f);
+  if(returnFlight?.diversionAirport&&returnFlight.diversionAirport!==returnFlight.to) return returnFlight;
   return null;
 }
 
@@ -342,58 +341,39 @@ function arrangeCrewAccommodation(flightId){
 }
 
 function returnReusesOutboundCrew(f){
-  if(!f.serviceId || f.serviceLeg!=='return') return false;
-  const outbound=state.flights
-    .filter(other=>!other.cancelled&&other.serviceId===f.serviceId && other.serviceLeg==='outbound' && other.departure<f.departure)
-    .sort((a,b)=>b.departure-a.departure)[0];
-  return Boolean(outbound&&rotationUsesThroughCrew(f));
+  return Boolean(f.serviceId&&f.serviceLeg==='return'&&!f.cancelled&&rotationUsesThroughCrew(f));
 }
 function flightUsesLocalCrew(f){ return !returnReusesOutboundCrew(f); }
-function plannedReturnForCrew(f){
+function throughCrewReturnForFlight(f){
   if(!(f.serviceId&&f.serviceLeg==='outbound')) return null;
-  return state.flights
-    .filter(other=>other.serviceId===f.serviceId&&other.serviceLeg==='return'&&other.departure>f.departure)
-    .sort((a,b)=>a.departure-b.departure)[0]||null;
+  const rotation=rotationForFlight(f);
+  return rotationUsesThroughCrew(f,rotation)?rotation.returnFlight:null;
 }
 function flightCrewPlannedRelease(f){
-  const returnFlight=plannedReturnForCrew(f);
-  if(returnFlight&&returnReusesOutboundCrew(returnFlight)) return returnFlight.arrival;
+  const returnFlight=throughCrewReturnForFlight(f);
+  if(returnFlight) return returnFlight.arrival;
   return f.arrival;
 }
 function flightCrewPlannedReleaseAirport(f){
-  const returnFlight=plannedReturnForCrew(f);
-  if(returnFlight&&returnReusesOutboundCrew(returnFlight)) return returnFlight.to;
+  const returnFlight=throughCrewReturnForFlight(f);
+  if(returnFlight) return returnFlight.to;
   return f.to;
 }
 function flightCrewRelease(f){
-  if(f.serviceId && f.serviceLeg==='outbound'){
-    const returnFlight=state.flights
-      .filter(other=>!other.cancelled&&other.serviceId===f.serviceId && other.serviceLeg==='return' && other.departure>f.departure)
-      .sort((a,b)=>a.departure-b.departure)[0];
-    if(returnFlight && returnReusesOutboundCrew(returnFlight)) return flightActualArrival(returnFlight);
-  }
+  const returnFlight=throughCrewReturnForFlight(f);
+  if(returnFlight) return flightActualArrival(returnFlight);
   return flightActualArrival(f);
 }
 
 function flightCrewContinuationDeparture(f,airport){
-  if(f.serviceId && f.serviceLeg==='outbound'){
-    const returnFlight=state.flights
-      .filter(other=>!other.cancelled&&other.serviceId===f.serviceId&&other.serviceLeg==='return'&&other.departure>f.departure)
-      .sort((a,b)=>a.departure-b.departure)[0];
-    if(returnFlight&&returnReusesOutboundCrew(returnFlight)&&flightOperationalDestination(returnFlight)===airport){
-      return flightActualDeparture(returnFlight);
-    }
-  }
+  const returnFlight=throughCrewReturnForFlight(f);
+  if(returnFlight&&flightOperationalDestination(returnFlight)===airport) return flightActualDeparture(returnFlight);
   return flightActualDeparture(f);
 }
 
 function flightCrewReleaseAirport(f){
-  if(f.serviceId&&f.serviceLeg==='outbound'){
-    const returnFlight=state.flights
-      .filter(other=>!other.cancelled&&other.serviceId===f.serviceId&&other.serviceLeg==='return'&&other.departure>f.departure)
-      .sort((a,b)=>a.departure-b.departure)[0];
-    if(returnFlight&&returnReusesOutboundCrew(returnFlight)) return flightOperationalDestination(returnFlight);
-  }
+  const returnFlight=throughCrewReturnForFlight(f);
+  if(returnFlight) return flightOperationalDestination(returnFlight);
   return flightOperationalDestination(f);
 }
 

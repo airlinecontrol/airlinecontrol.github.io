@@ -371,9 +371,11 @@ function scheduleAircraftRowBadges(aircraft,flights,lateInboundById,now=simNow()
     if(scheduleNightMarkerInfo(flight)) night++;
   }
   const scheduledFlights=flights.filter(flight=>!flight.cancelled).sort((a,b)=>a.departure-b.departure||a.id.localeCompare(b.id));
+  const shortTurnIds=new Set(aircraftTimingConflicts(scheduledFlights,aircraft).map(item=>item.next.id));
   for(let i=1;i<scheduledFlights.length;i++){
-    if(turnaroundGapInfo(scheduledFlights[i-1],scheduledFlights[i],aircraft)?.plannedBelowMinimum) shortTurns++;
+    if(turnaroundGapInfo(scheduledFlights[i-1],scheduledFlights[i],aircraft)?.plannedBelowMinimum) shortTurnIds.add(scheduledFlights[i].id);
   }
+  shortTurns=shortTurnIds.size;
   const badges=[
     delayed?{className:'delayed',label:`${delayed} delayed`}:null,
     problems?{className:'problem',label:`${problems} problem${problems===1?'':'s'}`}:null,
@@ -487,7 +489,8 @@ function refreshScheduleTimeline(force=false){
         const next=flights[i+1];
         if(next&&!f.cancelled&&!next.cancelled){
           const nextDep=flightActualDeparture(next),gapMs=nextDep-actualArr,turn=turnaroundGapInfo(f,next,ac);
-          const connectorShortTurn=Boolean(turn?.plannedBelowMinimum),drawPositiveGap=nextDep>actualArr;
+          const plannedShortTurn=compareAircraftRotationFlights(f,next)<0&&turn?.plannedBelowMinimum;
+          const connectorShortTurn=gapMs<0||Boolean(turn?.actualBelowMinimum||plannedShortTurn),drawPositiveGap=nextDep>actualArr;
           if(drawPositiveGap||connectorShortTurn){
             const same=destination===next.from,connectionFocused=focusIds.has(f.id)&&focusIds.has(next.id);
             const connectorLateInbound=Boolean(lateInboundById.get(next.id));
@@ -504,7 +507,7 @@ function refreshScheduleTimeline(force=false){
                 turn?.title||`${f.id} to ${next.id}: ground time ${formatDuration(Math.max(0,gapMs))}`,
                 connectorLateInbound?'late inbound rotation warning':null
               ].filter(Boolean);
-              const label=connectorShortTurn&&turn
+              const label=gapMs<0?'overlap':connectorShortTurn&&turn
                 ? `${Math.max(0,turn.actualGapMin)}/${turn.minimumMin}m`
                 : formatDuration(gapMs);
               html+=`<span class="connection-label ${connectorLateInbound?'late-inbound':''} ${connectorShortTurn?'short-turn':''} ${connectionFocused?'focus':''}" title="${esc(titleParts.join(' · '))}" style="left:${connLeft+connWidth/2}px">${esc(label)}</span>`;

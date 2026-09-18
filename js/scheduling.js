@@ -279,6 +279,27 @@ function recurringOccurrenceKey(flight){
   return `${flight.serviceLeg}:${flight.departure}`;
 }
 
+function recurringServiceOccurrences(serviceId){
+  const service=state.services.find(item=>item.id===serviceId);
+  return state.flights.filter(flight=>flight.serviceId===serviceId)
+    .concat(service?.removedOccurrences||[])
+    .sort((a,b)=>a.departure-b.departure);
+}
+
+function rotationForFlight(flight){
+  if(!flight?.serviceId||!['outbound','return'].includes(flight.serviceLeg)) return {service:null,outbound:flight,returnFlight:null};
+  const service=state.services.find(item=>item.id===flight.serviceId)||null;
+  const occurrences=recurringServiceOccurrences(flight.serviceId);
+  const outbound=flight.serviceLeg==='outbound'?flight:
+    occurrences.filter(item=>item.serviceLeg==='outbound'&&item.departure<flight.departure).at(-1);
+  const nextOutbound=outbound&&occurrences.find(item=>item.serviceLeg==='outbound'&&item.departure>outbound.departure);
+  const returning=outbound&&occurrences.find(item=>item.serviceLeg==='return'&&item.departure>outbound.departure&&
+    (!nextOutbound||item.departure<nextOutbound.departure));
+  // Cancelled and deleted legs bound the rotation, but cannot supply aircraft or crew.
+  const operatingLeg=item=>item?.id&&!item.cancelled?item:null;
+  return {service,outbound:operatingLeg(outbound),returnFlight:operatingLeg(returning||(flight.serviceLeg==='return'?flight:null))};
+}
+
 function rememberRemovedRecurringOccurrence(flight){
   const service=state.services.find(item=>item.id===flight.serviceId);
   if(!service||!['outbound','return'].includes(flight.serviceLeg)) return;
@@ -299,13 +320,12 @@ function ensureRecurringFlights(){
     const ac=state.aircraft.find(a=>a.id===svc.aircraftId);
     if(!ac){ svc.active=false; changed=true; continue; }
     const turnMin=effectiveTurnaroundMinutes(ac,svc.to,svc.turnaroundMin);
-    const serviceFlights=state.flights.filter(f=>f.serviceId===svc.id).sort((a,b)=>a.departure-b.departure);
     // Removed occurrences still reserve their place in the recurring programme.
-    const occurrences=serviceFlights.concat(svc.removedOccurrences||[]);
+    const occurrences=recurringServiceOccurrences(svc.id);
     const occurrenceKeys=new Set(occurrences.map(recurringOccurrenceKey));
     const outboundDepartures=occurrences.filter(f=>f.serviceLeg==='outbound').map(f=>f.departure).sort((a,b)=>a-b);
     const returnFlights=occurrences.filter(f=>f.serviceLeg==='return');
-    for(const outbound of serviceFlights.filter(f=>f.serviceLeg==='outbound'&&!f.cancelled)){
+    for(const outbound of occurrences.filter(f=>f.id&&f.serviceLeg==='outbound'&&!f.cancelled)){
       const nextOutboundDeparture=outboundDepartures.find(departure=>departure>outbound.departure);
       const alreadyPaired=returnFlights.some(f=>
         f.departure>outbound.departure && (nextOutboundDeparture===undefined || f.departure<nextOutboundDeparture)
@@ -653,7 +673,7 @@ function removeCancelledFlight(flightId,{skipConfirm=false}={}){
   if(selectedFlightId===flight.id) selectedFlightId=null;
   if(selectedAircraftId===flight.aircraftId) selectedAircraftId=null;
   updatePassengerConnections();
-  recalculateOperations();
+  invalidateOperationalIndex();
   AeroServices.commit();
   requestUiRefresh('all');
   toast(`${flight.id} removed from the operations board.`);

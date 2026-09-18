@@ -213,22 +213,26 @@ function aircraftProjectedLocation(ac,t=simNow()){
   return {location,availableAt,status:'ground'};
 }
 
-function aircraftRotationProjections(aircraft,t=simNow()){
-  const flights=operationalIndex(t).flightsByAircraft.get(aircraft.id)||[];
-  const projections=new Map();
+function latestAircraftMovement(flights,t=simNow()){
   let previousFlight=null;
   for(const flight of flights){
     if(flightHasDeparted(flight,t)&&(!previousFlight||flightActualDeparture(flight)>flightActualDeparture(previousFlight))){
       previousFlight=flight;
     }
   }
+  return previousFlight;
+}
+
+function aircraftRotationProjections(aircraft,t=simNow()){
+  const flights=operationalIndex(t).flightsByAircraft.get(aircraft.id)||[];
+  const projections=new Map();
+  let previousFlight=latestAircraftMovement(flights,t);
   // Recorded movement anchors the rotation even before arrival settlement runs.
   let location=previousFlight?flightOperationalDestination(previousFlight):aircraft.location;
-  let availableAt=previousFlight
-    ? Math.max(t,flightActualArrival(previousFlight)+minimumTurnMinutes(aircraft,location)*MIN)
-    : t;
+  let arrivalAt=previousFlight?flightActualArrival(previousFlight):null;
   for(const flight of flights){
     if(flight.cancelled||flightHasDeparted(flight,t)) continue;
+    const availableAt=arrivalAt===null?t:Math.max(t,arrivalAt+flightMinimumTurnMinutes(flight,aircraft)*MIN);
     const outOfPosition=flight.from!==location;
     projections.set(flight.id,{
       location,availableAt,previousFlight,outOfPosition,
@@ -240,10 +244,23 @@ function aircraftRotationProjections(aircraft,t=simNow()){
     const duration=Math.max(MIN,flightActualArrival(flight)-flightActualDeparture(flight));
     const departure=Math.max(availableAt,flightActualDeparture(flight));
     location=flightOperationalDestination(flight);
-    availableAt=departure+duration+minimumTurnMinutes(aircraft,location)*MIN;
+    arrivalAt=departure+duration;
     previousFlight=flight;
   }
   return projections;
+}
+
+function aircraftDepartureAvailabilityForFlight(flight,t=simNow()){
+  const projection=aircraftRotationProjectionBeforeFlight(flight,t);
+  if(projection.status==='unknown') return {ready:false,reason:'Assigned aircraft is unavailable.'};
+  const previous=projection.previousFlight;
+  const flights=operationalIndex(t).flightsByAircraft.get(flight.aircraftId)||[];
+  const active=flights.find(item=>item.id!==flight.id&&flightIsInOperation(item,t));
+  if(active) return {ready:false,reason:`Aircraft is operating ${active.id}.`,flightId:active.id};
+  if(projection.outOfPosition) return {ready:false,reason:`Aircraft is at ${projection.location}, not ${flight.from}.`};
+  if(previous&&!flightHasDeparted(previous,t)) return {ready:false,reason:`Awaiting inbound ${previous.id}; it has not departed.`,flightId:previous.id};
+  if(projection.availableAt>t) return {ready:false,reason:'Inbound arrival and minimum turnaround are not complete.',readyAt:projection.availableAt,flightId:previous?.id};
+  return {ready:true};
 }
 
 function aircraftRotationProjectionBeforeFlight(flight,t=simNow()){
@@ -401,14 +418,17 @@ function effectiveTurnaroundMinutes(ac,airportCode,requestedMin=0){
   return Math.max(Number(requestedMin)||0,minimumTurnMinutes(ac,airportCode));
 }
 
+function flightMinimumTurnMinutes(flight,aircraft){
+  return Math.max(25,minimumTurnMinutes(aircraft,flight.from)-Math.max(0,Number(flight.turnaroundRecoveryMin)||0));
+}
+
 function turnaroundGapInfo(previous,next,aircraft=null){
   if(!previous||!next) return null;
   const ac=aircraft||state.aircraft.find(item=>item.id===next.aircraftId||item.id===previous.aircraftId);
   if(!ac) return null;
   const previousDestination=flightOperationalDestination(previous);
   const sameStation=previousDestination===next.from;
-  const recoveredTurn=Math.max(0,Number(next.turnaroundRecoveryMin)||0);
-  const minimumMin=Math.max(25,minimumTurnMinutes(ac,next.from)-recoveredTurn);
+  const minimumMin=flightMinimumTurnMinutes(next,ac);
   const actualGapMin=Math.round((flightActualDeparture(next)-flightActualArrival(previous))/MIN);
   const plannedGapMin=Math.round((next.departure-previous.arrival)/MIN);
   const limitingGapMin=Math.min(actualGapMin,plannedGapMin);
@@ -431,6 +451,25 @@ function turnaroundGapInfo(previous,next,aircraft=null){
       ? `${previous.id} to ${next.id}: ${limitingGapLabel}, minimum ${minimumMin} min for ${ac.model} · planned ${plannedGapMin} min · actual ${actualGapMin} min`
       : `${previous.id} to ${next.id}: ground time ${actualGapMin} min, minimum ${minimumMin} min for ${ac.model}`
   };
+}
+
+function aircraftTimingConflicts(flights,aircraft){
+  const ordered=flights.filter(flight=>!flight.cancelled)
+    .sort((a,b)=>flightActualDeparture(a)-flightActualDeparture(b)||compareAircraftRotationFlights(a,b));
+  const conflicts=[];
+  let previous=null;
+  for(const next of ordered){
+    if(previous){
+      const turn=turnaroundGapInfo(previous,next,aircraft);
+      const overlapMs=Math.min(flightActualArrival(previous),flightActualArrival(next))-flightActualDeparture(next);
+      if(overlapMs>0||turn?.actualBelowMinimum){
+        conflicts.push({previous,next,turn,overlapMin:Math.max(0,Math.ceil(overlapMs/MIN))});
+      }
+    }
+    // Keep the longest occupied interval so nested overlaps cannot hide conflicts.
+    if(!previous||flightActualArrival(next)>flightActualArrival(previous)) previous=next;
+  }
+  return conflicts;
 }
 
 function previousAircraftFlight(flight){
@@ -476,7 +515,7 @@ function groundOperationsForFlight(flight,t=simNow()){
     departure:AeroGroundOperations.departurePhase({
       flight,aircraft,previousFlight:connectedPrevious,
       previousArrival:previousFlight?flightActualArrival(previousFlight):null,
-      minimumTurnMin:Math.max(25,minimumTurnMinutes(aircraft,flight.from)-Math.max(0,Number(flight.turnaroundRecoveryMin)||0)),now:t
+      minimumTurnMin:flightMinimumTurnMinutes(flight,aircraft),now:t
     }),
     postflight:AeroGroundOperations.postflightPhase({
       flight,aircraft:MODELS[aircraft.model],actualArrival:flightActualArrival(flight),now:t
@@ -731,35 +770,35 @@ function recalculateOperations(){
   const taxiPressureIndex=buildTaxiPressureIndex(state.flights);
   for(const ac of state.aircraft){
     const flights=(flightsByAircraft.get(ac.id)||[]).sort(compareAircraftRotationFlights);
-    let prev=null;
-    for(const f of flights){
-      if(completed.has(f.id)){prev=f;continue;}
-      if(departed.has(f.id)){
-        recalculateFlightArrival(f,taxiPressureIndex,{preserveTaxiOut:true});
-        f.nightRestrictionConflictDelayMin=0;f.nightRestrictionConflictLabel='';
-        const arrivalCurfew=arrivalCurfewContextForFlight(f,now);
-        if(arrivalCurfew){
-          f.nightRestrictionConflictDelayMin=arrivalCurfew.delayMin;
-          f.nightRestrictionConflictLabel=arrivalCurfew.reason;
-        }
-        prev=f;
-        continue;
+    for(const f of flights.filter(flight=>departed.has(flight.id))){
+      recalculateFlightArrival(f,taxiPressureIndex,{preserveTaxiOut:true});
+      f.nightRestrictionConflictDelayMin=0;f.nightRestrictionConflictLabel='';
+      const arrivalCurfew=arrivalCurfewContextForFlight(f,now);
+      if(arrivalCurfew){
+        f.nightRestrictionConflictDelayMin=arrivalCurfew.delayMin;
+        f.nightRestrictionConflictLabel=arrivalCurfew.reason;
       }
+    }
+    let prev=latestAircraftMovement(flights,now);
+    let location=prev?flightOperationalDestination(prev):ac.location;
+    for(const f of flights){
+      if(completed.has(f.id)||departed.has(f.id)) continue;
       const baseReady=f.departure+(
         f.handlingDelayMin+f.technicalDelayMin+f.staffingDelayMin+f.manualDelayMin+
         f.weatherDelayMin+f.problemDelayMin+f.maintenanceDelayMin+f.positioningDelayMin+
         f.airportDelayMin+f.airspaceDelayMin
       )*MIN;
       const connectedPrevious=prev?{...prev,operationalDestination:flightOperationalDestination(prev)}:null;
-      const recoveredTurn=Math.max(0,Number(f.turnaroundRecoveryMin)||0);
+      const minimumTurnMin=flightMinimumTurnMinutes(f,ac);
       const groundPhase=AeroGroundOperations.departurePhase({
         flight:f,aircraft:ac,previousFlight:connectedPrevious,
         previousArrival:prev?flightActualArrival(prev):null,
-        minimumTurnMin:Math.max(25,minimumTurnMinutes(ac,f.from)-recoveredTurn),now
+        minimumTurnMin,now
       });
       f.groundReadyAt=groundPhase.readyAt;
       f.groundPhaseKind=groundPhase.kind;
-      let ready=Math.max(baseReady,groundPhase.readyAt);
+      const aircraftReadyAt=prev?flightActualArrival(prev)+minimumTurnMin*MIN:0;
+      let ready=Math.max(baseReady,groundPhase.readyAt,aircraftReadyAt);
       ready=Math.max(ready,crewFlightCoverageStatus(f,now).readyAt,Number(f.crewAssignmentReadyAt)||0);
       const stationReady=Math.max(stationDepartureReadyAt(f),prev&&flightOperationalDestination(prev)===f.from?stationPostflightReadyAt(prev):0);
       f.stationServiceDelayMin=Math.max(0,Math.ceil((stationReady-ready)/MIN));
@@ -767,8 +806,9 @@ function recalculateOperations(){
       const clearanceReady=Number(f.stationClearanceReadyAt)||0;
       f.stationClearanceDelayMin=Math.max(0,Math.ceil((clearanceReady-ready)/MIN));
       ready=Math.max(ready,clearanceReady);
-      if(groundPhase.readyAt>baseReady){
-        f.propagatedDelayMin=Math.ceil((groundPhase.readyAt-baseReady)/MIN);
+      const rotationReadyAt=Math.max(groundPhase.readyAt,aircraftReadyAt);
+      if(rotationReadyAt>baseReady){
+        f.propagatedDelayMin=Math.ceil((rotationReadyAt-baseReady)/MIN);
       }
       const operationalDuration=Number.isFinite(f.operationalDurationMs)?f.operationalDurationMs:f.arrival-f.departure;
       if(ac.defectUntil && ac.defectUntil>ready && f.departure<ac.defectUntil){
@@ -802,7 +842,10 @@ function recalculateOperations(){
       }
       f.actualDeparture=Math.max(f.departure,actualDep);
       recalculateFlightArrival(f,taxiPressureIndex);
-      prev=f;
+      if(f.from===location){
+        prev=f;
+        location=flightOperationalDestination(f);
+      }
     }
   }
   rebuildCrewDuties();
@@ -818,13 +861,15 @@ function departureBlockingProblemsForFlight(flight){
   });
 }
 
-function departureGroundBlockersForFlight(flight){
+function departureGroundBlockersForFlight(flight,t=simNow()){
   if(!flight) return [];
   const blockers=[...departureBlockingProblemsForFlight(flight)];
+  const availability=aircraftDepartureAvailabilityForFlight(flight,t);
+  if(!availability.ready) blockers.push({type:'aircraft_availability',...availability});
   if(flight.positioningBlocked) blockers.push({type:'aircraft_positioning'});
   if(flight.staffingBlocked) blockers.push({type:'staffing'});
   if(flight.maintenanceBlocked) blockers.push({type:'maintenance'});
-  if(!crewFlightCoverageStatus(flight).ready) blockers.push({type:'crew_assignment'});
+  if(!crewFlightCoverageStatus(flight,t).ready) blockers.push({type:'crew_assignment'});
   if(stationDepartureBlocked(flight)) blockers.push({type:'station_service'});
   return blockers;
 }
@@ -2101,7 +2146,7 @@ function processFlightLifecycleTransitions(t=simNow()){
     if(f.cancelled) continue;
     if(repairFlightLifecycleFlags(f,t)) changed=true;
     if(fuelFlight(f,t)) changed=true;
-    if(!flightHasDeparted(f,t) && t>=f.departure && t>=flightActualDeparture(f) && !departureGroundBlockersForFlight(f).length){
+    if(!flightHasDeparted(f,t) && t>=f.departure && t>=flightActualDeparture(f) && !departureGroundBlockersForFlight(f,t).length){
       f.departureLogged=true;
       if(maybeGenerateEnrouteIssue(f,t)){ changed=true; needsRecalc=true; }
       changed=true;
@@ -2434,27 +2479,6 @@ function updateStaffingConstraints(t=simNow()){
     }
   }
   return changed;
-}
-
-function rotationForFlight(f){
-  if(!f || !f.serviceId) return {service:null,outbound:f,returnFlight:null};
-  const service=state.services.find(s=>s.id===f.serviceId) || null;
-  const serviceFlights=state.flights
-    .filter(x=>x.serviceId===f.serviceId)
-    .sort((a,b)=>a.departure-b.departure);
-
-  let outbound=null, returnFlight=null;
-  if(f.serviceLeg==='outbound'){
-    outbound=f;
-    returnFlight=serviceFlights.find(x=>x.serviceLeg==='return' && x.departure>f.departure) || null;
-  }else if(f.serviceLeg==='return'){
-    returnFlight=f;
-    const prior=serviceFlights.filter(x=>x.serviceLeg==='outbound' && x.departure<f.departure);
-    outbound=prior[prior.length-1] || null;
-  }else{
-    outbound=f;
-  }
-  return {service,outbound,returnFlight};
 }
 
 function rotationReplacementCandidates(f){

@@ -34,6 +34,11 @@ function warningMemoryStillRelevant(warning,now=simNow()){
   if(warning.flightId){
     const flight=state.flights.find(item=>item.id===warning.flightId);
     if(!flight||flight.cancelled||flight.settled) return false;
+    if(warning.actualConflict){
+      const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
+      const flights=state.flights.filter(item=>item.aircraftId===flight.aircraftId);
+      if(!aircraftTimingConflicts(flights,aircraft).some(item=>item.next.id===flight.id)) return false;
+    }
     if(warning.type==='aircraft_out_of_position'&&!aircraftOutOfPositionContextForFlight(flight,now)?.active) return false;
     if(warning.type==='holding_fuel_decision'&&!window.AeroHolding?.holdingIsActive?.(flight)) return false;
     const superseders=WARNING_SUPERSEDING_PROBLEMS[warning.type];
@@ -168,12 +173,31 @@ function operationWarnings(now=simNow(),index=operationalIndex(now)){
     .sort((a,b)=>flightActualDeparture(a)-flightActualDeparture(b)||a.id.localeCompare(b.id));
   const flightsByAircraft=new Map();
   const crewDutyWarningFlightIds=new Set();
+  const actualConflictFlightIds=new Set();
   for(const flight of flights) mapPush(flightsByAircraft,flight.aircraftId,flight);
   for(const [aircraftId,aircraftFlights] of flightsByAircraft.entries()){
     aircraftFlights.sort((a,b)=>a.departure-b.departure||a.id.localeCompare(b.id));
     const aircraft=index.aircraftById.get(aircraftId)||state.aircraft.find(item=>item.id===aircraftId);
+    const conflictFlights=(index.flightsByAircraft.get(aircraftId)||[]).filter(flight=>
+      flightActualArrival(flight)>start&&flightActualDeparture(flight)<end);
+    for(const {previous,next,turn,overlapMin} of aircraftTimingConflicts(conflictFlights,aircraft)){
+      if(next.settled) continue;
+      if(!overlapMin&&lateInboundStatusForFlight(next,now,{index}).active) continue;
+      actualConflictFlightIds.add(next.id);
+      add({
+        id:`${overlapMin?'aircraft-overlap':'short-turn'}:${next.id}`,
+        type:overlapMin?'aircraft_overlap':'short_turn',
+        group:overlapMin?'Aircraft conflicts':'Short turns',
+        level:overlapMin||turn.actualShortageMin>=15?'critical':'warning',
+        actualConflict:true,flightId:next.id,aircraftId,
+        title:overlapMin?`Aircraft overlap ${overlapMin} min`:`Short turn ${turn.actualGapMin}m/${turn.minimumMin}m`,
+        detail:`${previous.id} -> ${next.id} · ${aircraft?.tail||aircraftId} · ${overlapMin?'actual flight times overlap':`actual ${turn.actualShortageMin} min under minimum`}`,
+        sortAt:flightActualDeparture(next)
+      });
+    }
     for(let i=1;i<aircraftFlights.length;i++){
       const previous=aircraftFlights[i-1],next=aircraftFlights[i];
+      if(actualConflictFlightIds.has(next.id)) continue;
       const turn=turnaroundGapInfo(previous,next,aircraft);
       if(!turn?.plannedBelowMinimum) continue;
       const gapLabel=turn.plannedGapMin<0?'overlap':`${Math.max(0,turn.plannedGapMin)}m`;
@@ -227,7 +251,7 @@ function operationWarnings(now=simNow(),index=operationalIndex(now)){
       });
     }
     const late=lateInboundStatusForFlight(flight,now,{index});
-    if(late.active){
+    if(late.active&&!actualConflictFlightIds.has(flight.id)){
       add({
         id:`late-inbound:${flight.id}`,
         type:'late_inbound',

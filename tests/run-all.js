@@ -29,6 +29,7 @@ const browserFixtures = [
   'tests/aircraft-positioning-browser-fixture.html',
   'tests/flight-retention-browser-fixture.html',
   'tests/recurring-flight-removal-browser-fixture.html',
+  'tests/rotation-integrity-browser-fixture.html',
   'tests/route-planning-browser-fixture.html',
   'tests/holding-browser-fixture.html',
   'tests/performance-browser-fixture.html',
