@@ -275,6 +275,20 @@ function createFlightRecord({aircraftId,from,to,departure,fare,serviceId=null,se
   return f;
 }
 
+function recurringOccurrenceKey(flight){
+  return `${flight.serviceLeg}:${flight.departure}`;
+}
+
+function rememberRemovedRecurringOccurrence(flight){
+  const service=state.services.find(item=>item.id===flight.serviceId);
+  if(!service||!['outbound','return'].includes(flight.serviceLeg)) return;
+  service.removedOccurrences??=[];
+  const key=recurringOccurrenceKey(flight);
+  if(!service.removedOccurrences.some(item=>recurringOccurrenceKey(item)===key)){
+    service.removedOccurrences.push({serviceLeg:flight.serviceLeg,departure:flight.departure});
+  }
+}
+
 function ensureRecurringFlights(){
   if(!Array.isArray(state.services)) state.services=[];
   const horizon=simNow()+OPERATIONAL_FUTURE_FLIGHT_HORIZON;
@@ -286,13 +300,15 @@ function ensureRecurringFlights(){
     if(!ac){ svc.active=false; changed=true; continue; }
     const turnMin=effectiveTurnaroundMinutes(ac,svc.to,svc.turnaroundMin);
     const serviceFlights=state.flights.filter(f=>f.serviceId===svc.id).sort((a,b)=>a.departure-b.departure);
-    const outboundFlights=serviceFlights.filter(f=>f.serviceLeg==='outbound');
-    const returnFlights=serviceFlights.filter(f=>f.serviceLeg==='return');
-    for(let i=0;i<outboundFlights.length;i++){
-      const outbound=outboundFlights[i];
-      const nextOutbound=outboundFlights[i+1];
+    // Removed occurrences still reserve their place in the recurring programme.
+    const occurrences=serviceFlights.concat(svc.removedOccurrences||[]);
+    const occurrenceKeys=new Set(occurrences.map(recurringOccurrenceKey));
+    const outboundDepartures=occurrences.filter(f=>f.serviceLeg==='outbound').map(f=>f.departure).sort((a,b)=>a-b);
+    const returnFlights=occurrences.filter(f=>f.serviceLeg==='return');
+    for(const outbound of serviceFlights.filter(f=>f.serviceLeg==='outbound'&&!f.cancelled)){
+      const nextOutboundDeparture=outboundDepartures.find(departure=>departure>outbound.departure);
       const alreadyPaired=returnFlights.some(f=>
-        f.departure>outbound.departure && (!nextOutbound || f.departure<nextOutbound.departure)
+        f.departure>outbound.departure && (nextOutboundDeparture===undefined || f.departure<nextOutboundDeparture)
       );
       if(alreadyPaired) continue;
       const destinationRight=slotRightById(svc.destinationSlotRightId);
@@ -303,15 +319,17 @@ function ensureRecurringFlights(){
         : destinationRight
           ? timestampAtMinuteAfter(earliestReturn,destinationRight.minuteOfDay)
           : alignTimestampToAirportSlot(earliestReturn,svc.to);
-      if(returnDeparture<simNow() || (nextOutbound && returnDeparture>=nextOutbound.departure)) continue;
+      if(returnDeparture<simNow() || (nextOutboundDeparture!==undefined && returnDeparture>=nextOutboundDeparture)) continue;
       const returnEstimate=estimateFlight(svc.to,svc.from,ac,svc.fares||svc.fare,{departure:returnDeparture});
       if(!validateAircraftItinerary(ac,[{
         from:svc.to,to:svc.from,departure:returnDeparture,arrival:returnDeparture+returnEstimate.duration,label:`${svc.id} return`
       }]).ok) continue;
-      createFlightRecord({
+      const returning=createFlightRecord({
         aircraftId:svc.aircraftId,from:svc.to,to:svc.from,departure:returnDeparture,
         fare:svc.fares||svc.fare,serviceId:svc.id,serviceLeg:'return'
       });
+      occurrenceKeys.add(recurringOccurrenceKey(returning));
+      returnFlights.push(returning);
       changed=true;
     }
     let guard=0;
@@ -319,27 +337,25 @@ function ensureRecurringFlights(){
       const outboundEstimate=estimateFlight(svc.from,svc.to,ac,svc.fares||svc.fare,{departure:svc.nextDeparture});
       const destinationRight=slotRightById(svc.destinationSlotRightId);
       const earliestReturn=svc.nextDeparture+outboundEstimate.duration+turnMin*MIN;
-      const firstRotation=svc.lastGeneratedDeparture===null && svc.nextDeparture===svc.firstDeparture;
+      const firstRotation=svc.nextDeparture===svc.firstDeparture;
       const returnDeparture=firstRotation && Number.isFinite(svc.firstReturnDeparture)
         ? svc.firstReturnDeparture
         : destinationRight
           ? timestampAtMinuteAfter(earliestReturn,destinationRight.minuteOfDay)
           : alignTimestampToAirportSlot(earliestReturn,svc.to);
       const returnEstimate=estimateFlight(svc.to,svc.from,ac,svc.fares||svc.fare,{departure:returnDeparture});
-      const itinerary=validateAircraftItinerary(ac,[
-        {from:svc.from,to:svc.to,departure:svc.nextDeparture,arrival:svc.nextDeparture+outboundEstimate.duration,label:`${svc.id} outbound`},
-        {from:svc.to,to:svc.from,departure:returnDeparture,arrival:returnDeparture+returnEstimate.duration,label:`${svc.id} return`}
-      ]);
-      if(itinerary.ok){
-        createFlightRecord({
-          aircraftId:svc.aircraftId,from:svc.from,to:svc.to,
-          departure:svc.nextDeparture,fare:svc.fares||svc.fare,serviceId:svc.id,serviceLeg:'outbound'
-        });
-        createFlightRecord({
-        aircraftId:svc.aircraftId,from:svc.to,to:svc.from,
-        departure:returnDeparture,
-        fare:svc.fares||svc.fare,serviceId:svc.id,serviceLeg:'return'
-        });
+      const missingLegs=[
+        {from:svc.from,to:svc.to,departure:svc.nextDeparture,arrival:svc.nextDeparture+outboundEstimate.duration,serviceLeg:'outbound',label:`${svc.id} outbound`},
+        {from:svc.to,to:svc.from,departure:returnDeparture,arrival:returnDeparture+returnEstimate.duration,serviceLeg:'return',label:`${svc.id} return`}
+      ].filter(leg=>!occurrenceKeys.has(recurringOccurrenceKey(leg)));
+      if(missingLegs.length&&validateAircraftItinerary(ac,missingLegs).ok){
+        for(const leg of missingLegs){
+          createFlightRecord({
+            aircraftId:svc.aircraftId,from:leg.from,to:leg.to,departure:leg.departure,
+            fare:svc.fares||svc.fare,serviceId:svc.id,serviceLeg:leg.serviceLeg
+          });
+          occurrenceKeys.add(recurringOccurrenceKey(leg));
+        }
       }
 
       svc.lastGeneratedDeparture=svc.nextDeparture;
@@ -629,6 +645,7 @@ function removeCancelledFlight(flightId,{skipConfirm=false}={}){
   if(!flight.cancelled) return toast('Only cancelled flights can be removed from the schedule view.');
   if(!skipConfirm&&!AeroServices.confirm(`Remove cancelled flight ${flight.id} from the operations board?`)) return false;
   const t=simNow();
+  rememberRemovedRecurringOccurrence(flight);
   resolveRemovedScheduleArtifacts([flight.id],flight.id,t);
   state.flights=state.flights.filter(f=>f.id!==flight.id);
   for(const duty of state.crewDuties||[]) duty.flightIds=(duty.flightIds||[]).filter(id=>id!==flight.id);
