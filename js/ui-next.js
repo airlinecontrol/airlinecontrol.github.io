@@ -404,10 +404,10 @@ function attentionForFlight(flight){
   }
   const slot=flightSlotImpactState(flight);
   if(slot.impacted) return {label:`Departure slot ${slot.actualMissed?'missed':'at risk'} · ${flight.slotDelayMin||0} min wait`,critical:false};
-  if(flight.weatherDelayMin) return {label:`Weather · ${flight.weatherDelayMin} min`,critical:false};
+  const flow=departureFlowConstraintForFlight(flight);
+  if(flow.minutes) return {label:`${flow.label} · ${flow.minutes} min`,critical:false};
   if(flight.nightRestrictionConflictDelayMin) return {label:`Night curfew decision required · ${flight.nightRestrictionConflictDelayMin} min`,critical:true};
   if(flight.nightRestrictionDelayMin) return {label:`${flight.nightRestrictionLabel||'Night operations'} · ${flight.nightRestrictionDelayMin} min`,critical:false};
-  if(flight.airportDelayMin||flight.airspaceDelayMin) return {label:`Network restriction · ${(flight.airportDelayMin||0)+(flight.airspaceDelayMin||0)} min`,critical:false};
   if(flight.handlingDelayMin) return {label:`${flight.handlingDelayCause||'Ground handling'} · ${flight.handlingDelayMin} min`,critical:false};
   const delay=flightTotalDepartureDelayMin(flight);
   return delay?{label:`Departure delayed ${delay} min`,critical:false}:null;

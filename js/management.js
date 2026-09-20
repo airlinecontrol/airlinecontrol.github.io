@@ -102,7 +102,7 @@ window.AeroManagement = (() => {
     }
     for(const flight of state.flights||[]){
       const defaults={
-        manualDelayMin:0,weatherDelayMin:0,liveWeatherDelayMin:0,weatherChecked:false,weatherCode:'',
+        manualDelayMin:0,weatherDelayMin:0,weatherChecked:false,weatherCode:'',
         cancelled:false,cancelledAt:0,cancellationCost:0,flightType:'passenger',
         connectionCriticalPax:0,
         issueAcknowledgedAt:0

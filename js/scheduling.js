@@ -255,7 +255,7 @@ function createFlightRecord({aircraftId,from,to,departure,fare,serviceId=null,se
     maintenanceCost:0,weatherCost:0,defectSeverity:'',flightType,cancelled:false,cancelledAt:0,cancellationCost:0,cancellationReason:'',
     settled:false,departureLogged:false,serviceId,serviceLeg,
     handlingDelayMin:0,technicalDelayMin:0,staffingDelayMin:0,staffingBlocked:false,staffingShortage:'',
-    handlingDelayCause:'',manualDelayMin:0,weatherDelayMin:0,liveWeatherDelayMin:0,weatherChecked:false,weatherCode:'',maintenanceDelayMin:0,maintenanceBlocked:false,
+    handlingDelayCause:'',manualDelayMin:0,weatherDelayMin:0,weatherChecked:false,weatherCode:'',maintenanceDelayMin:0,maintenanceBlocked:false,
       positioningDelayMin:0,positioningBlocked:false,issueAcknowledgedAt:0,issueAcknowledgedKey:'',
       problemDelayMin:0,problemChecks:{},diversionAirport:'',operationalDurationMs:null,
       enrouteDelayMin:0,holdingDelayMin:0,holding:null,propagatedDelayMin:0,slotDelayMin:0,turnaroundRecoveryMin:0,slotPriorityMin:0,

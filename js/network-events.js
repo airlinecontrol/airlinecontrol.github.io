@@ -456,7 +456,6 @@
     const networkId=event.networkId||event.id;
     if(!flight.networkConstraintIds.includes(networkId)) flight.networkConstraintIds.push(networkId);
     flight.networkConstraintLabel=label;
-    flight.airspaceConstraintLabel=label;
   }
 
   function applyDelayToFlight(flight,event,delayMin,t,action){
@@ -465,18 +464,19 @@
     addFlightNetworkTag(flight,event,`${event.label||'Network event'}: ${labelForAction(action)}`);
     if(typeof flightHasDeparted==='function'&&flightHasDeparted(flight,t)){
       flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,delay);
+      flight.enrouteDelayCause=flight.networkConstraintLabel;
     }else{
       flight.airspaceDelayMin=Math.max(Number(flight.airspaceDelayMin)||0,delay);
+      flight.airspaceConstraintLabel=flight.networkConstraintLabel;
     }
     return delay;
   }
 
   function actionDelayForFlight(event,flight,action,t){
     const base=Math.max(8,finite(event.delayMin,25));
-    if(action==='reroute_around') return Math.max(8,finite(event.rerouteDelayMin,Math.round(base*.65)));
     if(action==='accept_tactical') return Math.max(8,Math.round(base*.75));
     if(action==='hold_departures'&&!(typeof flightHasDeparted==='function'&&flightHasDeparted(flight,t))){
-      return Math.max(base,Math.ceil((finite(event.activeUntil,t)-t)/MINUTE));
+      return Math.max(0,Math.ceil((finite(event.activeUntil,t)-flight.departure)/MINUTE));
     }
     return base;
   }
@@ -514,16 +514,18 @@
     if(!flights.length) return {ok:false,reason:'No currently affected flights are available for this network plan.'};
     let routed=0,totalDelay=0;
     for(const flight of flights){
-      let delay=actionDelayForFlight(event,flight,action,t);
       if(action==='reroute_around'){
         const revision=global.AeroRoutePlanning?.createAvoidanceRouteRevision?.(flight,event,{
           createdAt:t,
           reason:`${event.label||'Network'} avoidance route`
         });
-        if(revision) routed++;
-        delay=Math.max(delay,Math.max(0,Number(revision?.estimatedTimeDeltaMin)||0));
+        if(!revision) continue;
+        routed++;
+        addFlightNetworkTag(flight,event,`${event.label||'Network event'}: ${labelForAction(action)}`);
+        totalDelay+=Math.max(0,global.AeroRoutePlanning.applyRouteRevisionTiming(flight,revision));
+      }else{
+        totalDelay+=applyDelayToFlight(flight,event,actionDelayForFlight(event,flight,action,t),t,action);
       }
-      totalDelay+=applyDelayToFlight(flight,event,delay,t,action);
     }
     const averageDelay=Math.round(totalDelay/flights.length);
     const responseMin=Math.max(6,Math.round((task?.timing?.responseMin||0)||8+Math.min(18,flights.length*1.6)));

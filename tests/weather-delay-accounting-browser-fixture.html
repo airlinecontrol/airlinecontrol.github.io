@@ -1,0 +1,131 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Weather delay accounting</title>
+<pre id="result">RUNNING</pre>
+<iframe id="game" style="width:1440px;height:900px"></iframe>
+<script>
+(async()=>{
+  const result=document.getElementById('result'),frame=document.getElementById('game');
+  const MIN=60000,now=Date.UTC(2026,8,18,15,0),failures=[];
+  const assert=(ok,message)=>{if(!ok)throw new Error(message);};
+  let w,ac;
+  function reset(){
+    w.eval(`state=newState();state.clock={simBase:${now},realBase:Date.now(),speed:0,paused:true};state.ops.automaticDisruptions=false;invalidateOperationalIndex();`);
+    ac=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'ATL');
+    for(const airport of ['ATL','JFK']){
+      for(const role of w.eval('Object.keys(PERSONNEL)'))w.changeStaff(airport,role,100);
+      for(const role of ['captains','firstOfficers'])w.changeQualification(airport,role,w.AeroManagement.aircraftFamily(ac.model),100);
+    }
+    w.AeroWeatherEngine.weatherAt=(airport,t)=>({airport,level:'normal',type:'clear',conditions:'Normal operations',delayMin:0,capacityFactor:1,windKph:0,gustKph:0,visibilityKm:20,ceilingFt:10000,validFrom:t,validUntil:t+180*MIN});
+    w.AeroWeatherEngine.weatherCells=()=>[];
+    w.AeroRoutePlanning.clearRouteWeatherCache();
+  }
+  function flight(offset=60){return w.createFlightRecord({aircraftId:ac.id,from:'ATL',to:'JFK',departure:now+offset*MIN,fare:140});}
+  function check(name,run){reset();try{run();}catch(error){failures.push(name+': '+error.message);}}
+  function hazard(f){
+    const route=w.AeroRoutePlanning.activeRevision(f.routePlan);
+    const a=route.waypoints[0],b=route.waypoints.at(-1);
+    return {id:'SHARED-WX',label:'Thunderstorm cells',severity:'severe',lat:(a.lat+b.lat)/2,lon:(a.lon+b.lon)/2,radiusKm:180,delayMin:28};
+  }
+  function withHazard(f,run){
+    const original=w.AeroRoutePlanning.routeHazardSummaryForFlight,cell=hazard(f);
+    w.AeroRoutePlanning.routeHazardSummaryForFlight=()=>({hazards:[cell],delayMin:28,severe:true,label:cell.label,level:'severe'});
+    try{run(cell);}finally{w.AeroRoutePlanning.routeHazardSummaryForFlight=original;}
+  }
+  try{
+    localStorage.clear();
+    const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+    frame.src='../index.html?fixture=weather-delay-accounting';await loaded;w=frame.contentWindow;
+    check('Route forecast is not charged as two ground holds',()=>{
+      const f=flight();
+      const baseline=w.networkConstraintsForFlight(f).airspace;
+      withHazard(f,()=>{
+        const actual=w.networkConstraintsForFlight(f).airspace;
+        assert(actual.delayMin===baseline.delayMin&&actual.reason===baseline.reason,'Weather overwrote the independent airspace restriction');
+        w.maybeApplyNetworkConstraints(f,now);
+        w.maybeApplyWeatherDelay(f,now);
+        assert(f.weatherDelayMin===0,'Route-only weather delayed departure');
+        assert(f.airspaceDelayMin===baseline.delayMin,'Route-only weather became an airspace delay');
+        assert(!w.slotMissContextForFlight(f).causeBreakdown.some(item=>item.label==='Weather delay'),'Route forecast appears as applied ground delay');
+      });
+    });
+    check('Concurrent weather, airport and airspace holds overlap',()=>{
+      const f=flight();
+      Object.assign(f,{weatherDelayMin:20,airportDelayMin:20,airspaceDelayMin:20});
+      w.recalculateOperations();
+      assert(f.actualDeparture===f.departure+20*MIN,`Equal flow holds added together: ${(f.actualDeparture-f.departure)/MIN}m`);
+      const labels=['Weather delay','Airport flow restriction','Airspace restriction'];
+      let causes=w.slotMissContextForFlight(f).causeBreakdown.filter(item=>labels.includes(item.label));
+      assert(causes.length===1&&causes[0].minutes===20,'Breakdown lists duplicate applied flow penalties');
+      f.airspaceDelayMin=35;w.recalculateOperations();
+      assert(f.actualDeparture-f.slotDelayMin*MIN===f.departure+35*MIN,'Independent later airspace window was not preserved before slot rounding');
+      causes=w.crewDutyExtensionDelayCauses({flightIds:[f.id]}).filter(item=>labels.includes(item.label));
+      assert(causes.length===1&&causes[0].label==='Airspace restriction'&&causes[0].minutes===35,'Crew explanation does not use the same limiting flow window');
+      f.manualDelayMin=50;w.recalculateOperations();
+      assert(f.actualDeparture-f.slotDelayMin*MIN===f.departure+50*MIN,'Expired flow window was added again after a longer OCC hold');
+    });
+    check('Predeparture detour extends flight time, not departure hold',()=>{
+      const f=flight();f.weatherDelayMin=20;w.recalculateOperations();
+      const departure=f.actualDeparture,duration=f.operationalDurationMs||f.arrival-f.departure;
+      withHazard(f,()=>{
+        const action=w.applyDispatchRouteRevisionNow(f,'weather_detour',{t:now});
+        const delta=action.revision.appliedTimeDeltaMin;
+        assert(action.ok&&delta>0,'Fixture did not produce a longer avoidance route');
+        assert(f.operationalDurationMs===duration+delta*MIN,'Route duration did not use waypoint delta');
+        assert(!f.airspaceDelayMin&&!f.enrouteDelayMin,'Detour added a second generic penalty');
+        w.recalculateOperations();
+        assert(f.actualDeparture===departure,'Reroute incorrectly moved departure');
+        assert(f.actualArrival===departure+duration+delta*MIN,'Arrival does not contain exactly the ground hold plus route time');
+        const analysis=w.flightDelayAnalysis(f);
+        assert(analysis.causes.some(item=>item.label==='Route change'&&item.minutes===delta),'Dispatch does not explain extra route time');
+        assert(!analysis.causes.some(item=>item.label==='Arrival delay'),'Explained route time was counted again as arrival delay');
+        const fuel=w.flightFuelPlan(f.from,f.to,ac),routeBurn=w.flightRouteFuelBurnGallons(f,fuel);
+        assert(routeBurn>0,'Longer route has no fuel requirement');
+        assert(w.fuelFlight(f,now,true),'Fixture could not fuel the revised flight');
+        assert(f.fuelRequiredGallons===Math.min(fuel.fuelCapacityGal,Math.ceil(fuel.requiredGal+routeBurn)),'Predeparture fuel uplift omitted the extra route distance');
+        const applied=f.operationalDurationMs;
+        assert(w.AeroRoutePlanning.applyRouteRevisionTiming(f,action.revision)===0&&f.operationalDurationMs===applied,'Repeated application duplicated the route time');
+        const saved=JSON.parse(JSON.stringify(f));
+        assert(w.AeroRoutePlanning.applyRouteRevisionTiming(saved,w.AeroRoutePlanning.activeRevision(saved.routePlan))===0&&saved.operationalDurationMs===applied,'Save/load forgot that timing was applied');
+        w.recalculateOperations();assert(f.operationalDurationMs===applied,'Recalculation duplicated route time');
+        const direct=w.applyDispatchRouteRevisionNow(f,'direct',{t:now});
+        assert(direct.ok&&direct.revision.appliedTimeDeltaMin<0,'Direct refile did not remove the detour time');
+        assert(f.operationalDurationMs===applied+direct.revision.appliedTimeDeltaMin*MIN,'Replacement route stacked instead of replacing remaining geometry');
+      });
+    });
+    check('OCC time controls still delay a flight beyond its flow restriction',()=>{
+      const f=flight();f.weatherDelayMin=40;w.recalculateOperations();
+      const original=f.actualDeparture;
+      w.delayFlight(f.id,15);
+      assert(f.actualDeparture>=original+15*MIN,'Add delay was swallowed by the existing flow hold');
+      const target=f.actualDeparture+45*MIN;
+      w.delayFlightUntil(f.id,target);
+      assert(f.actualDeparture>=target,'Hold until did not honour the selected departure time');
+    });
+    check('Live weather uses route time once and preserves unrelated airborne delay',()=>{
+      const f=flight(-45);Object.assign(f,{departureLogged:true,actualDeparture:f.departure,enrouteDelayMin:12});
+      w.recalculateOperations();const before=f.operationalDurationMs||f.arrival-f.departure;
+      const burnBefore=w.fuelMarginContextForFlight(f,now).delayBurnGal;
+      w.eval('state.ops.automaticDisruptions=true');
+      withHazard(f,()=>{
+        const position=w.AeroRoutePlanning.sampleRoutePosition(f,now);
+        assert(w.maybeApplyLiveWeatherImpact(f,now),'Live weather did not apply');
+        const revision=w.AeroRoutePlanning.activeRevision(f.routePlan),delta=revision.appliedTimeDeltaMin;
+        assert(Number.isFinite(delta)&&f.operationalDurationMs===before+delta*MIN,'Live weather did not use the same route timing helper');
+        assert(f.enrouteDelayMin===12&&!f.weatherDelayMin,'Live route weather overwrote or duplicated other timing');
+        assert(w.fuelMarginContextForFlight(f,now).delayBurnGal>burnBefore,'Live detour is consuming no additional fuel');
+        const duration=f.operationalDurationMs;
+        w.maybeApplyLiveWeatherImpact(f,now+MIN);
+        assert(f.operationalDurationMs===duration,'Repeated weather sample charged the same cell twice');
+        const after=w.AeroRoutePlanning.sampleRoutePosition(f,now);
+        assert(Math.abs(after.lat-position.lat)<.001&&Math.abs(after.lon-position.lon)<.001,'New remaining route reused whole-flight progress and skipped part of its distance');
+        const direct=w.applyDispatchRouteRevisionNow(f,'direct',{t:now});
+        const repeated=w.applyDispatchRouteRevisionNow(f,'direct',{t:now});
+        assert(direct.ok&&repeated.ok&&repeated.revision.appliedTimeDeltaMin===0,'Repeating the same airborne route charged a phantom distance change');
+      });
+    });
+    if(failures.length)throw new Error(failures.join('\n'));
+    result.textContent='PASS weather/flow ownership, route timing, idempotency and delay explanations';
+  }catch(error){result.textContent='FAIL\n'+(error.stack||error);}
+})();
+</script>

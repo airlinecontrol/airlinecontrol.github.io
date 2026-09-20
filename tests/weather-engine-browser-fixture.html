@@ -94,8 +94,8 @@
       level:'caution'
     });
     assert(w.maybeApplyWeatherDelay(forecastFlight,now+10*60_000),'pre-departure weather delay was not applied');
-    assert(forecastFlight.weatherCause?.sources?.some(item=>item.kind==='route_forecast'&&item.hazards.some(hazard=>hazard.id==='DEP-WX')),'pre-departure weather provenance did not store route forecast details');
-    assert(w.slotMissContextForFlight(forecastFlight).causeBreakdown.some(item=>item.label==='Weather delay'&&item.detail.includes('Route forecast')&&item.detail.includes('DEP-WX')),'slot/weather cause detail does not explain weather source and timestamp');
+    assert(forecastFlight.weatherDelayMin===18,'route hazard was charged as a departure weather hold');
+    assert(w.slotMissContextForFlight(forecastFlight).causeBreakdown.some(item=>item.label==='Weather delay'&&item.minutes===18&&item.detail.includes('Arrival forecast')&&item.detail.includes('AMS')),'departure flow cause does not explain the airport weather forecast');
     w.AeroWeatherEngine.weatherAt=originalWeather;
     w.AeroWeatherEngine.routeHazardSummary=originalRoute;
     w.AeroRoutePlanning.routeHazardSummaryForFlight=originalRoutePlanSummary;
@@ -108,7 +108,9 @@
       level:'severe'
     });
     assert(w.maybeApplyLiveWeatherImpact(flight,now+31*60_000),'route weather impact was not applied');
-    assert(flight.enrouteDelayMin>=28,'route weather did not add enroute delay');
+    const weatherRevision=w.AeroRoutePlanning.activeRevision(flight.routePlan);
+    assert(Number.isFinite(weatherRevision.appliedTimeDeltaMin)&&weatherRevision.appliedTimeDeltaMin===weatherRevision.estimatedTimeDeltaMin,'route weather timing does not match the changed waypoint distance');
+    assert(!flight.enrouteDelayMin,'route weather added a generic penalty on top of the revised flying time');
     assert(flight.weatherRouteHazard.includes('Thunderstorm'),'route weather hazard label was not saved');
     assert(flight.weatherCause?.sources?.some(item=>item.kind==='live_route'&&item.hazards.some(hazard=>hazard.id==='TEST-WX')),'live route weather provenance did not store the triggering cell');
     assert(!w.openProblemsForFlight(flight.id).some(item=>item.type==='airborne_atc_reroute'),'route weather should not open a routine reroute problem');

@@ -817,7 +817,7 @@ function migrateState(parsed){
     if(!ac.cabin) ac.cabin=defaultCabin(ac.model);
   }
   for(const f of parsed.flights){
-    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','problemDelayMin','enrouteDelayMin','holdingDelayMin','enrouteRecoveryMin','enrouteRecoveryCost','enrouteRecoveryFuelPenaltyGal','liveWeatherDelayMin','propagatedDelayMin','slotDelayMin','turnaroundRecoveryMin','slotPriorityMin','nightRestrictionDelayMin','nightRestrictionConflictDelayMin','taxiOutDelayMin','taxiInDelayMin','deicingCompletedAt','deicingHoldoverUntil','nightRecoveryApprovedAt','problemHoldStartedAt','problemHoldReleasedAt','positioningHoldStartedAt','positioningHoldReleasedAt','staffingHoldStartedAt','staffingHoldReleasedAt','maintenanceHoldStartedAt','maintenanceHoldReleasedAt'])
+    for(const k of ['handlingDelayMin','technicalDelayMin','staffingDelayMin','problemDelayMin','enrouteDelayMin','holdingDelayMin','enrouteRecoveryMin','enrouteRecoveryCost','enrouteRecoveryFuelPenaltyGal','propagatedDelayMin','slotDelayMin','turnaroundRecoveryMin','slotPriorityMin','nightRestrictionDelayMin','nightRestrictionConflictDelayMin','taxiOutDelayMin','taxiInDelayMin','deicingCompletedAt','deicingHoldoverUntil','nightRecoveryApprovedAt','problemHoldStartedAt','problemHoldReleasedAt','positioningHoldStartedAt','positioningHoldReleasedAt','staffingHoldStartedAt','staffingHoldReleasedAt','maintenanceHoldStartedAt','maintenanceHoldReleasedAt'])
       if(f[k]===undefined) f[k]=0;
     if(!f.holding || typeof f.holding!=='object') f.holding=null;
     if(f.enrouteRecoveryPlan===undefined) f.enrouteRecoveryPlan='';

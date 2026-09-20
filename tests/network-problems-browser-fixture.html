@@ -136,11 +136,17 @@
     assert(feature?.geometry?.type==='Polygon','network event polygon was not rendered into the map source');
     assert(feature.properties.tooltip.includes('affected flights'),'network event map tooltip does not summarize affected flights');
 
+    const beforeReroute=[first,second].map(flight=>({duration:flight.operationalDurationMs||flight.arrival-flight.departure,airspace:flight.airspaceDelayMin||0}));
     const action=w.AeroNetworkEvents.applyNetworkEventAction(problem,'reroute_around',{t:now+5*60_000});
     assert(action.ok,`network route plan was rejected: ${action.reason||'unknown'}`);
     assert(first.networkConstraintIds.includes('fixture-airspace-closure')&&second.networkConstraintIds.includes('fixture-airspace-closure'),'network constraint tag was not applied to all affected flights');
     assert(w.AeroRoutePlanning.activeRevision(first.routePlan)?.mode==='network_avoidance','first flight did not receive a network avoidance route revision');
     assert(w.AeroRoutePlanning.activeRevision(second.routePlan)?.mode==='network_avoidance','second flight did not receive a network avoidance route revision');
+    for(const [index,flight] of [first,second].entries()){
+      const revision=w.AeroRoutePlanning.activeRevision(flight.routePlan);
+      assert(flight.operationalDurationMs===beforeReroute[index].duration+revision.appliedTimeDeltaMin*60_000,'network reroute does not use the actual route time delta');
+      assert((flight.airspaceDelayMin||0)===beforeReroute[index].airspace&&!flight.enrouteDelayMin,'network reroute charged a second generic delay');
+    }
     assert(problem.status==='open','shared network problem should remain visible while the network event is still active');
     w.eval(`state.networkEvents.find(event=>event.id==='NET-FIXTURE-AIRSPACE').activeUntil=${now+6*60_000}`);
     w.AeroNetworkEvents.processNetworkOperationalProblems(now+45*60_000);

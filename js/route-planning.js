@@ -359,6 +359,11 @@
     if(!flight) return 0;
     if(typeof flightHasDeparted==='function' && !flightHasDeparted(flight,t)) return 0;
     if(typeof flightHasCompleted==='function' && flightHasCompleted(flight,t)) return 1;
+    const revision=activeRevision(flight.routePlan);
+    if(revision?.startedAirborne&&typeof flightMovementTimes==='function'){
+      const movement=flightMovementTimes(flight);
+      return clampRoute((t-revision.createdAt)/Math.max(ROUTE_MIN,movement.landingAt-revision.createdAt),0,1);
+    }
     if(typeof flightProgress==='function') return clampRoute(flightProgress(flight,t),0,1);
     if(typeof flightMovementTimes==='function'){
       const movement=flightMovementTimes(flight);
@@ -578,6 +583,28 @@
     flight.routePlan=plan;
     return revision;
   }
+  function applyRouteRevisionTiming(flight,revision){
+    if(!revision||activeRevision(flight?.routePlan)!==revision||Number.isFinite(revision.appliedTimeDeltaMin)) return 0;
+    const duration=Number.isFinite(flight.operationalDurationMs)?flight.operationalDurationMs:flight.arrival-flight.departure;
+    const elapsed=revision.startedAirborne?Math.max(0,revision.createdAt-flightActualDeparture(flight)):0;
+    const revisedDuration=Math.max(elapsed+ROUTE_MIN,duration+finite(revision.estimatedTimeDeltaMin,0)*ROUTE_MIN);
+    revision.appliedTimeDeltaMin=(revisedDuration-duration)/ROUTE_MIN;
+    flight.operationalDurationMs=revisedDuration;
+    return revision.appliedTimeDeltaMin;
+  }
+  function routeTimingImpactForFlight(flight){
+    const revisions=flight?.routePlan?.revisions||[];
+    let minutes=0,detail='';
+    for(const revision of revisions){
+      // A new destination replaces the duration baseline, including earlier detours.
+      if(['diversion','return_origin'].includes(revision.mode)){ minutes=0; detail=''; }
+      if(Number.isFinite(revision.appliedTimeDeltaMin)){
+        minutes+=revision.appliedTimeDeltaMin;
+        detail=revision.reason||'Waypoint route changed';
+      }
+    }
+    return {minutes:Math.round(minutes),detail};
+  }
   function routeReasonForMode(mode,target){
     if(mode==='direct') return 'Direct routing revision';
     if(mode==='speed') return 'Cost-index recommendation; geometry unchanged';
@@ -691,6 +718,8 @@
     ensureFlightRoutePlan,
     buildFiledRoutePlan,
     createRouteRevision,
+    applyRouteRevisionTiming,
+    routeTimingImpactForFlight,
     createAvoidanceRouteRevision,
     applyDiversionRouteRevision,
     noteRecoveryRouteRevision,

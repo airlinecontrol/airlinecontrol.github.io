@@ -203,9 +203,14 @@ function flightDelayAnalysis(flight,index=null){
   const previous=index?.previousFlightById?.get(flight.id)||previousAircraftFlight(flight);
   const context=slotMissContextForFlight(flight,previous);
   const causes=(context.causeBreakdown||[]).filter(item=>item.minutes>0).map(item=>({...item}));
+  const route=window.AeroRoutePlanning?.routeTimingImpactForFlight?.(flight);
+  if(route?.minutes) causes.push({label:'Route change',minutes:route.minutes,detail:route.detail});
   if((Number(flight.enrouteDelayMin)||0)>0) causes.push({label:'Enroute delay',minutes:Math.round(Number(flight.enrouteDelayMin)||0),detail:flight.enrouteDelayCause||'Airborne routing, holding, or flight-deck operational impact'});
   if((Number(flight.enrouteRecoveryMin)||0)>0) causes.push({label:'En-route recovery',minutes:-Math.round(Number(flight.enrouteRecoveryMin)||0),detail:flight.enrouteRecoveryCause||'OCC coordinated time recovery en route'});
-  if(arrDelay>depDelay && !(Number(flight.enrouteDelayMin)||0)) causes.push({label:'Arrival delay',minutes:arrDelay-depDelay,detail:'Arrival moved later than departure delay alone'});
+  const arrivalEffects=(Number(flight.enrouteDelayMin)||0)+(route?.minutes||0)-(Number(flight.enrouteRecoveryMin)||0)+
+    (Number(flight.taxiOutDelayMin)||0)+(Number(flight.taxiInDelayMin)||0)+(Number(flight.stationArrivalDelayMin)||0);
+  const unexplainedArrivalDelay=arrDelay-depDelay-arrivalEffects;
+  if(unexplainedArrivalDelay>0) causes.push({label:'Arrival delay',minutes:unexplainedArrivalDelay,detail:'Arrival moved later than the attributed timing effects'});
   if(!causes.length) causes.push({label:'Recorded timing shift',minutes:totalDelay,detail:'Actual timing differs from plan'});
   const ordered=causes.sort((a,b)=>Math.abs(b.minutes)-Math.abs(a.minutes)||a.label.localeCompare(b.label)).slice(0,6);
   const primary=ordered.find(item=>item.minutes>0)||ordered[0]||null;

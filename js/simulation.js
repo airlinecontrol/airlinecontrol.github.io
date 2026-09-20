@@ -552,21 +552,33 @@ function networkConstraintsForFlight(flight){
   const activeRoute=window.AeroRoutePlanning?.activeRevision?.(routePlan);
   const distance=activeRoute?.distanceKm||distanceKm(AIRPORTS[flight.from],AIRPORTS[flightOperationalDestination(flight)]);
   const airspace=OperationalIntelligence.airspaceConstraint(flight.from,flightOperationalDestination(flight),flight.departure,distance);
-  const routeWeather=window.AeroRoutePlanning?.routeHazardSummaryForFlight?.(flight,flight.departure,{forecast:true})
-    ||window.AeroWeatherEngine?.routeHazardSummary?.(flight.from,flightOperationalDestination(flight),flight.departure);
   const night=flightNightRestriction(flight,flight.departure);
-  if(routeWeather?.delayMin){
-    const weatherDelay=Math.min(25,routeWeather.delayMin);
-    if(weatherDelay>airspace.delayMin){
-      airspace.delayMin=weatherDelay;
-      airspace.reason=routeWeather.label||'convective weather avoidance';
-      airspace.capacityFactor=routeWeather.severe ? .7 : .82;
-    }
-  }
   return {
     airport:OperationalIntelligence.airportConstraint(flight.from,flight.departure,departureWeather),
     airspace,night
   };
+}
+
+function departureFlowConstraintForFlight(flight,{includeDetail=false}={}){
+  const constraints=[
+    {label:'Weather delay',minutes:flight.weatherDelayMin,detail:'Airport weather flow restriction'},
+    {label:'Airport flow restriction',minutes:flight.airportDelayMin,detail:flight.airportConstraintLabel||'Departure airport flow restriction'},
+    {label:'Airspace restriction',minutes:flight.airspaceDelayMin,detail:flight.airspaceConstraintLabel||'Route or airspace flow restriction'}
+  ].map(item=>({...item,minutes:Math.max(0,Math.round(Number(item.minutes)||0))}));
+  // Concurrent flow windows constrain the same departure; their waits do not add up.
+  const limiting=constraints.sort((a,b)=>b.minutes-a.minutes)[0];
+  if(includeDetail&&limiting.minutes&&limiting.label==='Weather delay'){
+    const sources=(flight.weatherCause?.sources||[]).filter(source=>['departure_forecast','arrival_forecast'].includes(source.kind));
+    limiting.detail=weatherCauseText({sources})||limiting.detail;
+  }
+  return limiting;
+}
+
+function flightDepartureWorkReadyAt(flight){
+  const minutes=['handlingDelayMin','technicalDelayMin','staffingDelayMin','manualDelayMin',
+    'problemDelayMin','maintenanceDelayMin','positioningDelayMin']
+    .reduce((sum,key)=>sum+(Number(flight[key])||0),0);
+  return flight.departure+minutes*MIN;
 }
 
 function nightConflictSourceKey(flight,night){
@@ -753,7 +765,6 @@ function recalculateOperations(){
     f.enrouteDelayMin=Number(f.enrouteDelayMin)||0;
     f.manualDelayMin=Number(f.manualDelayMin)||0;
     f.weatherDelayMin=Number(f.weatherDelayMin)||0;
-    f.liveWeatherDelayMin=Number(f.liveWeatherDelayMin)||0;
     f.problemDelayMin=Number(f.problemDelayMin)||0;
     f.maintenanceDelayMin=Number(f.maintenanceDelayMin)||0;
     f.positioningDelayMin=Number(f.positioningDelayMin)||0;
@@ -783,11 +794,8 @@ function recalculateOperations(){
     let location=prev?flightOperationalDestination(prev):ac.location;
     for(const f of flights){
       if(completed.has(f.id)||departed.has(f.id)) continue;
-      const baseReady=f.departure+(
-        f.handlingDelayMin+f.technicalDelayMin+f.staffingDelayMin+f.manualDelayMin+
-        f.weatherDelayMin+f.problemDelayMin+f.maintenanceDelayMin+f.positioningDelayMin+
-        f.airportDelayMin+f.airspaceDelayMin
-      )*MIN;
+      const baseReady=flightDepartureWorkReadyAt(f);
+      const flowReadyAt=f.departure+departureFlowConstraintForFlight(f).minutes*MIN;
       const connectedPrevious=prev?{...prev,operationalDestination:flightOperationalDestination(prev)}:null;
       const minimumTurnMin=flightMinimumTurnMinutes(f,ac);
       const groundPhase=AeroGroundOperations.departurePhase({
@@ -798,7 +806,7 @@ function recalculateOperations(){
       f.groundReadyAt=groundPhase.readyAt;
       f.groundPhaseKind=groundPhase.kind;
       const aircraftReadyAt=prev?flightActualArrival(prev)+minimumTurnMin*MIN:0;
-      let ready=Math.max(baseReady,groundPhase.readyAt,aircraftReadyAt);
+      let ready=Math.max(baseReady,flowReadyAt,groundPhase.readyAt,aircraftReadyAt);
       ready=Math.max(ready,crewFlightCoverageStatus(f,now).readyAt,Number(f.crewAssignmentReadyAt)||0);
       const stationReady=Math.max(stationDepartureReadyAt(f),prev&&flightOperationalDestination(prev)===f.from?stationPostflightReadyAt(prev):0);
       f.stationServiceDelayMin=Math.max(0,Math.ceil((stationReady-ready)/MIN));
@@ -1047,14 +1055,13 @@ function slotMissContextForFlight(flight,previous=null){
   addSlotCause(causes,'Technical delay',flight.technicalDelayMin,'Aircraft technical work before departure readiness');
   addSlotCause(causes,'Personnel shortfall',flight.staffingDelayMin,flight.staffingShortage||'Required crew or station personnel not ready');
   addSlotCause(causes,'Manual OCC hold',flight.manualDelayMin,'Dispatcher-entered departure hold');
-  addSlotCause(causes,'Weather delay',(flight.weatherDelayMin||0)+(flight.liveWeatherDelayMin||0),weatherCauseText(flight.weatherCause)||flight.weatherCode||flight.weatherRouteHazard||'Weather impact on departure, arrival, or route');
+  const flow=departureFlowConstraintForFlight(flight,{includeDetail:true});
+  addSlotCause(causes,flow.label,flow.minutes,flow.detail);
   addSlotCause(causes,'Taxi-out delay',flight.taxiOutDelayMin,taxiCauseText(flight,'out')||'Taxi-out sequencing or surface movement delay');
   addSlotCause(causes,'Taxi-in delay',flight.taxiInDelayMin,taxiCauseText(flight,'in')||'Taxi-in sequencing or stand arrival delay');
   addSlotCause(causes,'Problem response',flight.problemDelayMin,'Open problem coordination added delay');
   addSlotCause(causes,'Maintenance hold',flight.maintenanceDelayMin,'Maintenance availability or inspection hold');
   addSlotCause(causes,'Aircraft positioning',flight.positioningDelayMin,'Aircraft not available at the planned origin');
-  addSlotCause(causes,'Airport flow restriction',flight.airportDelayMin,flight.airportConstraintLabel||'Departure airport flow restriction');
-  addSlotCause(causes,'Airspace restriction',flight.airspaceDelayMin,flight.airspaceConstraintLabel||'Route or airspace flow restriction');
   addSlotCause(causes,'Night operations',flight.nightRestrictionDelayMin,flight.nightRestrictionLabel||'Curfew or night quota constraint');
   const primary=causes.slice().sort((a,b)=>b.minutes-a.minutes)[0];
   return {
@@ -1086,6 +1093,17 @@ function airborneContextForFlight(flight,t=simNow()){
   };
 }
 
+function flightRouteFuelBurnGallons(flight,performance){
+  const minutes=window.AeroRoutePlanning?.routeTimingImpactForFlight?.(flight)?.minutes||0;
+  return Math.max(0,minutes)*performance.burnGalPerHour/60;
+}
+
+function flightAdditionalFuelBurnGallons(flight,performance){
+  return flightRouteFuelBurnGallons(flight,performance)+
+    Math.max(0,Number(flight.enrouteDelayMin)||0)*performance.burnGalPerHour/60*.55+
+    Math.max(0,Number(flight.enrouteRecoveryFuelPenaltyGal)||0);
+}
+
 function fuelMarginContextForFlight(flight,t=simNow()){
   const aircraft=state.aircraft.find(item=>item.id===flight.aircraftId);
   if(!aircraft) return null;
@@ -1096,10 +1114,9 @@ function fuelMarginContextForFlight(flight,t=simNow()){
   const tripBurn=Number(flight.tripFuelGallons)||plan.tripBurnGal;
   const reserve=Number(flight.fuelReserveGallons)||plan.reserveGal;
   const onboard=Number(flight.fuelOnboardAtDeparture)||Number(aircraft.fuelGallons)||plan.requiredGal;
-  const delayBurn=Math.max(0,Number(flight.enrouteDelayMin)||0)*performance.burnGalPerHour/60*.55;
-  const recoveryBurn=Math.max(0,Number(flight.enrouteRecoveryFuelPenaltyGal)||0);
-  const projectedLandingFuel=Math.max(0,onboard-tripBurn-delayBurn-recoveryBurn);
-  const remainingNow=Math.max(0,onboard-tripBurn*progress-delayBurn*progress-recoveryBurn*progress);
+  const additionalBurn=flightAdditionalFuelBurnGallons(flight,performance);
+  const projectedLandingFuel=Math.max(0,onboard-tripBurn-additionalBurn);
+  const remainingNow=Math.max(0,onboard-(tripBurn+additionalBurn)*progress);
   const marginRatio=reserve?projectedLandingFuel/reserve:1;
   return {
     ...airborneContextForFlight(flight,t),
@@ -1107,7 +1124,7 @@ function fuelMarginContextForFlight(flight,t=simNow()){
     projectedLandingFuelGal:Math.round(projectedLandingFuel),
     reserveGal:Math.round(reserve),
     marginPct:Math.round(marginRatio*100),
-    delayBurnGal:Math.round(delayBurn+recoveryBurn),
+    delayBurnGal:Math.round(additionalBurn),
     active:flight.departureLogged&&marginRatio<.7
   };
 }
@@ -1330,10 +1347,11 @@ function crewDutyExtensionDelayCauses(duty){
     const prefix=flight.id;
     addCrewDutyDelayCause(causes,'Manual OCC hold',flight.manualDelayMin,`${prefix}: dispatcher-entered hold`);
     addCrewDutyDelayCause(causes,'Problem response',flight.problemDelayMin,`${prefix}: problem coordination delay`);
-    addCrewDutyDelayCause(causes,'Weather delay',(flight.weatherDelayMin||0)+(flight.liveWeatherDelayMin||0),`${prefix}: ${weatherCauseText(flight.weatherCause)||flight.weatherCode||flight.weatherRouteHazard||'weather impact'}`);
+    const flow=departureFlowConstraintForFlight(flight,{includeDetail:true});
+    addCrewDutyDelayCause(causes,flow.label,flow.minutes,`${prefix}: ${flow.detail}`);
+    const route=window.AeroRoutePlanning?.routeTimingImpactForFlight?.(flight);
+    if(route) addCrewDutyDelayCause(causes,'Route change',route.minutes,`${prefix}: ${route.detail}`);
     addCrewDutyDelayCause(causes,'Enroute delay',flight.enrouteDelayMin,`${prefix}: airborne routing, holding, or flight-watch impact`);
-    addCrewDutyDelayCause(causes,'Airport flow restriction',flight.airportDelayMin,`${prefix}: ${flight.airportConstraintLabel||'airport flow restriction'}`);
-    addCrewDutyDelayCause(causes,'Airspace restriction',flight.airspaceDelayMin,`${prefix}: ${flight.airspaceConstraintLabel||'route or airspace flow restriction'}`);
     addCrewDutyDelayCause(causes,'Taxi delay',(flight.taxiOutDelayMin||0)+(flight.taxiInDelayMin||0),`${prefix}: ${taxiCauseText(flight,'out')||taxiCauseText(flight,'in')||'surface movement delay'}`);
     addCrewDutyDelayCause(causes,'Late inbound / turn readiness',flight.propagatedDelayMin,`${prefix}: aircraft or crew rotation delayed`);
     addCrewDutyDelayCause(causes,'Slot delay',flight.slotDelayMin,`${prefix}: regulated departure slot moved`);
@@ -1948,6 +1966,7 @@ function fuelFlight(f,t,force=false){
     .sort((a,b)=>flightActualDeparture(a)-flightActualDeparture(b) || a.id.localeCompare(b.id))[0];
   if(!nextFlight || nextFlight.id!==f.id) return false;
   const plan=flightFuelPlan(f.from,flightOperationalDestination(f),ac);
+  plan.requiredGal=Math.min(plan.fuelCapacityGal,Math.ceil(plan.requiredGal+flightRouteFuelBurnGallons(f,plan)));
   const onboard=Math.max(0,ac.fuelGallons||0);
   const purchased=Math.max(0,Math.ceil(plan.requiredGal-onboard));
   ac.fuelGallons=Math.min(plan.fuelCapacityGal,onboard+purchased);
@@ -2158,9 +2177,7 @@ function processFlightLifecycleTransitions(t=simNow()){
         ac.location=flightOperationalDestination(f);
         const onboardFuel=Number.isFinite(ac.fuelGallons)?ac.fuelGallons:(f.fuelOnboardAtDeparture||0);
         const performance=aircraftFuelPerformance(MODELS[ac.model]);
-        const enrouteDelayBurn=Math.max(0,Number(f.enrouteDelayMin)||0)*performance.burnGalPerHour/60*.55;
-        const recoveryFuelPenalty=Math.max(0,Number(f.enrouteRecoveryFuelPenaltyGal)||0);
-        ac.fuelGallons=Math.max(0,onboardFuel-(f.tripFuelGallons||0)-enrouteDelayBurn-recoveryFuelPenalty);
+        ac.fuelGallons=Math.max(0,onboardFuel-(f.tripFuelGallons||0)-flightAdditionalFuelBurnGallons(f,performance));
         const hours=(Number.isFinite(f.operationalDurationMs)?f.operationalDurationMs:f.arrival-f.departure)/HOUR;
         ac.flightHours=(ac.flightHours||0)+hours;
         ac.cycles=(ac.cycles||0)+1;
@@ -2591,7 +2608,8 @@ function clearAircraftSpecificDelay(f){
 function delayFlight(flightId,minutes=15){
   const f=state.flights.find(item=>item.id===flightId&&!item.cancelled);
   if(!f||flightHasDeparted(f)) return toast('Only a flight still on the ground can be held.');
-  f.manualDelayMin=(Number(f.manualDelayMin)||0)+minutes;
+  const target=Math.max(simNow(),flightActualDeparture(f))+minutes*MIN;
+  f.manualDelayMin=(Number(f.manualDelayMin)||0)+Math.max(minutes,Math.ceil((target-flightDepartureWorkReadyAt(f))/MIN));
   if(typeof recordRecoveryCostEvent==='function'&&typeof passengerDelayCost==='function'){
     const amount=passengerDelayCost(f,minutes);
     if(amount) recordRecoveryCostEvent({
@@ -2742,14 +2760,7 @@ function applyDispatchRouteRevisionNow(flight,mode='direct',{reason='',t=simNow(
     metadata:{source:'dispatch_route_coordination'}
   });
   if(!revision) return {ok:false,message:'The route could not be revised.'};
-  const delta=Math.round(Number(revision.estimatedTimeDeltaMin)||0);
-  if(delta>0){
-    if(flightHasDeparted(flight,t)) flight.enrouteDelayMin=Math.max(Number(flight.enrouteDelayMin)||0,delta);
-    else flight.airspaceDelayMin=Math.max(Number(flight.airspaceDelayMin)||0,delta);
-    flight.airspaceConstraintLabel=mode==='weather_detour'?'Dispatch weather avoidance route':'Dispatch route refile';
-  }else if(delta<0&&flightHasDeparted(flight,t)){
-    flight.enrouteRecoveryMin=Math.max(Number(flight.enrouteRecoveryMin)||0,Math.abs(delta));
-  }
+  const delta=routeApi.applyRouteRevisionTiming(flight,revision);
   let amount=0;
   if(typeof recordRecoveryCostEvent==='function'){
     amount=Math.max(300,Math.round((Math.abs(delta)*40+500)/100)*100);
@@ -2886,7 +2897,7 @@ function applyRecoveryPlan(flightId,planId){
 
 function flightIssueKey(f){
   return [f.staffingBlocked,f.maintenanceBlocked,f.positioningBlocked,f.slotMissed,f.technicalDelayMin,f.handlingDelayMin,
-    f.manualDelayMin,f.weatherDelayMin,f.liveWeatherDelayMin,f.problemDelayMin,f.airportDelayMin,f.airspaceDelayMin,f.taxiOutDelayMin,f.taxiInDelayMin,f.nightRestrictionDelayMin,f.nightRestrictionConflictDelayMin,f.propagatedDelayMin,f.slotDelayMin,f.enrouteDelayMin,
+    f.manualDelayMin,f.weatherDelayMin,f.problemDelayMin,f.airportDelayMin,f.airspaceDelayMin,f.taxiOutDelayMin,f.taxiInDelayMin,f.nightRestrictionDelayMin,f.nightRestrictionConflictDelayMin,f.propagatedDelayMin,f.slotDelayMin,f.enrouteDelayMin,
     f.connectionCriticalPax,f.connectionAtRiskPax,f.connectionMissedPax,f.crewAugmented,
     openProblemsForFlight(f.id).map(problem=>problem.id).join(',')].join(':');
 }
