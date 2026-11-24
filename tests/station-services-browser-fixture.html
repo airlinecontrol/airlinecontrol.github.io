@@ -196,6 +196,42 @@
     w.setDeskPanel('station','recovery',{toggle:false});w.renderDeskStack(true,true);
     choose('[data-station-start]','');
     assert(d.querySelector('[data-station-request]').disabled,'Invalid coverage time was accepted');
+
+    // Passenger support is network-wide within Station Operations, with the same timed authorization lifecycle.
+    ({flight}=setup({ground:8}));
+    flight.pax=100;flight.diversionAirport='AMS';w.recalculateOperations();
+    w.setDeskPanel('station','overview',{toggle:false});w.renderDeskStack(true,true);
+    choose('[data-station-airport]','FRA');
+    const passengerTab=()=>d.querySelector('[data-desk-panel="station:passengers"]');
+    assert(!d.querySelector('[data-desk-widget="passengers"]'),'Separate Passenger Impact widget remains');
+    assert(passengerTab()?.querySelector('.tab-count')?.textContent==='1','Pending passenger count is missing while another tab is open');
+    assert(d.querySelector('#occ-desk-station .occ-widget-state')?.textContent==='1','Station header does not count passenger support');
+    passengerTab().click();w.renderDeskStack(true,true);
+    assert(d.querySelector('[data-passenger-support]'),'Passenger support tab did not open');
+    assert(!d.querySelector('[data-station-airport]'),'Station selector misleadingly scopes the network-wide passenger queue');
+    const flightLink=d.querySelector(`[data-passenger-support] [data-connection-flight="${flight.id}"]`);
+    assert(flightLink,'Diversion at another station was hidden');
+    flightLink.click();w.renderDeskStack(true,true);
+    assert(w.eval('selectedFlightId')===flight.id,'Passenger support flight link did not select Dispatch flight');
+    assert(d.querySelector('[data-passenger-recovery-action="station_support"]')?.textContent==='Request passenger assistance','Passenger assistance still looks like aircraft handling');
+    const amount=w.passengerRecoveryActionEstimate(w.passengerRecoveryExposures()[0],'transport');
+    d.querySelector('[data-passenger-recovery-action="transport"]').click();w.renderDeskStack(true,true);
+    const recovery=s.passengerRecoveries.at(-1);
+    assert(recovery?.action==='transport'&&recovery.status==='requested','Passenger action did not start a response');
+    assert(recovery.confirmsAt===base+20*MIN&&recovery.amount===amount,'Merge changed response time or quoted cost');
+    assert(s.recoveryCostEvents.filter(item=>item.kind==='passenger_transport').length===1,'Passenger action was charged more than once');
+    assert(!d.querySelector('[data-passenger-recovery]'),'Pending passenger action was offered again');
+    assert(d.querySelector('[data-passenger-support] [data-ui-progress]'),'Passenger response progress is missing');
+    d.querySelector('[data-desk-panel="station:overview"]').click();w.renderDeskStack(true,true);
+    assert(d.querySelector('[data-station-airport]')?.value==='FRA','Tab switch lost the independent station selection');
+    assert(passengerTab()?.querySelector('.tab-count')?.textContent==='1','Pending count disappeared during a response');
+    setTime(recovery.confirmsAt-MIN);w.processPassengerRecoveries(w.simNow());
+    passengerTab().click();w.renderDeskStack(true,true);
+    assert(d.querySelector('[data-passenger-support] .passenger-recovery-row'),'Passenger item disappeared before response completion');
+    setTime(recovery.confirmsAt);w.processPassengerRecoveries(w.simNow());w.renderDeskStack(true,true);
+    assert(recovery.status==='confirmed'&&!d.querySelector('[data-passenger-support] .passenger-recovery-row'),'Confirmed passenger item was not removed');
+    assert(!passengerTab().querySelector('.tab-count')&&!d.querySelector('#occ-desk-station .occ-widget-state'),'Completed passenger count remained visible');
+    assert(d.querySelector('[data-passenger-support] .empty-state'),'Completed queue did not show its empty state');
     result.textContent='PASS\nStation Operations: exceptional handling, capacity, responses, replacement, priority, cancellation, persistence, and stable controls';
   }catch(error){result.textContent='FAIL\n'+(error.stack||error);}
 })();

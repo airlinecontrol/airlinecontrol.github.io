@@ -26,11 +26,11 @@
     const clickTab=async key=>{const tab=d.querySelector(`[data-desk-panel="${key}"]`);assert(tab,`Missing tab ${key}`);tab.click();w.flushUiDirty();await wait(30);};
 
     // Clicking an active tab must preserve its actual controls, not just its selected styling.
-    await clickTab('corporate:planning');
+    await clickTab('aircraft:planning');
     const destination=d.querySelector('#destination');
-    await clickTab('corporate:planning');
+    await clickTab('aircraft:planning');
     assert(d.querySelector('#destination')===destination,'Active tab recreated the form');
-    assert(d.querySelector('[data-desk-panel="corporate:planning"]').getAttribute('aria-selected')==='true','Active tab was closed');
+    assert(d.querySelector('[data-desk-panel="aircraft:planning"]').getAttribute('aria-selected')==='true','Active tab was closed');
     assert(!d.querySelector('[data-close-desk-panel]'),'Tab content still has a duplicate panel-close control');
     assert(!d.querySelector('.ui-select,input[type="search"]'),'Dropdown search fields are still present');
     const optionCount=destination.options.length;
@@ -41,11 +41,54 @@
     assert(destination.value==='JFK','Refresh changed the selected airport');
     assert(destination.options.length===optionCount&&[...destination.options].every(option=>!option.hidden),'Dropdown options were removed or hidden');
     destination.blur();
-    const tab=d.querySelector('[data-desk-panel="corporate:planning"]');tab.focus();
+    const tab=d.querySelector('[data-desk-panel="aircraft:planning"]');tab.focus();
     tab.dispatchEvent(new w.KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));await wait(50);
-    assert(d.activeElement?.dataset.deskPanel==='corporate:aircraft','Arrow-key tab navigation did not retain focus');
+    assert(d.activeElement?.dataset.deskPanel==='aircraft:aircraft','Arrow-key tab navigation did not retain focus');
     const panel=d.getElementById(d.activeElement.getAttribute('aria-controls'));
     assert(panel?.getAttribute('aria-labelledby')===d.activeElement.id,'Selected tab and content are not associated');
+
+    // Resource forms retain their controls and requests belong only to their owning widget.
+    const aircraftRequest=w.queueResourceRequest('aircraft',{key:'A320neo',model:'A320neo',cabin:w.defaultCabin('A320neo'),location:'LHR'},{leadMin:30});
+    await clickTab('personnel:personnel');
+    const role=d.getElementById('personnelRole'),airport=d.getElementById('personnelAirport'),amount=d.getElementById('personnelAmount');
+    w.changeStaff('LHR','groundHandling',50);
+    role.value='groundHandling';airport.value='LHR';amount.value='50';
+    role.dispatchEvent(new w.Event('input',{bubbles:true}));
+    airport.focus();w.refreshAll();await wait(40);
+    assert(d.activeElement===airport&&airport.value==='LHR','Personnel request refresh replaced or changed a focused airport selector');
+    airport.blur();
+    await clickTab('personnel:overview');await clickTab('personnel:personnel');
+    assert(d.getElementById('personnelAirport')===airport&&airport.value==='LHR'&&amount.value==='50','Personnel request draft was lost when switching tabs');
+    const staffBefore=w.staffAt('LHR','groundHandling');
+    d.getElementById('requestPersonnelBtn').click();w.flushUiDirty();await wait(40);
+    const personnelRequest=s.resourceRequests.find(item=>item.kind==='personnel'&&item.payload.role==='groundHandling'&&item.payload.amount===50);
+    assert(personnelRequest?.status==='pending','Request personnel form did not submit a timed request');
+    const aircraftRoot=d.querySelector('[data-rail-widget="aircraft"]'),personnelRoot=d.querySelector('[data-rail-widget="personnel"]');
+    assert(aircraftRoot.querySelector('.ui-request-status')?.textContent.includes('A320neo'),'Aircraft request progress is missing from Aircraft');
+    assert(personnelRoot.querySelector('.ui-request-status')?.textContent.includes('Delivery pending'),'Personnel request progress is missing from Personnel');
+    assert(!personnelRoot.querySelector('.ui-request-status')?.textContent.includes('A320neo'),'Aircraft request leaked into Personnel');
+    assert(!aircraftRoot.querySelector('[data-management-content="personnel"]'),'Personnel request form is mounted in Aircraft');
+    assert(d.querySelectorAll('#requestAircraftButton').length===1&&d.querySelectorAll('#requestPersonnelBtn').length===1,'Resource forms were duplicated');
+    aircraftRequest.readyAt=w.simNow()-MIN;personnelRequest.readyAt=w.simNow()-MIN;
+    w.processResourceRequests();w.refreshAll();await wait(40);
+    assert(!aircraftRoot.querySelector('.ui-request-status')&&!personnelRoot.querySelector('.ui-request-status'),'Delivered resource requests remain visible as pending work');
+    assert(w.staffAt('LHR','groundHandling')===staffBefore+50,'Personnel request no longer adds staff after delivery');
+    assert(s.aircraft.some(item=>item.id===aircraftRequest.deliveredResourceId&&item.location==='LHR'),'Aircraft delivery no longer updates the fleet');
+
+    // Planning is still the real shared form, including its submission and return-to-fleet behavior.
+    const planningAircraft=w.assignRequestedAircraft('A320neo',w.defaultCabin('A320neo'),'FRA');
+    w.refreshAll();await clickTab('aircraft:planning');
+    d.getElementById('scheduleType').value='once';
+    d.getElementById('aircraft').value=planningAircraft.id;
+    d.getElementById('origin').value='FRA';destination.value='LHR';
+    d.getElementById('departureTime').value=w.hhmm(w.simNow()+180*MIN);
+    w.refreshScheduleMode();
+    d.getElementById('scheduleBtn').click();w.flushUiDirty();await wait(50);
+    const planned=s.flights.find(item=>item.aircraftId===planningAircraft.id);
+    assert(planned?.from==='FRA'&&planned?.to==='LHR','Plan flight did not create a flight from the Aircraft widget');
+    assert(d.querySelector('[data-desk-panel="aircraft:overview"]').getAttribute('aria-selected')==='true','Successful planning did not return to Fleet');
+    assert(d.querySelector(`#schedule-board [data-flight-id="${planned.id}"]`),'Newly planned flight is missing from the schedule');
+    assert(d.querySelector('[data-desk-panel="planning:overview"]').getAttribute('aria-selected')==='true','Flight planning changed the Dispatch tab');
 
     // Expanded pool information survives dirty rendering.
     await clickTab('personnel:overview');
@@ -60,7 +103,7 @@
     const exposures=Array.from({length:27},(_,i)=>({flightId:`UX${i}`,flight:{...flight,id:`UX${i}`},arranged:false,reason:'Diversion',cost:100,crew:5,releaseAirport:'LHR',actions:[{id:'hotel',label:'Request hotel'}],records:[]}));
     const warnings=exposures.map((item,i)=>({id:`test-warning-${i}`,group:'UX warnings',type:'short_turn',flightId:flight.id,title:`Warning ${i}`,detail:'Turn below minimum',level:'warning'}));
     const views=[
-      [()=>w.passengerRecoveryDeskMarkup(exposures),'.passenger-recovery-row'],
+      [()=>w.passengerSupportMarkup(exposures),'.passenger-recovery-row'],
       [()=>w.crewAccommodationMarkup(exposures),'.crew-accommodation-row'],
       [()=>w.incidentsWarningsDeskMarkup([],warnings),'.warning-row'],
       [()=>w.networkConstraintsMarkup(exposures.map((_,i)=>({id:`test-network-${i}`,activeFrom:w.simNow(),activeUntil:w.simNow()+60*MIN,label:`Area ${i}`,reason:'Capacity'}))),'.desk-list-row'],
@@ -75,7 +118,7 @@
       host.querySelector('[data-ui-less]').click();host.innerHTML=render();
       assert(host.querySelectorAll(selector).length===10,'Show fewer did not reset the list');
     }
-    host.innerHTML=w.passengerRecoveryDeskMarkup(exposures.map(item=>({...item,arranged:true})));
+    host.innerHTML=w.passengerSupportMarkup(exposures.map(item=>({...item,arranged:true})));
     assert(!host.querySelector('.passenger-recovery-row'),'Completed passenger work is still visible');
     host.innerHTML=w.crewAccommodationMarkup(exposures.map(item=>({...item,arranged:true})));
     assert(!host.querySelector('.crew-accommodation-row'),'Completed crew work is still visible');

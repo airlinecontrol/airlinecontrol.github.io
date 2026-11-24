@@ -9,9 +9,9 @@
   <link rel="icon" href="assets/favicon-16.png" sizes="16x16" type="image/png" />
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-  <link rel="stylesheet" href="aerosim-next.css?v=1.8.93" />
+  <link rel="stylesheet" href="aerosim-next.css?v=1.8.95" />
   <link rel="stylesheet" href="ui-components.css?v=1.0.4" />
-  <link rel="stylesheet" href="map-workspace.css?v=1.0.3" />
+  <link rel="stylesheet" href="map-workspace.css?v=1.0.4" />
 </head>
 <body>
 <div id="app">
@@ -33,24 +33,18 @@
       <div id="contextPane" class="context-pane selection-pane" aria-live="polite" hidden></div>
       <div class="left-rail-columns">
         <div class="left-rail-column" data-left-rail-column="resources">
-          <section class="rail-section corporate-resources-section" data-rail-widget="corporateResources">
-            <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="corporateResources" aria-expanded="true" aria-controls="rail-body-corporateResources"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Corporate Resources</h2></span><span class="occ-widget-state"><b id="corporateResourceCount">0</b></span></button></header>
-            <div id="rail-body-corporateResources" class="rail-widget-body">
-              <div id="corporateResourcesList"></div>
-            </div>
-          </section>
-          <section class="rail-section personnel-section" id="occ-desk-personnel" data-rail-widget="personnel">
-            <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="personnel" aria-expanded="true" aria-controls="rail-body-personnel"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Personnel</h2></span><span class="occ-widget-state"><b id="personnelRailCount">0</b></span></button></header>
-            <div id="rail-body-personnel" class="rail-widget-body">
-              <div id="personnelRailList"></div>
+          <section class="rail-section aircraft-section" data-rail-widget="aircraft">
+            <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="aircraft" aria-expanded="true" aria-controls="rail-body-aircraft"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Aircraft</h2></span><span class="occ-widget-state"><b id="aircraftListCount">0</b></span></button></header>
+            <div id="rail-body-aircraft" class="rail-widget-body">
+              <div id="aircraftRailList"></div>
             </div>
           </section>
         </div>
         <div class="left-rail-column" data-left-rail-column="assets">
-          <section class="rail-section aircraft-section" data-rail-widget="aircraft">
-            <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="aircraft" aria-expanded="true" aria-controls="rail-body-aircraft"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Aircraft</h2></span><span class="occ-widget-state"><b id="aircraftListCount">0</b></span></button></header>
-            <div id="rail-body-aircraft" class="rail-widget-body">
-              <div id="aircraftList" class="plain-list"></div>
+          <section class="rail-section personnel-section" id="occ-desk-personnel" data-rail-widget="personnel">
+            <header class="rail-heading"><button class="rail-widget-toggle" type="button" data-toggle-rail="personnel" aria-expanded="true" aria-controls="rail-body-personnel"><span class="toggle-caret">▾</span><span class="widget-title"><h2>Personnel</h2></span><span class="occ-widget-state"><b id="personnelRailCount">0</b></span></button></header>
+            <div id="rail-body-personnel" class="rail-widget-body">
+              <div id="personnelRailList"></div>
             </div>
           </section>
           <section class="rail-section maintenance-section" data-rail-widget="maintenance">
@@ -189,7 +183,7 @@
 <script src="js/ground-operations.js?v=14.0.0"></script>
 <script src="js/operational-intelligence.js?v=14.0.2"></script>
 <script src="js/recovery-costs.js?v=1.0.1"></script>
-<script src="js/problem-model.js?v=1.0.15"></script>
+<script src="js/problem-model.js?v=1.0.17"></script>
 <script src="js/migrations.js?v=1.0.4"></script>
 <script src="js/simulation.js?v=14.6.91"></script>
 <script src="js/problem-engine.js?v=1.0.15"></script>
@@ -199,7 +193,7 @@
 <script src="js/crew-ops.js?v=1.1.5"></script>
 <script src="js/crew-assignments.js?v=1.0.5"></script>
 <script src="js/station-services.js?v=1.0.1"></script>
-<script src="js/customer-recovery.js?v=1.0.2"></script>
+<script src="js/customer-recovery.js?v=1.0.3"></script>
 <script src="js/maintenance-planning.js?v=1.0.2"></script>
 <script src="js/problem-runtime.js?v=2.1.7"></script>
 <script src="js/derived-problems.js?v=1.0.8"></script>
@@ -212,8 +206,8 @@
 <script src="js/ui-crew-duty.js?v=1.0.0"></script>
 <script src="js/ui-schedule.js?v=1.0.14"></script>
 <script src="js/ui-personnel.js?v=1.1.5"></script>
-<script src="js/ui-station-services.js?v=1.0.2"></script>
-<script src="js/ui-next.js?v=1.10.154"></script>
+<script src="js/ui-station-services.js?v=1.0.3"></script>
+<script src="js/ui-next.js?v=1.10.156"></script>
 <script src="js/ui-map-workspace.js?v=1.0.2"></script>
 <script src="js/map.js?v=15.0.16"></script>
 </body>

@@ -54,6 +54,27 @@ function stationOverviewMarkup(){
     <dl class="station-facts">${profiles.map(profile=>`<div><dt>${esc(profile.label)}</dt><dd>${profile.available?`${profile.capacity} teams`:'Unavailable'}</dd></div>`).join('')}<div><dt>Additional teams active</dt><dd>${stationAdditionalTeams(airport,now)}</dd></div></dl>
     <h2>Requests</h2><div class="station-request-list">${records.length?AeroUi.list(records,record=>`<button type="button" class="station-request-row" data-station-open="${esc(record.id)}"><span><b>${esc(record.flightId||record.airport)} · ${esc(STATION_SERVICES[record.service].label)}</b><small>${esc(STATION_PROVIDERS[record.provider])} · ${esc(shortClock(record.startAt))}</small></span><em>${esc(stationRequestStatus(record))}</em></button>`,{key:`station-${airport}`}):'<div class="empty-state">No station requests.</div>'}</div></section>`;
 }
+function passengerSupportMarkup(exposures=passengerRecoveryExposures()){
+  const active=exposures.filter(item=>!item.arranged).sort((a,b)=>flightActualArrival(a.flight)-flightActualArrival(b.flight));
+  const rows=AeroUi.list(active,item=>{
+    const detail=[
+      item.reason,
+      item.delayMin?`+${item.delayMin} min`:'',
+      item.overnightPax?`${item.overnightPax} overnight pax`:'',
+      item.criticalConnections||item.atRiskConnections?`${item.criticalConnections} critical / ${item.atRiskConnections} at risk`:''
+    ].filter(Boolean).join(' · ');
+    const actions=(item.actions||[]).filter(action=>!(item.records||[]).some(entry=>entry.action===action.id&&entry.status==='confirmed')).map(action=>{
+      const record=(item.records||[]).find(entry=>entry.action===action.id);
+      if(record) return AeroUi.requestStatus({title:action.label,label:passengerRecoveryStatusLabel(record.status),pending:record.status!=='confirmed',startAt:record.requestedAt,endAt:record.confirmsAt,detail:record.outcome||''});
+      return `<button class="secondary-button" type="button" data-passenger-recovery="${esc(item.flightId)}" data-passenger-recovery-action="${esc(action.id)}">${esc(action.label)}</button>`;
+    }).join('');
+    return `<div class="desk-list-row passenger-recovery-row">
+      <button class="row-main-button" type="button" data-connection-flight="${esc(item.flightId)}"><b>${esc(item.flightId)} · ${esc(item.flight.from)} → ${esc(flightOperationalDestination(item.flight))}</b><span>${esc(detail)}</span></button>
+      <div class="occ-action-controls"><em>exposure ${money(item.cost)}</em>${actions}</div>
+    </div>`;
+  },{key:'passenger-recovery'});
+  return `<section class="desk-section" data-passenger-support>${rows||'<div class="empty-state">No passenger coordination needed.</div>'}</section>`;
+}
 function stationServiceFormMarkup(){
   const ui=stationServiceUi,options=stationServiceFormOptions(),service=options.service;
   const selected=stationServiceRequest(ui.requestId);
@@ -75,16 +96,18 @@ function stationServiceFormMarkup(){
     <div class="form-actions"><button type="button" class="primary-button" data-station-request ${preview.blocker?'disabled':''}>${submitLabel}</button></div>
   </section>`;
 }
-function stationServicesDeskMarkup(){
+function stationServicesDeskMarkup(passengerExposures=passengerRecoveryExposures()){
   const airport=stationSelectedAirport();
-  const panels=['overview','diversion','recovery'];
+  const panels=['overview','diversion','recovery','passengers'];
   if(!panels.includes(activeDeskTab('station'))){
     delete workspaceUi.nextDeskPanels.station;
     saveWorkspaceUi();
   }
-  return `<div data-station-widget><label class="station-selector">Station<select data-station-airport>${Object.keys(AIRPORTS).sort().map(code=>`<option value="${code}" ${code===airport?'selected':''}>${esc(AeroUi.airportLabel(code))}</option>`).join('')}</select></label>
-    ${deskActionBar('station',[{panel:'overview',label:'Overview'},{panel:'diversion',label:'Diversions'},{panel:'recovery',label:'Recovery'}])}
-    ${activeDeskTab('station')==='overview'?stationOverviewMarkup():stationServiceFormMarkup()}</div>`;
+  const panel=activeDeskTab('station');
+  const passengerCount=passengerExposures.filter(item=>!item.arranged).length;
+  return `<div data-station-widget>${panel!=='passengers'?`<label class="station-selector">Station<select data-station-airport>${Object.keys(AIRPORTS).sort().map(code=>`<option value="${code}" ${code===airport?'selected':''}>${esc(AeroUi.airportLabel(code))}</option>`).join('')}</select></label>`:''}
+    ${deskActionBar('station',[{panel:'overview',label:'Overview'},{panel:'diversion',label:'Diversions'},{panel:'recovery',label:'Recovery'},{panel:'passengers',label:'Passenger support',count:passengerCount}])}
+    ${panel==='passengers'?passengerSupportMarkup(passengerExposures):panel==='overview'?stationOverviewMarkup():stationServiceFormMarkup()}</div>`;
 }
 function stationServicesRenderKey(now=simNow()){
   return [JSON.stringify(stationServiceUi),Math.floor(now/MIN),stationServiceRequests().map(record=>`${record.id}:${record.status}:${record.updatedAt}:${record.readyAt}:${record.startAt}:${record.endsAt}`).join('|'),
@@ -106,6 +129,11 @@ function bindStationServiceControls(root){
   host.querySelectorAll('[data-station-new]').forEach(button=>button.addEventListener('click',()=>{stationServiceUi.requestId='';stationServiceUi.newRequest=true;refresh();}));
   host.querySelector('[data-station-cancel]')?.addEventListener('click',event=>{cancelStationService(event.currentTarget.dataset.stationCancel);refresh();});
   host.querySelector('[data-station-accept]')?.addEventListener('click',event=>{acceptStationServiceOffer(event.currentTarget.dataset.stationAccept);refresh();});
+  host.querySelectorAll('[data-passenger-recovery]').forEach(button=>button.addEventListener('click',event=>{
+    event.stopPropagation();
+    authorizePassengerRecovery(button.dataset.passengerRecovery,button.dataset.passengerRecoveryAction);
+    markUiDirty('all');
+  }));
   root.querySelectorAll('[data-station-open]').forEach(button=>button.addEventListener('click',()=>{
     const record=stationServiceRequest(button.dataset.stationOpen);stationServiceUi.requestId=record.id;stationServiceUi.newRequest=false;stationServiceUi.airport=record.airport;
     setDeskPanel('station',STATION_SERVICES[record.service].tab);refresh();

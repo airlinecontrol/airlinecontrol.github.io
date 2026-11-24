@@ -6,10 +6,9 @@
     dispatch:{label:'Dispatch',widget:'planning'},
     personnel:{label:'Personnel',widget:'personnel'},
     maintenance:{label:'Maintenance',widget:'maintenance'},
-    corporate:{label:'Corporate Resources',widget:'corporate'},
+    aircraft:{label:'Aircraft',widget:'aircraft'},
     station:{label:'Station Operations',widget:'station'},
     network:{label:'Network / Flow',widget:'network'},
-    passengers:{label:'Passenger impact',widget:'passengers'},
     crewImpact:{label:'Crew impact',widget:'personnel'}
   };
 
@@ -17,12 +16,12 @@
     delay:{desk:'dispatch',panel:'timing',label:'Delay / retime flight',detail:'Use Dispatch timing controls to hold or retime the selected flight.'},
     cancel:{desk:'dispatch',panel:'timing',label:'Cancel flight',detail:'Use Dispatch cancellation controls when recovery is no longer acceptable.'},
     swap:{desk:'dispatch',panel:'assignment',label:'Swap aircraft',detail:'Assign a serviceable aircraft through Dispatch before departure.'},
-    ferry:{desk:'corporate',label:'Plan ferry / positioning flight',detail:'Create a ferry or positioning leg in Corporate Resources.'},
+    ferry:{desk:'aircraft',panel:'planning',label:'Plan ferry / positioning flight',detail:'Create a ferry or positioning leg in Aircraft.'},
     crewMove:{desk:'personnel',panel:'overview',label:'Coordinate crew assignment',detail:'Choose an airport crew pool and assign qualified crew to an eligible departure in Personnel.'},
     maintenance:{desk:'maintenance',label:'Schedule maintenance work',detail:'Use Maintenance to inspect, repair, defer, or clear the aircraft.'},
     handling:{desk:'station',label:'Coordinate station exception',detail:'Use Station Operations for diversion handling, provider replacement, or disruption capacity.'},
     alternate:{desk:'dispatch',panel:'route',label:'Coordinate alternate / return',detail:'Use Dispatch flight-watch actions for alternate, return, route, or support planning.'},
-    passengers:{desk:'passengers',label:'Coordinate passengers',detail:'Use Passenger impact tools if the disruption creates passenger recovery exposure.'},
+    passengers:{desk:'station',panel:'passengers',label:'Coordinate passengers',detail:'Use Passenger support in Station Operations if the disruption creates passenger recovery exposure.'},
     crewImpact:{desk:'crewImpact',panel:'crew-impact',label:'Coordinate crew rest / positioning',detail:'Use the Personnel crew-impact tab when a diversion or delay creates downstream crew recovery exposure.'},
     network:{desk:'network',label:'Coordinate shared network plan',detail:'Use Network / Flow for shared holds, restrictions, or route packages.'}
   };

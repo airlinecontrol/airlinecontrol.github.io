@@ -1102,46 +1102,46 @@ body,
   border-color:rgba(255,117,143,.68);
   background:rgba(255,117,143,.13);
 }
-.corporate-resources-section .desk-action-bar{
+:is(.aircraft-section,.personnel-section) .desk-action-bar{
   display:flex;
   align-items:flex-end;
   gap:2px!important;
   margin:0 0 10px!important;
 }
-.corporate-resources-section .desk-action-panel{
+:is(.aircraft-section,.personnel-section) .desk-action-panel{
   margin:0 0 11px!important;
   padding:9px!important;
   border-radius:7px!important;
 }
-.corporate-resources-section .occ-management-host .management-page{
+:is(.aircraft-section,.personnel-section) .occ-management-host .management-page{
   max-width:none;
   padding:0;
 }
-.corporate-resources-section .occ-management-host .page-heading{
+:is(.aircraft-section,.personnel-section) .occ-management-host .page-heading{
   padding-bottom:8px;
 }
-.corporate-resources-section .occ-management-host .page-heading>span,
-.corporate-resources-section .occ-management-host .page-heading p{
+:is(.aircraft-section,.personnel-section) .occ-management-host .page-heading>span,
+:is(.aircraft-section,.personnel-section) .occ-management-host .page-heading p{
   display:none;
 }
-.corporate-resources-section .occ-management-host .page-heading h1{
+:is(.aircraft-section,.personnel-section) .occ-management-host .page-heading h1{
   margin:0;
   font-size:12px;
 }
-.corporate-resources-section .occ-management-host .form-grid{
+:is(.aircraft-section,.personnel-section) .occ-management-host .form-grid{
   grid-template-columns:1fr!important;
   gap:8px!important;
   margin-top:9px!important;
 }
-.corporate-resources-section .occ-management-host .compact-form label{
+:is(.aircraft-section,.personnel-section) .occ-management-host .compact-form label{
   font-size:10px;
 }
-.corporate-resources-section .occ-management-host .compact-form input,
-.corporate-resources-section .occ-management-host .compact-form select{
+:is(.aircraft-section,.personnel-section) .occ-management-host .compact-form input,
+:is(.aircraft-section,.personnel-section) .occ-management-host .compact-form select{
   width:100%;
   min-width:0;
 }
-.corporate-resources-section .occ-management-host .data-section{
+:is(.aircraft-section,.personnel-section) .occ-management-host .data-section{
   display:none;
 }
 .active-progress{
@@ -1850,7 +1850,7 @@ body,
 .station-selector,.station-service-form>label,.station-form-pair>label{display:grid;gap:5px;min-width:0;color:var(--muted);font-size:12px}
 .station-selector{margin-bottom:12px}
 [data-station-widget] select,[data-station-widget] input{width:100%;min-width:0;max-width:100%;min-height:34px;padding:6px 8px;border:1px solid var(--line);border-radius:4px;background:var(--widget-2);color:var(--text);font-size:13px}
-[data-station-widget]>.desk-tabs{flex-wrap:nowrap;overflow:auto}
+[data-station-widget]>.desk-tabs{flex-wrap:wrap;overflow:visible}
 .station-service-form,.station-receipt,.station-overview{display:grid;gap:12px;min-width:0}
 .station-form-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .station-facts{display:grid;gap:8px;margin:0;font-size:12px;min-width:0}

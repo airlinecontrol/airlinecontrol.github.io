@@ -28,6 +28,11 @@ The current prototype source is split into:
 
 It intentionally remains a plain HTML/CSS/JavaScript prototype without a framework or build step. The next major engineering step can be a controlled refactor to Vite + TypeScript, but do not perform that refactor as a side effect while implementing an unrelated feature.
 
+## Resource widget ownership
+
+- Aircraft owns fleet overview, aircraft requests/removal, flight/ferry planning, and schedule removal. Personnel owns personnel requests alongside pools, assignment, movement, and crew impact. There is no Corporate Resources widget.
+- The widgets mount the existing shared management forms rather than cloning controls or simulation commands. Keep form identity and draft inputs stable through tab changes and background refreshes. Pending resource requests are shown only in their owning widget.
+
 ## Personnel module ownership
 
 - `js/crew-assignments.js` owns qualified reservations, response/report/briefing times, role assignments, stand-down, and physical crew return/rest. All manual crew assignment actions use this service; there is no instant-swap path.
@@ -39,7 +44,8 @@ It intentionally remains a plain HTML/CSS/JavaScript prototype without a framewo
 ## Station Services module ownership
 
 - `js/station-services.js` owns provider capacity reservations, quotes, timed responses, offers, mobilization, and service delivery. Manual handling and diversion handling share these records; read helpers never create or confirm bookings.
-- `js/ui-station-services.js` owns the independent station selection and Overview, Handling, and Disruption support tabs. Forms remain available without problems and submissions show request receipts.
+- `js/ui-station-services.js` owns the independent station selection and Overview, Diversions, Recovery, and Passenger support tabs. Passenger support is a network-wide queue with a pending count, not filtered by the station selector. There is no separate Passenger Impact widget. Passenger authorization, costs, and response timers remain in `js/customer-recovery.js`.
+- Station forms remain available without problems and submissions show request receipts. Passenger assistance is customer coordination, not aircraft ground handling.
 - `js/simulation.js` applies service readiness to projected timing and physical departure gates. Confirmation is not completion. Ground handling cannot override crew, fuel, airport restrictions, or minimum turnaround.
 - `tests/station-services-browser-fixture.html` covers provider outcomes, capacity, delivery, replacement, priority, cancellation, persistence, and stable controls.
 

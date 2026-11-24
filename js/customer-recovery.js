@@ -47,7 +47,7 @@ function passengerRecoveryActionLabel(action){
     release:'Release passengers',
     hotel:'Authorize hotel',
     transport:'Authorize transport',
-    station_support:'Request station support'
+    station_support:'Request passenger assistance'
   }[action]||'Coordinate recovery';
 }
 
@@ -57,7 +57,7 @@ function passengerRecoveryActionRequestLabel(action){
     release:'passenger release authorization',
     hotel:'hotel authorization',
     transport:'transport authorization',
-    station_support:'station support request'
+    station_support:'passenger assistance request'
   }[action]||'customer recovery coordination';
 }
 

@@ -34,17 +34,16 @@
       const shell=rect('#operationsView'),map=rect('#map-pane'),dock=rect('#map-schedule-dock');
       assert(close(map.width,shell.width)&&close(map.height,shell.height),'Map does not fill workspace');
       assert(close(map.left,shell.left)&&close(map.top,shell.top),'Map is offset from workspace');
-      const leftRail=rect('.operations-rail'),rightRail=rect('.context-rail');
-      assert(close(dock.left,leftRail.right+18)&&close(dock.right,rightRail.left-18),'Schedule does not fit between side panels');
+      assert(close(dock.left,shell.left+12)&&close(dock.right,shell.right-12),'Schedule does not span the full workspace width');
+      assert(close(dock.bottom,shell.bottom-12),'Schedule is not anchored to the bottom');
       for(const side of ['.operations-rail','.context-rail']){
         const rail=rect(side);
-        assert(close(rail.bottom,shell.bottom-12),'Side panel does not extend to the bottom');
-        assert(close(rail.bottom,dock.bottom),'Side panel and schedule bottoms are not aligned');
+        assert(close(rail.bottom,dock.top-12),'Side panel does not leave a gap above the schedule');
         assert(close(rail.top,shell.top+12),'Widgets are not aligned');
         assert(w.getComputedStyle(d.querySelector(side)).backgroundColor==='rgba(0, 0, 0, 0)','Sidebar has a large opaque background');
       }
       for(const selector of ['#left-rail-splitter','#right-rail-splitter']){
-        assert(close(rect(selector).bottom,shell.bottom-12),'Side resize handle does not span full height');
+        assert(close(rect(selector).bottom,dock.top-12),'Side resize handle overlaps the schedule');
       }
       for(const control of d.querySelectorAll('.schedule-view-controls>button,.schedule-view-controls>select,#scheduleCollapseBtn')){
         const box=control.getBoundingClientRect();
@@ -58,8 +57,9 @@
       toolbarGeometry();
     }
     assert(d.body.classList.contains('map-workspace'),'Map workspace is not the default');
+    assert(!d.querySelector('.grid-stack,#workspaceArrangeBtn,script[src*="gridstack"],link[href*="gridstack"]'),'Movable widget grid is still present');
     geometry();
-    d.querySelector('[data-desk-panel="corporate:planning"]').click();w.flushUiDirty();await wait(40);
+    d.querySelector('[data-desk-panel="aircraft:planning"]').click();w.flushUiDirty();await wait(40);
     const destination=d.querySelector('#destination');destination.value='JFK';
     const stateBefore=JSON.stringify(s),selected=w.eval('selectedFlightId');
     const toggle=d.querySelector('#workspaceLayoutBtn');
@@ -84,6 +84,7 @@
 
     d.querySelector('#scheduleCollapseBtn').click();await wait(80);
     assert(close(rect('#map-schedule-dock').height,rect('#map-schedule-dock .schedule-toolbar').height)&&rect('#schedule-scroll').height===0,'Schedule did not collapse to toolbar');
+    assert(close(rect('.operations-rail').bottom,rect('#map-schedule-dock').top-12),'Side panels did not expand after schedule collapse');
     d.querySelector('#scheduleCollapseBtn').click();await wait(80);geometry();
     const splitter=d.querySelector('#map-schedule-splitter'),before=rect('#map-schedule-dock').height;
     splitter.dispatchEvent(new w.KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true}));await wait(80);
